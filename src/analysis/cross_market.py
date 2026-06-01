@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from src.analysis.crypto_matching import structured_crypto_candidates
 from src.analysis.market_normalization import NormalizedMarketText, normalize_kalshi_market, normalize_polymarket_market, text_similarity
 from src.analysis.structured_matching import structured_sports_candidates
 from src.analysis.volume import money_value
@@ -11,6 +12,7 @@ from src.analysis.volume import money_value
 def compare_wallet_markets_to_kalshi(trades: list[dict[str, Any]], kalshi_markets: list[dict[str, Any]], max_candidates: int = 10) -> list[dict[str, Any]]:
     polymarket_markets = _unique_polymarket_markets(trades)
     candidates: list[dict[str, Any]] = structured_sports_candidates(polymarket_markets, kalshi_markets, max_candidates=max_candidates * 2)
+    candidates.extend(structured_crypto_candidates(polymarket_markets, kalshi_markets, max_candidates=max_candidates * 2))
 
     normalized_pm = [normalize_polymarket_market(market) for market in polymarket_markets]
     normalized_kalshi = [normalize_kalshi_market(market) for market in kalshi_markets]
