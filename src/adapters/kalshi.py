@@ -40,7 +40,7 @@ class KalshiClient:
                 if not isinstance(page_markets, list):
                     LOGGER.warning("Kalshi markets payload had unexpected shape on page %s", page)
                     break
-                markets.extend(page_markets)
+                markets.extend(self._preserve_market_fields(market) for market in page_markets)
                 cursor = payload.get("cursor") if isinstance(payload, dict) else None
                 LOGGER.info("fetched Kalshi markets page=%s rows=%s", page, len(page_markets))
                 if not cursor or not page_markets:
@@ -54,6 +54,32 @@ class KalshiClient:
                     LOGGER.warning("using cached Kalshi markets after API failure rows=%s", len(cached))
                     return cached
             raise
+
+
+    @staticmethod
+    def _preserve_market_fields(market: dict[str, Any]) -> dict[str, Any]:
+        preserved = dict(market)
+        preserved["pricing"] = {
+            "best_bid": _decimal_price(market.get("yes_bid_dollars") or market.get("yes_bid")),
+            "best_ask": _decimal_price(market.get("yes_ask_dollars") or market.get("yes_ask")),
+            "last_price": _decimal_price(market.get("last_price_dollars") or market.get("last_price")),
+            "yes_bid": _decimal_price(market.get("yes_bid_dollars") or market.get("yes_bid")),
+            "yes_ask": _decimal_price(market.get("yes_ask_dollars") or market.get("yes_ask")),
+            "no_bid": _decimal_price(market.get("no_bid_dollars") or market.get("no_bid")),
+            "no_ask": _decimal_price(market.get("no_ask_dollars") or market.get("no_ask")),
+            "liquidity": _decimal_price(market.get("liquidity_dollars") or market.get("liquidity")),
+            "yes_bid_size": _decimal_price(market.get("yes_bid_size_fp") or market.get("yes_bid_size")),
+            "yes_ask_size": _decimal_price(market.get("yes_ask_size_fp") or market.get("yes_ask_size")),
+        }
+        preserved["market_identity"] = {
+            "ticker": market.get("ticker"),
+            "event_ticker": market.get("event_ticker"),
+            "title": market.get("title"),
+            "subtitle": market.get("subtitle") or market.get("yes_sub_title") or market.get("no_sub_title"),
+            "close_time": market.get("close_time"),
+            "status": market.get("status"),
+        }
+        return preserved
 
     def _get_json(self, endpoint: str, params: dict[str, Any], page: int | None = None) -> Any:
         query = urlencode({key: value for key, value in params.items() if value is not None})
@@ -101,3 +127,16 @@ class KalshiClient:
 
 def get_markets() -> list[dict[str, Any]]:
     return KalshiClient().get_markets()
+
+
+
+def _decimal_price(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric > 1 and numeric <= 100:
+        numeric = numeric / 100
+    return round(numeric, 4)

@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from typing import Any
 
 from src.adapters.kalshi import KalshiClient
 from src.adapters.polymarket import PolymarketClient
+from src.analysis.arb_pricing import enrich_candidates_with_pricing
 from src.analysis.arb_signals import detect_signals
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
 from src.analysis.markets import summarize_markets
@@ -24,10 +26,10 @@ def setup_logging() -> None:
     )
 
 
-def build_wallet_report(wallet: str, include_kalshi: bool = False) -> WalletReport:
+def build_wallet_report(wallet: str, include_kalshi: bool = False, include_pricing: bool = False) -> WalletReport:
     logger = logging.getLogger(__name__)
     client = PolymarketClient(raw_dir="data/raw")
-    logger.info("starting wallet analysis wallet=%s include_kalshi=%s", wallet, include_kalshi)
+    logger.info("starting wallet analysis wallet=%s include_kalshi=%s include_pricing=%s", wallet, include_kalshi, include_pricing)
     profile = client.get_public_profile(wallet)
     trades = client.get_user_trades(wallet)
     activity = client.get_user_activity(wallet)
@@ -39,11 +41,17 @@ def build_wallet_report(wallet: str, include_kalshi: bool = False) -> WalletRepo
     timing = summarize_timing(trades)
     pnl = summarize_pnl(positions, trades)
     behavior = detect_signals(trades, positions, markets, volume)
-    cross_platform_candidates = compare_kalshi_candidates(trades) if include_kalshi else []
+    cross_platform_candidates: list[dict[str, Any]] = []
+    price_aware_candidates: list[dict[str, Any]] = []
+    if include_kalshi or include_pricing:
+        cross_platform_candidates, kalshi_markets = compare_kalshi_candidates(trades, return_markets=True)
+        if include_pricing:
+            price_aware_candidates = enrich_candidates_with_pricing(cross_platform_candidates, trades, kalshi_markets)
 
     limitations = [
         "PnL is estimated from currently available position fields and may omit resolved markets no longer returned by the positions endpoint.",
         "Kalshi arbitrage detection is heuristic and compares public market text only; it does not prove executable arbitrage.",
+        "Price-aware arbitrage uses Kalshi public prices and Polymarket wallet trade prices; it is not a live executable quote check.",
         "Categories are inferred from market text until Gamma tag enrichment is expanded.",
     ]
 
@@ -72,23 +80,30 @@ def build_wallet_report(wallet: str, include_kalshi: bool = False) -> WalletRepo
         signals=behavior["signals"],
         raw_counts={"trades": len(trades), "activity": len(activity), "positions": len(positions)},
         cross_platform_arbitrage_candidates=cross_platform_candidates,
+        price_aware_arbitrage_candidates=price_aware_candidates,
         limitations=limitations,
     )
-    logger.info("analysis complete wallet=%s classification=%s kalshi_candidates=%s", wallet, report.behavior_classification, len(cross_platform_candidates))
+    logger.info(
+        "analysis complete wallet=%s classification=%s kalshi_candidates=%s price_candidates=%s",
+        wallet,
+        report.behavior_classification,
+        len(cross_platform_candidates),
+        len(price_aware_candidates),
+    )
     return report
 
 
-def compare_kalshi_candidates(trades: list[dict]) -> list[dict]:
+def compare_kalshi_candidates(trades: list[dict[str, Any]], return_markets: bool = False):
     logger = logging.getLogger(__name__)
     kalshi_client = KalshiClient(raw_dir="data/raw")
     try:
         kalshi_markets = kalshi_client.get_markets(status="open")
     except Exception as exc:
         logger.warning("Kalshi market ingestion failed; returning no candidates: %s", exc)
-        return []
+        return ([], []) if return_markets else []
     candidates = compare_wallet_markets_to_kalshi(trades, kalshi_markets)
     logger.info("cross-market comparison candidates=%s kalshi_markets=%s", len(candidates), len(kalshi_markets))
-    return candidates
+    return (candidates, kalshi_markets) if return_markets else candidates
 
 
 def analyze_wallet(wallet: str) -> WalletReport:
@@ -100,8 +115,8 @@ def analyze_wallet(wallet: str) -> WalletReport:
     return report
 
 
-def export_wallet(wallet: str, include_kalshi: bool = False) -> WalletReport:
-    report = build_wallet_report(wallet, include_kalshi=include_kalshi)
+def export_wallet(wallet: str, include_kalshi: bool = False, include_pricing: bool = False) -> WalletReport:
+    report = build_wallet_report(wallet, include_kalshi=include_kalshi, include_pricing=include_pricing)
     output = report.save("data/reports")
     logging.getLogger(__name__).info("exported report %s", output)
     print(output)
@@ -122,6 +137,24 @@ def compare_kalshi(wallet: str) -> WalletReport:
     return report
 
 
+def scan_arb(wallet: str) -> WalletReport:
+    report = build_wallet_report(wallet, include_kalshi=True, include_pricing=True)
+    output = report.save("data/reports")
+    candidates = report.price_aware_arbitrage_candidates
+    print(f"Price-aware arbitrage candidates: {len(candidates)}")
+    for candidate in candidates[:10]:
+        status = candidate.get("pricing_status")
+        edge = candidate.get("estimated_edge")
+        edge_text = "insufficient pricing data" if edge is None else f"edge={edge:.4f}"
+        print(
+            f"- {candidate.get('confidence_band')} {candidate.get('similarity_score', 0):.2f}: "
+            f"{candidate.get('polymarket_title')} <> {candidate.get('kalshi_title')} ({status}, {edge_text})"
+        )
+        print(f"  {candidate.get('pricing_reason') or candidate.get('reason')}")
+    print(f"\nSaved JSON report: {output}")
+    return report
+
+
 def main() -> None:
     setup_logging()
     parser = argparse.ArgumentParser(prog="polylens")
@@ -133,18 +166,24 @@ def main() -> None:
     export_parser = sub.add_parser("export-wallet")
     export_parser.add_argument("wallet")
     export_parser.add_argument("--include-kalshi", action="store_true", help="include conservative Polymarket/Kalshi market-overlap candidates")
+    export_parser.add_argument("--include-pricing", action="store_true", help="include price-aware arbitrage calculations for Kalshi overlap candidates")
 
     compare_parser = sub.add_parser("compare-kalshi")
     compare_parser.add_argument("wallet")
+
+    scan_parser = sub.add_parser("scan-arb")
+    scan_parser.add_argument("wallet")
 
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
         analyze_wallet(args.wallet)
     elif args.command == "export-wallet":
-        export_wallet(args.wallet, include_kalshi=args.include_kalshi)
+        export_wallet(args.wallet, include_kalshi=args.include_kalshi or args.include_pricing, include_pricing=args.include_pricing)
     elif args.command == "compare-kalshi":
         compare_kalshi(args.wallet)
+    elif args.command == "scan-arb":
+        scan_arb(args.wallet)
 
 
 if __name__ == "__main__":
