@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from src.analysis.arb_pricing import enrich_candidates_with_pricing
 from src.analysis.arb_signals import detect_signals
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
 from src.analysis.markets import summarize_markets
+from src.analysis.match_diagnostics import explain_market_matches
 from src.analysis.pnl import summarize_pnl
 from src.analysis.timing import summarize_timing
 from src.analysis.volume import summarize_volume
@@ -155,6 +157,39 @@ def scan_arb(wallet: str) -> WalletReport:
     return report
 
 
+def explain_matches(wallet: str, as_json: bool = False) -> dict[str, Any]:
+    logger = logging.getLogger(__name__)
+    poly_client = PolymarketClient(raw_dir="data/raw")
+    kalshi_client = KalshiClient(raw_dir="data/raw")
+    trades = poly_client.get_user_trades(wallet)
+    try:
+        kalshi_markets = kalshi_client.get_markets(status="open")
+    except Exception as exc:
+        logger.warning("Kalshi market ingestion failed during diagnostics: %s", exc)
+        kalshi_markets = []
+    diagnostics = explain_market_matches(trades, kalshi_markets)
+    if as_json:
+        print(json.dumps(diagnostics, indent=2, sort_keys=True))
+        return diagnostics
+    print("Polylens Match Diagnostics")
+    print("=" * 27)
+    print(f"Polymarket markets inspected: {diagnostics['polymarket_markets_inspected']}")
+    print(f"Kalshi markets inspected: {diagnostics['kalshi_markets_inspected']}")
+    print(f"Sports structured matches: {diagnostics['sports_structured_matches']}")
+    print(f"Crypto structured matches: {diagnostics['crypto_structured_matches']}")
+    print(f"Fallback text matches: {diagnostics['fallback_text_matches']}")
+    print("Top rejected candidate reasons:")
+    for item in diagnostics["top_rejected_candidate_reasons"][:10]:
+        print(f"- {item['count']}: {item['reason']}")
+    if not diagnostics["top_rejected_candidate_reasons"]:
+        print("- none recorded")
+    print(f"Accepted matches: {len(diagnostics['accepted_matches'])}")
+    for candidate in diagnostics["accepted_matches"][:10]:
+        print(f"- {candidate.get('confidence_band')} {candidate.get('similarity_score', 0):.2f}: {candidate.get('polymarket_title')} <> {candidate.get('kalshi_title')}")
+        print(f"  {candidate.get('reason')}")
+    return diagnostics
+
+
 def main() -> None:
     setup_logging()
     parser = argparse.ArgumentParser(prog="polylens")
@@ -174,6 +209,10 @@ def main() -> None:
     scan_parser = sub.add_parser("scan-arb")
     scan_parser.add_argument("wallet")
 
+    explain_parser = sub.add_parser("explain-matches")
+    explain_parser.add_argument("wallet")
+    explain_parser.add_argument("--json", action="store_true", help="emit match diagnostics as JSON")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -184,6 +223,8 @@ def main() -> None:
         compare_kalshi(args.wallet)
     elif args.command == "scan-arb":
         scan_arb(args.wallet)
+    elif args.command == "explain-matches":
+        explain_matches(args.wallet, as_json=args.json)
 
 
 if __name__ == "__main__":

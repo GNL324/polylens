@@ -59,3 +59,58 @@ def test_crypto_matching_rejects_ambiguous_missing_target():
     pm = [{"conditionId": "pm-btc", "title": "Will Bitcoin move a lot by June 30?", "size": 1, "price": 0.4}]
     kalshi = [{"ticker": "KXBTC", "title": "Will BTC be above $100,000 on June 30?", "close_time": "2026-06-30T23:59:00Z"}]
     assert structured_crypto_candidates(pm, kalshi) == []
+
+
+from src.analysis.crypto_matching import structured_crypto_candidates_with_diagnostics
+
+
+def test_crypto_matching_btc_daily_up_down_match():
+    pm = [{"conditionId": "pm-btc-day", "title": "Bitcoin up on June 30", "size": 1, "price": 0.5}]
+    kalshi = [{"ticker": "KXBTCDAILY-20260630-UP", "title": "Will BTC be higher by close on June 30?", "close_time": "2026-06-30T21:00:00Z"}]
+    candidates = structured_crypto_candidates(pm, kalshi)
+    assert len(candidates) == 1
+    parsed = candidates[0]["structured_match"]
+    assert parsed["polymarket"]["window_type"] == "daily"
+    assert parsed["kalshi"]["comparator_baseline"] == "previous close"
+
+
+def test_crypto_matching_btc_hourly_up_down_match():
+    pm = [{"conditionId": "pm-btc-hour", "title": "Bitcoin price up or down on June 30 5:00PM-6:00PM", "outcome": "Up", "size": 1, "price": 0.5}]
+    kalshi = [{"ticker": "KXBTC-HOURLY", "title": "Will BTC be higher by close on June 30 6:00PM?", "close_time": "2026-06-30T22:00:00Z"}]
+    candidates = structured_crypto_candidates(pm, kalshi)
+    assert len(candidates) == 1
+    assert candidates[0]["structured_match"]["polymarket"]["window_type"] == "hourly"
+
+
+def test_crypto_matching_eth_weekly_up_down_match():
+    pm = [{"conditionId": "pm-eth-week", "title": "Ethereum higher this week by close on July 3", "size": 1, "price": 0.5}]
+    kalshi = [{"ticker": "KXETHWEEKLY", "title": "Will ETH be up this week?", "close_time": "2026-07-03T21:00:00Z"}]
+    candidates = structured_crypto_candidates(pm, kalshi)
+    assert len(candidates) == 1
+    assert candidates[0]["structured_match"]["polymarket"]["window_type"] == "weekly"
+
+
+def test_crypto_matching_rejects_fixed_target_vs_up_down():
+    pm = [{"conditionId": "pm-btc-target", "title": "Bitcoin above $100,000 on June 30", "size": 1, "price": 0.5}]
+    kalshi = [{"ticker": "KXBTCDAILY", "title": "Will BTC be higher by close on June 30?", "close_time": "2026-06-30T21:00:00Z"}]
+    candidates, diagnostics = structured_crypto_candidates_with_diagnostics(pm, kalshi)
+    assert candidates == []
+    assert any("fixed-target" in item["reason"] for item in diagnostics)
+
+
+def test_crypto_matching_rejects_non_overlapping_time_windows():
+    pm = [{"conditionId": "pm-btc-day", "title": "Bitcoin up on June 30", "size": 1, "price": 0.5}]
+    kalshi = [{"ticker": "KXBTCDAILY", "title": "Will BTC be higher by close on July 10?", "close_time": "2026-07-10T21:00:00Z"}]
+    candidates, diagnostics = structured_crypto_candidates_with_diagnostics(pm, kalshi)
+    assert candidates == []
+    assert any("close windows do not overlap" in item["reason"] for item in diagnostics)
+
+
+def test_crypto_diagnostics_include_rejection_reason():
+    pm = [{"conditionId": "pm-btc", "title": "Bitcoin up today", "size": 1, "price": 0.5}]
+    kalshi = [{"ticker": "KXETHDAILY", "title": "Will ETH be higher by close today?", "close_time": "2026-06-30T21:00:00Z"}]
+    _candidates, diagnostics = structured_crypto_candidates_with_diagnostics(pm, kalshi)
+    rejected = [item for item in diagnostics if not item["accepted"]]
+    assert rejected
+    assert rejected[0]["reason"].startswith("asset mismatch")
+    assert rejected[0]["parsed_polymarket"]["asset_symbol"] == "BTC"

@@ -62,3 +62,22 @@ def test_price_aware_report_uses_structured_crypto_matches(mock_poly_client, moc
     assert report.cross_platform_arbitrage_candidates[0]["structured_match"]["polymarket"]["asset_symbol"] == "BTC"
     assert report.price_aware_arbitrage_candidates
     assert report.price_aware_arbitrage_candidates[0]["kalshi_ticker"] == "KXBTC-100K-JUN30"
+
+
+@patch("src.cli.KalshiClient")
+@patch("src.cli.PolymarketClient")
+def test_explain_matches_cli_runs_without_crashing(mock_poly_client, mock_kalshi_client, capsys):
+    from src.cli import explain_matches
+
+    poly = mock_poly_client.return_value
+    poly.get_user_trades.return_value = [
+        {"conditionId": "pm-btc-day", "title": "Bitcoin up today", "outcome": "Up", "size": 1, "price": 0.5}
+    ]
+    mock_kalshi_client.return_value.get_markets.return_value = [
+        {"ticker": "KXETHDAILY", "title": "Will ETH be higher by close today?", "close_time": "2026-06-30T21:00:00Z"}
+    ]
+
+    diagnostics = explain_matches("0x" + "4" * 40)
+    output = capsys.readouterr().out
+    assert "Polymarket markets inspected" in output
+    assert diagnostics["top_rejected_candidate_reasons"]

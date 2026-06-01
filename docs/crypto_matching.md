@@ -23,3 +23,15 @@ The report JSON shape is unchanged. Crypto matches appear in the existing `cross
 ## Limitations
 
 The matcher does not prove that two markets share identical resolution rules. It only identifies likely overlap from public titles, subtitles, rules text, tickers, close times, and wallet-traded Polymarket titles. Review candidate explanations and market rules before using them for trading decisions.
+
+
+## Short-Window Crypto Contracts
+
+The crypto parser also recognizes up/down markets such as `Bitcoin up today`, `BTC higher by close`, `BTC above/below previous close`, hourly ranges, daily close windows, and weekly close windows. These contracts are matched only when:
+
+- assets match
+- direction is compatible (`up`/`higher`, `down`/`lower`)
+- both contracts use a compatible comparator baseline such as previous close or open price
+- close windows overlap for the parsed hourly, daily, or weekly window
+
+Fixed-target contracts are not matched against previous-close or open-price up/down contracts unless equivalence is explicit in parsed fields. Ambiguous short-window titles fail closed and are visible through `explain-matches` diagnostics.
