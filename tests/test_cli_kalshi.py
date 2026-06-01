@@ -20,3 +20,24 @@ def test_build_wallet_report_includes_kalshi_candidates(mock_poly_client, mock_k
     report = build_wallet_report("0x" + "1" * 40, include_kalshi=True)
     assert report.cross_platform_arbitrage_candidates
     assert report.to_dict()["cross_platform_arbitrage_candidates"][0]["kalshi_ticker"] == "KXBTC-100K-26"
+
+
+@patch("src.cli.KalshiClient")
+@patch("src.cli.PolymarketClient")
+def test_price_aware_report_uses_structured_sports_matches(mock_poly_client, mock_kalshi_client):
+    poly = mock_poly_client.return_value
+    poly.get_public_profile.return_value = {"name": "sports"}
+    poly.get_user_trades.return_value = [
+        {"conditionId": "pm-lakers", "title": "Will the Lakers win the 2026 NBA Finals?", "side": "BUY", "outcome": "Yes", "outcomeIndex": 0, "size": 10, "price": 0.4, "timestamp": 1700000000}
+    ]
+    poly.get_user_activity.return_value = []
+    poly.get_positions.return_value = []
+    mock_kalshi_client.return_value.get_markets.return_value = [
+        {"ticker": "KXNBA-LA-2026", "title": "Los Angeles basketball title in 2026", "subtitle": "NBA champion", "yes_ask_dollars": "0.7000", "no_ask_dollars": "0.5500", "yes_bid_dollars": "0.6900", "last_price_dollars": "0.6900", "liquidity_dollars": "10.0000"}
+    ]
+
+    report = build_wallet_report("0x" + "2" * 40, include_kalshi=True, include_pricing=True)
+    assert report.cross_platform_arbitrage_candidates
+    assert report.cross_platform_arbitrage_candidates[0]["structured_match"]
+    assert report.price_aware_arbitrage_candidates
+    assert report.price_aware_arbitrage_candidates[0]["kalshi_ticker"] == "KXNBA-LA-2026"

@@ -4,15 +4,16 @@ from collections import defaultdict
 from typing import Any
 
 from src.analysis.market_normalization import NormalizedMarketText, normalize_kalshi_market, normalize_polymarket_market, text_similarity
+from src.analysis.structured_matching import structured_sports_candidates
 from src.analysis.volume import money_value
 
 
 def compare_wallet_markets_to_kalshi(trades: list[dict[str, Any]], kalshi_markets: list[dict[str, Any]], max_candidates: int = 10) -> list[dict[str, Any]]:
     polymarket_markets = _unique_polymarket_markets(trades)
+    candidates: list[dict[str, Any]] = structured_sports_candidates(polymarket_markets, kalshi_markets, max_candidates=max_candidates * 2)
+
     normalized_pm = [normalize_polymarket_market(market) for market in polymarket_markets]
     normalized_kalshi = [normalize_kalshi_market(market) for market in kalshi_markets]
-    candidates: list[dict[str, Any]] = []
-
     for pm_market in normalized_pm:
         for kalshi_market in normalized_kalshi:
             candidate = score_market_pair(pm_market, kalshi_market)
@@ -20,6 +21,10 @@ def compare_wallet_markets_to_kalshi(trades: list[dict[str, Any]], kalshi_market
                 candidates.append(candidate)
 
     candidates.sort(key=lambda item: (item["similarity_score"], len(item["shared_keywords_entities"])), reverse=True)
+    return _dedupe_candidates(candidates, max_candidates)
+
+
+def _dedupe_candidates(candidates: list[dict[str, Any]], max_candidates: int) -> list[dict[str, Any]]:
     deduped: list[dict[str, Any]] = []
     seen_pairs: set[tuple[str, str]] = set()
     for candidate in candidates:
