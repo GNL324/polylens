@@ -277,15 +277,52 @@ def fetch_odds(sport_key: str, bookmaker: str | None = None, region: str = "us",
 
 def fetch_player_props(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, as_json: bool = False, quiet: bool = False) -> list[dict[str, Any]]:
     client = OddsAPIClient(raw_dir="data/raw")
-    events = client.get_player_props(sport_key, event_id=event_id, regions=region, markets=markets, bookmakers=bookmaker)
-    normalized = normalize_player_props(events)
+    payload = client.get_player_props(sport_key, event_id=event_id, regions=region, markets=markets, bookmakers=bookmaker)
+    raw_events = payload.get("events") if isinstance(payload, dict) else payload
+    normalized = normalize_player_props(raw_events or [])
+    diagnostics = _player_prop_diagnostics(payload, normalized)
+    output = {"props": normalized, "diagnostics": diagnostics}
     if as_json:
-        print(json.dumps(normalized, indent=2, sort_keys=True))
+        print(json.dumps(output, indent=2, sort_keys=True))
     elif not quiet:
         print(f"Fetched player props: {len(normalized)}")
+        print(f"Events discovered/scanned/failed: {diagnostics['events_discovered']}/{diagnostics['events_scanned']}/{diagnostics['events_failed']}")
         for row in normalized[:20]:
             print(f"- {row.get('player')} {row.get('market_type')} {row.get('side')} {row.get('line')} {row.get('bookmaker')} odds={row.get('odds')}")
     return normalized
+
+
+def debug_player_props(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, as_json: bool = False) -> dict[str, Any]:
+    client = OddsAPIClient(raw_dir="data/raw")
+    payload = client.get_player_props(sport_key, event_id=event_id, regions=region, markets=markets, bookmakers=bookmaker)
+    raw_events = payload.get("events") if isinstance(payload, dict) else payload
+    normalized = normalize_player_props(raw_events or [])
+    diagnostics = _player_prop_diagnostics(payload, normalized)
+    event_rows = []
+    for event in raw_events or []:
+        markets_seen = []
+        prop_count = 0
+        for book in event.get("bookmakers", []) or []:
+            for market in book.get("markets", []) or []:
+                markets_seen.append(market.get("key"))
+                prop_count += len(market.get("outcomes", []) or [])
+        event_rows.append({"event_id": event.get("id"), "home_team": event.get("home_team"), "away_team": event.get("away_team"), "available_prop_markets": sorted(set(markets_seen)), "prop_count": prop_count})
+    result = {"events": event_rows, "diagnostics": diagnostics}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print("Polylens Player Props Debug")
+        print("=" * 28)
+        for event in event_rows:
+            print(f"{event.get('event_id')} {event.get('home_team')} vs {event.get('away_team')} markets={event.get('available_prop_markets')} props={event.get('prop_count')}")
+        print(f"Rejected markets: {diagnostics['prop_markets_rejected']}")
+    return result
+
+
+def _player_prop_diagnostics(payload: Any, normalized: list[dict[str, Any]]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"events_discovered": 0, "events_scanned": 0, "events_failed": 0, "prop_markets_supported": sorted({row.get('market_type') for row in normalized if row.get('market_type')}), "prop_markets_rejected": [], "props_normalized": len(normalized)}
+    return {"events_discovered": payload.get("events_discovered", 0), "events_scanned": payload.get("events_scanned", 0), "events_failed": payload.get("events_failed", 0), "prop_markets_supported": payload.get("prop_markets_supported", []), "prop_markets_rejected": payload.get("prop_markets_rejected", []), "props_normalized": len(normalized)}
 
 
 def scan_prop_arb(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, bankroll: float | None = None, min_guaranteed_roi: float | None = None, as_json: bool = False) -> dict[str, Any]:
@@ -837,6 +874,14 @@ def main() -> None:
     props_parser.add_argument("--markets")
     props_parser.add_argument("--json", action="store_true")
 
+    debug_props_parser = sub.add_parser("debug-player-props")
+    debug_props_parser.add_argument("--sport", required=True, dest="sport_key")
+    debug_props_parser.add_argument("--event-id")
+    debug_props_parser.add_argument("--bookmaker")
+    debug_props_parser.add_argument("--region", default="us")
+    debug_props_parser.add_argument("--markets")
+    debug_props_parser.add_argument("--json", action="store_true")
+
     prop_arb_parser = sub.add_parser("scan-prop-arb")
     prop_arb_parser.add_argument("--sport", required=True, dest="sport_key")
     prop_arb_parser.add_argument("--event-id")
@@ -977,6 +1022,8 @@ def main() -> None:
         fetch_odds(args.sport_key, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
     elif args.command == "fetch-player-props":
         fetch_player_props(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
+    elif args.command == "debug-player-props":
+        debug_player_props(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
     elif args.command == "scan-prop-arb":
         scan_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, bankroll=args.bankroll, min_guaranteed_roi=args.min_guaranteed_roi, as_json=args.json)
     elif args.command == "fetch-futures":

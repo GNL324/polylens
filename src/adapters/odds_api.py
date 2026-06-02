@@ -51,6 +51,12 @@ class OddsAPIClient:
         payload = self._get_json("sports", params, raw_key="sports_all" if all_sports else "sports")
         return payload if isinstance(payload, list) else []
 
+    def get_events(self, sport_key: str) -> list[dict[str, Any]]:
+        if not sport_key:
+            raise ValueError("sport_key is required")
+        payload = self._get_json(f"sports/{sport_key}/events", {}, raw_key=f"events_{sport_key}")
+        return payload if isinstance(payload, list) else []
+
     def get_odds(
         self,
         sport_key: str,
@@ -72,6 +78,29 @@ class OddsAPIClient:
         return payload if isinstance(payload, list) else []
 
 
+    def get_event_props(
+        self,
+        sport_key: str,
+        event_id: str,
+        regions: str = "us",
+        markets: str | None = None,
+        bookmakers: str | None = None,
+        odds_format: str = "american",
+    ) -> dict[str, Any]:
+        if not sport_key or not event_id:
+            raise ValueError("sport_key and event_id are required")
+        market_list = markets or ",".join(PLAYER_PROP_MARKETS)
+        params: dict[str, Any] = {"regions": regions, "markets": market_list, "oddsFormat": odds_format}
+        if bookmakers:
+            params["bookmakers"] = bookmakers
+        try:
+            payload = self._get_json(f"sports/{sport_key}/events/{event_id}/odds", params, raw_key=f"player_props_{sport_key}_{event_id}")
+            return {"supported": True, "event_id": event_id, "events": [payload] if isinstance(payload, dict) else [], "unsupported_markets": [], "failed_markets": []}
+        except OddsAPIError as exc:
+            if _is_unsupported_market_error(exc):
+                return {"supported": False, "reason": "market unsupported", "event_id": event_id, "events": [], "unsupported_markets": [{"supported": False, "reason": "market unsupported", "market": market} for market in _market_list(market_list)], "failed_markets": []}
+            raise
+
     def get_player_props(
         self,
         sport_key: str,
@@ -80,16 +109,40 @@ class OddsAPIClient:
         markets: str | None = None,
         bookmakers: str | None = None,
         odds_format: str = "american",
-    ) -> list[dict[str, Any]]:
-        if not sport_key:
-            raise ValueError("sport_key is required")
-        market_list = markets or ",".join(PLAYER_PROP_MARKETS)
-        endpoint = f"sports/{sport_key}/events/{event_id}/odds" if event_id else f"sports/{sport_key}/odds"
-        params: dict[str, Any] = {"regions": regions, "markets": market_list, "oddsFormat": odds_format}
-        if bookmakers:
-            params["bookmakers"] = bookmakers
-        payload = self._get_json(endpoint, params, raw_key=f"player_props_{sport_key}_{event_id or 'all'}")
-        return payload if isinstance(payload, list) else ([payload] if isinstance(payload, dict) else [])
+    ) -> dict[str, Any]:
+        market_list = _market_list(markets or ",".join(PLAYER_PROP_MARKETS))
+        events = [{"id": event_id}] if event_id else self.get_events(sport_key)
+        aggregated: list[dict[str, Any]] = []
+        unsupported: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        events_scanned = 0
+        for event in events:
+            current_event_id = str(event.get("id") or "")
+            if not current_event_id:
+                continue
+            events_scanned += 1
+            result = self.get_event_props(sport_key, current_event_id, regions=regions, markets=",".join(market_list), bookmakers=bookmakers, odds_format=odds_format)
+            if result.get("supported"):
+                aggregated.extend(result.get("events") or [])
+                continue
+            # Fallback: isolate unsupported markets so supported props still flow.
+            for market in market_list:
+                single = self.get_event_props(sport_key, current_event_id, regions=regions, markets=market, bookmakers=bookmakers, odds_format=odds_format)
+                if single.get("supported"):
+                    aggregated.extend(single.get("events") or [])
+                else:
+                    unsupported.extend(single.get("unsupported_markets") or [{"supported": False, "reason": "market unsupported", "market": market}])
+            if result.get("reason") and not result.get("unsupported_markets"):
+                failed.append({"event_id": current_event_id, "reason": result.get("reason")})
+        return {
+            "events": aggregated,
+            "events_discovered": len(events),
+            "events_scanned": events_scanned,
+            "events_failed": len(failed),
+            "prop_markets_supported": sorted({market.get("key") for event in aggregated for bookmaker in event.get("bookmakers", []) or [] for market in bookmaker.get("markets", []) or [] if market.get("key")} ),
+            "prop_markets_rejected": unsupported,
+            "failed_events": failed,
+        }
 
     def get_futures(
         self,
@@ -169,3 +222,12 @@ def _sport_lookup_terms(sport_key: str) -> list[str]:
         "icehockey_nhl": ["nhl"],
     }
     return mapping.get(sport_key, [part for part in sport_key.lower().split("_") if part])
+
+
+def _market_list(markets: str | None) -> list[str]:
+    return [market.strip() for market in str(markets or "").split(",") if market.strip()]
+
+
+def _is_unsupported_market_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "422" in text and ("unsupported" in text or "invalid_market" in text or "invalid_market_combo" in text or "markets not supported" in text)

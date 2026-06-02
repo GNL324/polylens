@@ -27,3 +27,30 @@ python -m src.cli scan-prop-arb --sport basketball_nba --bankroll 1000 --json
 Props are equivalent when sport/league, event, player, prop type, and line match. Over and under sides are paired as hedge legs. A true prop arbitrage exists when over implied probability plus under implied probability is below 1.00.
 
 Diagnostics include player mismatch, line mismatch, market mismatch, same side, total implied probability >= 1, and stale odds when available.
+
+
+## Odds API Workflow
+
+The Odds API exposes player props through event-level odds, not the sport-level odds endpoint.
+
+1. Discover events:
+
+```bash
+GET /v4/sports/{sport}/events
+```
+
+2. Fetch props for each event:
+
+```bash
+GET /v4/sports/{sport}/events/{eventId}/odds?markets=player_points,player_rebounds
+```
+
+`fetch-player-props` performs this workflow automatically and aggregates normalized props across events. Unsupported prop markets are reported in diagnostics instead of raising.
+
+## Debugging
+
+```bash
+python -m src.cli debug-player-props --sport basketball_nba --json
+```
+
+The debug output includes event id, teams, available prop markets, prop count, discovered/scanned/failed event counts, and rejected markets.
