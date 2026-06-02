@@ -22,11 +22,18 @@ def explain_live_matches(polymarket_markets: list[dict[str, Any]], kalshi_market
     rejected = [item for item in diagnostics if not item.get("accepted")]
     accepted = [item for item in diagnostics if item.get("accepted")]
     counts = Counter(item.get("rejection_reason") or "accepted" for item in rejected)
+    futures = [item for item in diagnostics if item.get("target_market_type") in {"championship_winner", "conference_winner", "division_winner", "season_award"} or item.get("source_market_type") == "championship_winner"]
+    futures_rejected = [item for item in futures if not item.get("accepted")]
+    futures_accepted = [item for item in futures if item.get("accepted")]
     return {
         "matches_attempted": len(diagnostics),
         "matches_accepted": len(accepted),
         "matches_rejected": len(rejected),
         "top_rejection_reasons": dict(counts.most_common(20)),
+        "futures_matches_attempted": len(futures),
+        "futures_matches_accepted": len(futures_accepted),
+        "futures_matches_rejected": len(futures_rejected),
+        "futures_rejection_reasons": dict(Counter(item.get("rejection_reason") or "accepted" for item in futures_rejected).most_common(20)),
         "accepted_matches_sample": accepted[:sample_limit],
         "rejected_matches_sample": rejected[:sample_limit],
         "diagnostics": diagnostics,
@@ -40,6 +47,10 @@ def live_match_summary(polymarket_markets: list[dict[str, Any]], kalshi_markets:
         "matches_accepted": diagnostics["matches_accepted"],
         "matches_rejected": diagnostics["matches_rejected"],
         "top_rejection_reasons": diagnostics["top_rejection_reasons"],
+        "futures_matches_attempted": diagnostics.get("futures_matches_attempted", 0),
+        "futures_matches_accepted": diagnostics.get("futures_matches_accepted", 0),
+        "futures_matches_rejected": diagnostics.get("futures_matches_rejected", 0),
+        "futures_rejection_reasons": diagnostics.get("futures_rejection_reasons", {}),
     }
 
 

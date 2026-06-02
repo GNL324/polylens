@@ -20,7 +20,7 @@ from src.analysis.live_match_diagnostics import explain_live_matches as explain_
 from src.analysis.market_inventory import summarize_market_inventory
 from src.analysis.markets import summarize_markets
 from src.analysis.match_diagnostics import explain_market_matches
-from src.analysis.odds_normalization import normalize_odds_events
+from src.analysis.odds_normalization import normalize_futures_events, normalize_odds_events
 from src.analysis.pnl import summarize_pnl
 from src.analysis.sportsbook_matching import match_sportsbook_lines
 from src.analysis.timing import summarize_timing
@@ -268,6 +268,19 @@ def fetch_odds(sport_key: str, bookmaker: str | None = None, region: str = "us",
     return normalized
 
 
+def fetch_futures(sport_key: str, bookmaker: str | None = None, region: str = "us", as_json: bool = False, quiet: bool = False) -> list[dict[str, Any]]:
+    client = OddsAPIClient(raw_dir="data/raw")
+    events = client.get_futures(sport_key, regions=region, bookmakers=bookmaker)
+    normalized = normalize_futures_events(events)
+    if as_json:
+        print(json.dumps(normalized, indent=2, sort_keys=True))
+    elif not quiet:
+        print(f"Fetched sportsbook futures: {len(normalized)}")
+        for row in normalized[:20]:
+            print(f"- {row.get('league')} {row.get('market_type')} {row.get('team')} {row.get('bookmaker_name')} odds={row.get('odds')} implied={row.get('implied_probability')}")
+    return normalized
+
+
 def scan_sportsbook_arb(wallet: str, sport_key: str, bookmaker: str | None = None, region: str = "us", as_json: bool = False) -> list[dict[str, Any]]:
     poly_client = PolymarketClient(raw_dir="data/raw")
     trades = poly_client.get_user_trades(wallet)
@@ -324,7 +337,8 @@ def scan_live_arb(
     sportsbook_skipped_reason: str | None = None
     if sport_key:
         try:
-            sportsbook_lines = fetch_odds(sport_key, bookmaker=bookmaker, region=region, markets="h2h,spreads,totals,outrights", quiet=True)
+            sportsbook_lines = fetch_odds(sport_key, bookmaker=bookmaker, region=region, markets="h2h,spreads,totals", quiet=True)
+            sportsbook_lines.extend(fetch_futures(sport_key, bookmaker=bookmaker, region=region, quiet=True))
         except MissingOddsAPIKey:
             sportsbook_skipped_reason = "ODDS_API_KEY missing; sportsbook side skipped"
         except Exception as exc:
@@ -471,11 +485,17 @@ def explain_live_matches_cli(
     sportsbook_lines: list[dict[str, Any]] = []
     if sport_key:
         try:
-            sportsbook_lines = fetch_odds(sport_key, markets="h2h,spreads,totals,outrights", quiet=True)
+            sportsbook_lines = fetch_odds(sport_key, markets="h2h,spreads,totals", quiet=True)
         except MissingOddsAPIKey:
             sportsbook_lines = []
         except Exception as exc:
             logger.warning("Sportsbook odds fetch failed during match diagnostics: %s", exc)
+        try:
+            sportsbook_lines.extend(fetch_futures(sport_key, quiet=True))
+        except MissingOddsAPIKey:
+            pass
+        except Exception as exc:
+            logger.warning("Sportsbook futures fetch failed during match diagnostics: %s", exc)
     diagnostics = explain_live_market_matches(polymarket_markets, kalshi_markets, sportsbook_lines, accepted_only=accepted_only, rejected_only=rejected_only)
     diagnostics["kalshi_inventory_filter"] = kalshi_inventory_diagnostics
     if as_json:
@@ -624,6 +644,12 @@ def main() -> None:
     odds_parser.add_argument("--markets", default="h2h,spreads,totals")
     odds_parser.add_argument("--json", action="store_true")
 
+    futures_parser = sub.add_parser("fetch-futures")
+    futures_parser.add_argument("--sport", required=True, dest="sport_key")
+    futures_parser.add_argument("--bookmaker")
+    futures_parser.add_argument("--region", default="us")
+    futures_parser.add_argument("--json", action="store_true")
+
     sportsbook_parser = sub.add_parser("scan-sportsbook-arb")
     sportsbook_parser.add_argument("wallet")
     sportsbook_parser.add_argument("--sport", required=True, dest="sport_key")
@@ -713,6 +739,8 @@ def main() -> None:
         list_sportsbooks(as_json=args.json)
     elif args.command == "fetch-odds":
         fetch_odds(args.sport_key, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
+    elif args.command == "fetch-futures":
+        fetch_futures(args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
     elif args.command == "scan-sportsbook-arb":
         scan_sportsbook_arb(args.wallet, args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
     elif args.command == "scan-live-arb":

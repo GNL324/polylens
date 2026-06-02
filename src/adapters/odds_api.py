@@ -56,6 +56,23 @@ class OddsAPIClient:
         payload = self._get_json(f"sports/{sport_key}/odds", params, raw_key=f"odds_{sport_key}")
         return payload if isinstance(payload, list) else []
 
+
+    def get_futures(
+        self,
+        sport_key: str,
+        regions: str = "us",
+        bookmakers: str | None = None,
+        odds_format: str = "american",
+    ) -> list[dict[str, Any]]:
+        """Fetch sportsbook futures/outrights for a sport."""
+        return self.get_odds(
+            sport_key,
+            regions=regions,
+            markets="outrights",
+            bookmakers=bookmakers,
+            odds_format=odds_format,
+        )
+
     def _get_json(self, endpoint: str, params: dict[str, Any], raw_key: str) -> Any:
         if not self.api_key:
             raise MissingOddsAPIKey("ODDS_API_KEY is required to call The Odds API")

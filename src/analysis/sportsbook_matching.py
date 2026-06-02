@@ -45,14 +45,31 @@ def score_sportsbook_match_with_diagnostic(pm_market: dict[str, Any], pm: Any, l
 
     book_team = str(line.get("team") or "").lower()
     book_opponent = str(line.get("opponent") or "").lower()
+    market_type = line.get("market_type")
     if not book_team:
         return reject("missing structured fields")
-    if not _team_matches(pm.team.lower(), book_team) and not _team_matches(pm.team.lower(), book_opponent):
-        return reject("team mismatch")
-    if pm.opponent and book_opponent and not (_team_matches(pm.opponent.lower(), book_opponent) or _team_matches(pm.opponent.lower(), book_team)):
-        return reject("opponent mismatch")
 
-    market_type = line.get("market_type")
+    if pm.market_type == "championship_winner":
+        if market_type in {"game_winner", "spread", "total", "player_prop"}:
+            if market_type == "spread":
+                return reject("spread mismatch", 0.35)
+            if market_type == "total":
+                return reject("total mismatch", 0.35)
+            return reject("market type mismatch", 0.35)
+        if market_type in {"conference_winner", "division_winner", "season_award"}:
+            return reject("market type mismatch", 0.35)
+        if market_type != "championship_winner":
+            return reject("market type mismatch", 0.35)
+        if not _team_matches(pm.team.lower(), book_team):
+            return reject("team mismatch")
+        if pm.season_year and line.get("season_year") and int(pm.season_year) != int(line.get("season_year")):
+            return reject("event date mismatch", 0.5)
+    else:
+        if not _team_matches(pm.team.lower(), book_team) and not _team_matches(pm.team.lower(), book_opponent):
+            return reject("team mismatch")
+        if pm.opponent and book_opponent and not (_team_matches(pm.opponent.lower(), book_opponent) or _team_matches(pm.opponent.lower(), book_team)):
+            return reject("opponent mismatch")
+
     if pm.market_type and market_type and not _market_types_compatible(pm.market_type, str(market_type)):
         if market_type == "spread":
             return reject("spread mismatch", 0.35)
@@ -74,6 +91,9 @@ def score_sportsbook_match_with_diagnostic(pm_market: dict[str, Any], pm: Any, l
     if line.get("commence_time"):
         score += 0.1
         reasons.append("sportsbook line has commence time")
+    if market_type == "championship_winner":
+        score += 0.1
+        reasons.append("sportsbook futures market")
     if line.get("implied_probability") is not None:
         score += 0.15
         reasons.append("sportsbook implied probability available")
@@ -88,6 +108,7 @@ def score_sportsbook_match_with_diagnostic(pm_market: dict[str, Any], pm: Any, l
         "sportsbook_event_id": line.get("event_id"),
         "sportsbook_team": line.get("team"),
         "sportsbook_opponent": line.get("opponent"),
+        "sportsbook_market_title": line.get("market_title"),
         "league": pm.league,
         "market_type": market_type,
         "line": line.get("line"),
@@ -117,12 +138,14 @@ def _diagnostic_base(pm_market: dict[str, Any], pm: Any, line: dict[str, Any], s
         "parsed_teams": {"source_team": pm.team, "target_team": line.get("team")},
         "parsed_opponents": {"source_opponent": pm.opponent, "target_opponent": line.get("opponent")},
         "parsed_league": {"source_league": pm.league, "target_league": line.get("league")},
-        "parsed_event_date": {"source_season_year": pm.season_year, "target_commence_time": line.get("commence_time")},
+        "parsed_event_date": {"source_season_year": pm.season_year, "target_commence_time": line.get("commence_time"), "target_season_year": line.get("season_year")},
         "parsed_fields": {source_venue: pm.to_dict(), "sportsbook": line},
     }
 
 
 def _sportsbook_title(line: dict[str, Any]) -> str:
+    if line.get("market_title") and line.get("team") and line.get("market_type") == "championship_winner":
+        return f"{line.get('market_title')} - {line.get('team')}"
     teams = [str(value) for value in (line.get("team"), line.get("opponent")) if value]
     return " vs ".join(teams) or str(line.get("event_id") or "sportsbook line")
 
