@@ -3,11 +3,14 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from src.analysis.prop_matching import match_prop_pairs
+from src.analysis.prop_matching import match_prop_pairs_with_metrics
 
 
 def scan_prop_arbitrage(props: list[dict[str, Any]], bankroll: float | None = None, min_guaranteed_roi: float | None = None) -> dict[str, Any]:
-    pairs, rejects = match_prop_pairs(props)
+    match_result = match_prop_pairs_with_metrics(props)
+    pairs = match_result["matches"]
+    rejects = match_result["rejects"]
+    metrics = match_result["metrics"]
     arbs: list[dict[str, Any]] = []
     pair_rejects: list[dict[str, Any]] = []
     for pair in pairs:
@@ -50,6 +53,9 @@ def scan_prop_arbitrage(props: list[dict[str, Any]], bankroll: float | None = No
         "matched_prop_pairs": len(pairs),
         "rejected_pairs": len(rejects) + len(pair_rejects),
         "rejection_reasons": dict(reasons),
+        "comparisons_before_grouping": metrics["comparisons_before_grouping"],
+        "comparisons_after_grouping": metrics["comparisons_after_grouping"],
+        "grouping_reduction_percent": metrics["grouping_reduction_percent"],
         "prop_arbitrage_candidates": sorted(arbs, key=lambda item: item.get("guaranteed_roi") or 0, reverse=True),
         "diagnostics": [_compact_match_reject(item) for item in rejects] + pair_rejects,
     }

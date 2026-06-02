@@ -64,7 +64,7 @@ def test_prop_matching_reject_diagnostics_are_compact():
 
     result = scan_prop_arbitrage(props)
 
-    assert result["diagnostics"][0]["rejection_reason"] == "player mismatch"
+    assert {item["rejection_reason"] for item in result["diagnostics"]} == {"missing opposite side"}
     assert "left" not in result["diagnostics"][0]
     assert "right" not in result["diagnostics"][0]
     assert "raw" not in str(result["diagnostics"])

@@ -59,3 +59,8 @@ The debug output includes event id, teams, available prop markets, prop count, d
 ## Memory Safety
 
 Normalized player prop rows intentionally do not retain full Odds API event, bookmaker, or market payloads. They keep only lightweight debug fields: `raw_outcome_name`, `raw_outcome_description`, and `raw_price`. Prop arbitrage diagnostics are compact summaries and do not embed full prop objects.
+
+
+## Grouped Matching
+
+Prop matching groups rows by sport, league, event, normalized player, market type, and line before comparing sides. Only over/under rows inside the same group are compared, so player, event, and line mismatches are eliminated before pair construction. Diagnostics retain meaningful rejects such as missing opposite side, invalid side, and total implied probability >= 1.

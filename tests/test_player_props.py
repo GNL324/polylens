@@ -47,7 +47,7 @@ def test_reject_different_lines():
     right = {**left, "line": 29.5, "side": "under"}
     matches, rejects = match_prop_pairs([left, right])
     assert matches == []
-    assert rejects[0]["rejection_reason"] == "line mismatch"
+    assert {reject["rejection_reason"] for reject in rejects} == {"missing opposite side"}
 
 
 def test_reject_different_players():
@@ -55,7 +55,7 @@ def test_reject_different_players():
     right = {**left, "player": "Josh Hart", "side": "under"}
     matches, rejects = match_prop_pairs([left, right])
     assert matches == []
-    assert rejects[0]["rejection_reason"] == "player mismatch"
+    assert {reject["rejection_reason"] for reject in rejects} == {"missing opposite side"}
 
 
 def test_detect_over_under_arb():
