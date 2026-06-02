@@ -22,7 +22,7 @@ def explain_live_matches(polymarket_markets: list[dict[str, Any]], kalshi_market
     rejected = [item for item in diagnostics if not item.get("accepted")]
     accepted = [item for item in diagnostics if item.get("accepted")]
     counts = Counter(item.get("rejection_reason") or "accepted" for item in rejected)
-    futures = [item for item in diagnostics if item.get("target_market_type") in {"championship_winner", "conference_winner", "division_winner", "season_award"} or item.get("source_market_type") == "championship_winner"]
+    futures = [item for item in diagnostics if item.get("target_venue") == "sportsbook" and item.get("target_market_type") in {"championship_winner", "conference_winner", "division_winner", "award", "season_award"}]
     futures_rejected = [item for item in futures if not item.get("accepted")]
     futures_accepted = [item for item in futures if item.get("accepted")]
     return {

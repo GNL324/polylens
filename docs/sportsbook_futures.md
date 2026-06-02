@@ -1,6 +1,6 @@
 # Sportsbook Futures
 
-Polylens can ingest sportsbook futures/outrights from The Odds API and compare them with Polymarket championship futures.
+Polylens can ingest sportsbook futures/outrights from The Odds API and compare them with Polymarket championship futures. The Odds API only supports outrights for sport keys whose `/sports` entry has `has_outrights: true`; regular game-line keys such as `basketball_nba` may not support `markets=outrights` directly. Polylens discovers an outright-capable sport key first and returns an unsupported response when none is available.
 
 ## Commands
 
@@ -35,3 +35,17 @@ Championship futures reject game winners, spreads, totals, player props, confere
 ## Limitations
 
 Availability depends on The Odds API and bookmaker coverage. Some books expose futures under different sport keys or omit season metadata, so Polylens only enforces season equality when both sides provide it.
+
+## Unsupported Futures
+
+When The Odds API has no outright-capable sport key for the requested sport, `fetch-futures` returns:
+
+```json
+{
+  "supported": false,
+  "reason": "no futures endpoint for sport",
+  "futures": []
+}
+```
+
+`scan-live-arb` only includes futures matching when normalized futures inventory is present. Game-line `h2h`, `spreads`, and `totals` are excluded from futures diagnostics.

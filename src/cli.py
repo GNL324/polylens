@@ -268,17 +268,25 @@ def fetch_odds(sport_key: str, bookmaker: str | None = None, region: str = "us",
     return normalized
 
 
-def fetch_futures(sport_key: str, bookmaker: str | None = None, region: str = "us", as_json: bool = False, quiet: bool = False) -> list[dict[str, Any]]:
+def fetch_futures(sport_key: str, bookmaker: str | None = None, region: str = "us", as_json: bool = False, quiet: bool = False) -> dict[str, Any]:
     client = OddsAPIClient(raw_dir="data/raw")
-    events = client.get_futures(sport_key, regions=region, bookmakers=bookmaker)
-    normalized = normalize_futures_events(events)
+    payload = client.get_futures(sport_key, regions=region, bookmakers=bookmaker)
+    if not payload.get("supported"):
+        result = {"supported": False, "reason": payload.get("reason") or "no futures endpoint for sport", "sport_key": sport_key, "futures_sport_key": payload.get("futures_sport_key"), "futures": []}
+        if as_json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        elif not quiet:
+            print(result["reason"])
+        return result
+    normalized = normalize_futures_events(payload.get("events") or [])
+    result = {"supported": True, "reason": None, "sport_key": sport_key, "futures_sport_key": payload.get("futures_sport_key"), "futures": normalized}
     if as_json:
-        print(json.dumps(normalized, indent=2, sort_keys=True))
+        print(json.dumps(result, indent=2, sort_keys=True))
     elif not quiet:
         print(f"Fetched sportsbook futures: {len(normalized)}")
         for row in normalized[:20]:
             print(f"- {row.get('league')} {row.get('market_type')} {row.get('team')} {row.get('bookmaker_name')} odds={row.get('odds')} implied={row.get('implied_probability')}")
-    return normalized
+    return result
 
 
 def scan_sportsbook_arb(wallet: str, sport_key: str, bookmaker: str | None = None, region: str = "us", as_json: bool = False) -> list[dict[str, Any]]:
@@ -334,11 +342,15 @@ def scan_live_arb(
         venue_errors["kalshi"] = f"Kalshi live discovery failed: {exc}"
 
     sportsbook_lines: list[dict[str, Any]] = []
+    sportsbook_futures: list[dict[str, Any]] = []
     sportsbook_skipped_reason: str | None = None
     if sport_key:
         try:
             sportsbook_lines = fetch_odds(sport_key, bookmaker=bookmaker, region=region, markets="h2h,spreads,totals", quiet=True)
-            sportsbook_lines.extend(fetch_futures(sport_key, bookmaker=bookmaker, region=region, quiet=True))
+            futures_result = fetch_futures(sport_key, bookmaker=bookmaker, region=region, quiet=True)
+            if futures_result.get("supported"):
+                sportsbook_futures = futures_result.get("futures") or []
+                sportsbook_lines.extend(sportsbook_futures)
         except MissingOddsAPIKey:
             sportsbook_skipped_reason = "ODDS_API_KEY missing; sportsbook side skipped"
         except Exception as exc:
@@ -368,6 +380,8 @@ def scan_live_arb(
     result["kalshi_markets_retained"] = kalshi_inventory_diagnostics.get("kalshi_markets_retained", len(kalshi_markets))
     result["kalshi_markets_discarded"] = kalshi_inventory_diagnostics.get("kalshi_markets_discarded", 0)
     result["kalshi_inventory_discarded_reason_counts"] = kalshi_inventory_diagnostics.get("discarded_reason_counts", {})
+    result["sportsbook_futures_fetched"] = len(sportsbook_futures)
+    result["sportsbook_futures_retained"] = len([line for line in sportsbook_futures if line.get("market_type") in {"championship_winner", "conference_winner", "division_winner", "award", "season_award"}])
     if save:
         scan_run_id, _opportunity_ids = OpportunityStore(db_path).save_scan_result(result, scan_mode="scan-live-arb", filters={"sport": sport_key, "keyword": keyword, "category": category, "limit": limit, "region": region, "bookmaker": bookmaker, "min_edge": min_edge, "min_score": min_score, "max_close_hours": max_close_hours, "include_low_confidence": include_low_confidence})
         result["saved_scan_run_id"] = scan_run_id
@@ -491,7 +505,9 @@ def explain_live_matches_cli(
         except Exception as exc:
             logger.warning("Sportsbook odds fetch failed during match diagnostics: %s", exc)
         try:
-            sportsbook_lines.extend(fetch_futures(sport_key, quiet=True))
+            futures_result = fetch_futures(sport_key, quiet=True)
+            if futures_result.get("supported"):
+                sportsbook_lines.extend(futures_result.get("futures") or [])
         except MissingOddsAPIKey:
             pass
         except Exception as exc:

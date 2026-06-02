@@ -87,10 +87,10 @@ def test_championship_vs_player_prop_rejected():
 def test_fetch_futures_cli_smoke(mock_client, capsys):
     from src.cli import fetch_futures
 
-    mock_client.return_value.get_futures.return_value = [futures_event()]
-    rows = fetch_futures("basketball_nba")
+    mock_client.return_value.get_futures.return_value = {"supported": True, "reason": None, "events": [futures_event()], "futures_sport_key": "basketball_nba_championship_winner"}
+    result = fetch_futures("basketball_nba")
 
-    assert rows[0]["market_type"] == "championship_winner"
+    assert result["futures"][0]["market_type"] == "championship_winner"
     assert "Fetched sportsbook futures" in capsys.readouterr().out
 
 
@@ -105,9 +105,47 @@ def test_scan_live_arb_includes_sportsbook_futures(mock_poly, mock_kalshi, mock_
     mock_poly.return_value.last_active_market_search_diagnostics = {}
     mock_kalshi.return_value.get_markets.return_value = []
     mock_fetch_odds.return_value = []
-    mock_fetch_futures.return_value = [{"event_id": "nba-finals", "league": "NBA", "team": "New York Knicks", "market_type": "championship_winner", "implied_probability": 0.1, "bookmaker_name": "Book", "odds": 900}]
+    mock_fetch_futures.return_value = {"supported": True, "futures": [{"event_id": "nba-finals", "league": "NBA", "team": "New York Knicks", "market_type": "championship_winner", "implied_probability": 0.1, "bookmaker_name": "Book", "odds": 900}]}
 
     result = scan_live_arb(sport_key="basketball_nba", keyword="knicks", limit=5, as_json=True)
 
     assert result["matches_found_by_venue_pair"]["polymarket_sportsbook"] == 1
     assert result["live_match_summary"]["futures_matches_accepted"] == 1
+
+
+def test_futures_diagnostics_skip_game_lines_spreads_and_totals():
+    from src.analysis.live_match_diagnostics import explain_live_matches
+
+    pm = [{"conditionId": "pm-knicks", "title": "Will the New York Knicks win the 2026 NBA Finals?"}]
+    lines = [
+        {"event_id": "game", "league": "NBA", "team": "New York Knicks", "opponent": "San Antonio Spurs", "market_type": "game_winner", "implied_probability": 0.6},
+        {"event_id": "spread", "league": "NBA", "team": "New York Knicks", "opponent": "San Antonio Spurs", "market_type": "spread", "line": -3.5, "implied_probability": 0.52},
+        {"event_id": "total", "league": "NBA", "team": "New York Knicks", "opponent": "San Antonio Spurs", "market_type": "total", "line": 218.5, "implied_probability": 0.52},
+    ]
+
+    result = explain_live_matches(pm, [], lines)
+
+    assert result["futures_matches_attempted"] == 0
+    assert result["futures_rejection_reasons"] == {}
+
+
+def test_valid_futures_inventory_enters_futures_diagnostics():
+    from src.analysis.live_match_diagnostics import explain_live_matches
+
+    pm = [{"conditionId": "pm-knicks", "title": "Will the New York Knicks win the 2026 NBA Finals?"}]
+    lines = [{"event_id": "nba-finals", "league": "NBA", "team": "New York Knicks", "market_type": "championship_winner", "implied_probability": 0.1}]
+
+    result = explain_live_matches(pm, [], lines)
+
+    assert result["futures_matches_attempted"] == 1
+    assert result["futures_matches_accepted"] == 1
+
+
+@patch("src.adapters.odds_api.OddsAPIClient.list_sports")
+def test_unsupported_futures_sport_handled_gracefully(mock_list_sports):
+    from src.adapters.odds_api import OddsAPIClient
+
+    mock_list_sports.return_value = [{"key": "basketball_nba", "title": "NBA", "has_outrights": False}]
+    result = OddsAPIClient(api_key="test").get_futures("basketball_nba")
+
+    assert result == {"supported": False, "reason": "no futures endpoint for sport", "events": [], "sport_key": "basketball_nba", "futures_sport_key": None}

@@ -32,8 +32,9 @@ class OddsAPIClient:
         self.timeout = timeout
         self.raw_dir.mkdir(parents=True, exist_ok=True)
 
-    def list_sports(self) -> list[dict[str, Any]]:
-        payload = self._get_json("sports", {}, raw_key="sports")
+    def list_sports(self, all_sports: bool = False) -> list[dict[str, Any]]:
+        params = {"all": "true"} if all_sports else {}
+        payload = self._get_json("sports", params, raw_key="sports_all" if all_sports else "sports")
         return payload if isinstance(payload, list) else []
 
     def get_odds(
@@ -63,15 +64,41 @@ class OddsAPIClient:
         regions: str = "us",
         bookmakers: str | None = None,
         odds_format: str = "american",
-    ) -> list[dict[str, Any]]:
-        """Fetch sportsbook futures/outrights for a sport."""
-        return self.get_odds(
-            sport_key,
-            regions=regions,
-            markets="outrights",
-            bookmakers=bookmakers,
-            odds_format=odds_format,
-        )
+    ) -> dict[str, Any]:
+        """Fetch sportsbook futures/outrights using an outright-capable sport key."""
+        outright_key = self.find_futures_sport_key(sport_key)
+        if not outright_key:
+            return {"supported": False, "reason": "no futures endpoint for sport", "events": [], "sport_key": sport_key, "futures_sport_key": None}
+        try:
+            events = self.get_odds(
+                outright_key,
+                regions=regions,
+                markets="outrights",
+                bookmakers=bookmakers,
+                odds_format=odds_format,
+            )
+        except OddsAPIError as exc:
+            if "INVALID_MARKET_COMBO" in str(exc) or "422" in str(exc):
+                return {"supported": False, "reason": "no futures endpoint for sport", "events": [], "sport_key": sport_key, "futures_sport_key": outright_key, "error": str(exc)}
+            raise
+        return {"supported": True, "reason": None, "events": events, "sport_key": sport_key, "futures_sport_key": outright_key}
+
+    def find_futures_sport_key(self, sport_key: str) -> str | None:
+        sports = self.list_sports(all_sports=True)
+        requested = str(sport_key or "")
+        for sport in sports:
+            if sport.get("key") == requested and sport.get("has_outrights"):
+                return requested
+        requested_terms = _sport_lookup_terms(requested)
+        candidates = [sport for sport in sports if sport.get("has_outrights")]
+        for sport in candidates:
+            key = str(sport.get("key") or "")
+            title = str(sport.get("title") or "")
+            description = str(sport.get("description") or "")
+            haystack = f"{key} {title} {description}".lower()
+            if all(term in haystack for term in requested_terms):
+                return key
+        return None
 
     def _get_json(self, endpoint: str, params: dict[str, Any], raw_key: str) -> Any:
         if not self.api_key:
@@ -99,3 +126,13 @@ class OddsAPIClient:
         status = "error" if error else "raw"
         path = self.raw_dir / f"odds_api_{safe_key}_{status}.json"
         path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _sport_lookup_terms(sport_key: str) -> list[str]:
+    mapping = {
+        "basketball_nba": ["nba"],
+        "americanfootball_nfl": ["nfl"],
+        "baseball_mlb": ["mlb"],
+        "icehockey_nhl": ["nhl"],
+    }
+    return mapping.get(sport_key, [part for part in sport_key.lower().split("_") if part])
