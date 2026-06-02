@@ -341,6 +341,12 @@ def scan_live_arb(
         max_close_hours=max_close_hours,
         include_low_confidence=include_low_confidence,
     )
+    pm_diagnostics = getattr(poly_client, "last_active_market_search_diagnostics", {}) or {}
+    if not isinstance(pm_diagnostics, dict):
+        pm_diagnostics = {}
+    result["polymarket_raw_markets"] = pm_diagnostics.get("raw_markets_returned", len(polymarket_markets))
+    result["polymarket_filtered_markets"] = pm_diagnostics.get("filtered_markets_retained", len(polymarket_markets))
+    result["polymarket_discarded_markets"] = pm_diagnostics.get("markets_discarded", 0)
     if save:
         scan_run_id, _opportunity_ids = OpportunityStore(db_path).save_scan_result(result, scan_mode="scan-live-arb", filters={"sport": sport_key, "keyword": keyword, "category": category, "limit": limit, "region": region, "bookmaker": bookmaker, "min_edge": min_edge, "min_score": min_score, "max_close_hours": max_close_hours, "include_low_confidence": include_low_confidence})
         result["saved_scan_run_id"] = scan_run_id
@@ -394,6 +400,23 @@ def _env_float(name: str, default: float | None = None) -> float | None:
 def _env_str(name: str, default: str | None = None) -> str | None:
     value = os.environ.get(name)
     return default if value in (None, "") else value
+
+
+def debug_polymarket_search(keyword: str | None = None, sport_key: str | None = None, category: str | None = None, limit: int = 100, as_json: bool = False) -> dict[str, Any]:
+    client = PolymarketClient(raw_dir="data/raw")
+    diagnostics = client.debug_active_market_search(keyword=keyword, sport=sport_key, category=category, limit=limit)
+    if as_json:
+        print(json.dumps(diagnostics, indent=2, sort_keys=True))
+    else:
+        print("Polylens Polymarket Search Debug")
+        print("=" * 33)
+        print(f"Raw markets returned: {diagnostics['raw_markets_returned']}")
+        print(f"Filtered markets retained: {diagnostics['filtered_markets_retained']}")
+        print(f"Markets discarded: {diagnostics['markets_discarded']}")
+        print("Discarded markets:")
+        for item in diagnostics["discarded_markets"][:20]:
+            print(f"- {item.get('title')} ({', '.join(item.get('discard_reasons') or [])})")
+    return diagnostics
 
 
 def explain_live_matches_cli(
@@ -602,6 +625,13 @@ def main() -> None:
     explain_live_parser.add_argument("--accepted-only", action="store_true")
     explain_live_parser.add_argument("--rejected-only", action="store_true")
 
+    debug_poly_parser = sub.add_parser("debug-polymarket-search")
+    debug_poly_parser.add_argument("--keyword")
+    debug_poly_parser.add_argument("--sport", dest="sport_key")
+    debug_poly_parser.add_argument("--category")
+    debug_poly_parser.add_argument("--limit", type=int, default=100)
+    debug_poly_parser.add_argument("--json", action="store_true")
+
     watch_parser = sub.add_parser("watch-live-arb")
     watch_parser.add_argument("--interval", type=int, dest="interval_seconds")
     watch_parser.add_argument("--min-edge", type=float)
@@ -656,6 +686,8 @@ def main() -> None:
         scan_live_arb(sport_key=args.sport_key, keyword=args.keyword, category=args.category, limit=args.limit, region=args.region, bookmaker=args.bookmaker, as_json=args.json, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, include_low_confidence=args.include_low_confidence, save=args.save, db_path=args.db_path)
     elif args.command == "explain-live-matches":
         explain_live_matches_cli(sport_key=args.sport_key, keyword=args.keyword, limit=args.limit, as_json=args.json, accepted_only=args.accepted_only, rejected_only=args.rejected_only)
+    elif args.command == "debug-polymarket-search":
+        debug_polymarket_search(keyword=args.keyword, sport_key=args.sport_key, category=args.category, limit=args.limit, as_json=args.json)
     elif args.command == "watch-live-arb":
         watch_live_arb(interval_seconds=args.interval_seconds, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, sport_key=args.sport_key, keyword=args.keyword, category=args.category, bookmaker=args.bookmaker, region=args.region, use_webhook=args.use_webhook, once=args.once, as_json=args.json, save=args.save, db_path=args.db_path)
     elif args.command == "recent-opportunities":

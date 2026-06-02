@@ -13,6 +13,47 @@ from urllib.request import Request, urlopen
 LOGGER = logging.getLogger(__name__)
 WALLET_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
+SPORT_FILTER_TERMS = {
+    "basketball_nba": {
+        "nba",
+        "basketball",
+        "knicks",
+        "celtics",
+        "lakers",
+        "warriors",
+        "cavaliers",
+        "thunder",
+        "timberwolves",
+        "pacers",
+        "nuggets",
+        "mavericks",
+        "bucks",
+        "sixers",
+        "76ers",
+        "suns",
+        "clippers",
+        "heat",
+        "magic",
+        "grizzlies",
+        "rockets",
+        "spurs",
+        "kings",
+        "bulls",
+        "hawks",
+        "nets",
+        "raptors",
+        "hornets",
+        "pistons",
+        "wizards",
+        "pelicans",
+        "jazz",
+        "blazers",
+    },
+    "baseball_mlb": {"mlb", "baseball", "yankees", "mets", "dodgers", "red sox", "cubs", "giants", "phillies", "braves", "astros"},
+    "icehockey_nhl": {"nhl", "hockey", "stanley cup", "rangers", "islanders", "bruins", "maple leafs", "oilers", "panthers"},
+    "americanfootball_nfl": {"nfl", "football", "super bowl", "giants", "jets", "chiefs", "eagles", "cowboys", "bills", "ravens", "packers"},
+}
+
 
 class PolymarketAPIError(RuntimeError):
     pass
@@ -28,6 +69,7 @@ class PolymarketClient:
         self.raw_dir = Path(raw_dir)
         self.timeout = timeout
         self.raw_dir.mkdir(parents=True, exist_ok=True)
+        self.last_active_market_search_diagnostics: dict[str, Any] = {}
 
     def get_user_activity(self, wallet: str, limit: int = 500, max_pages: int = 20) -> list[dict[str, Any]]:
         self._validate_wallet(wallet)
@@ -87,8 +129,25 @@ class PolymarketClient:
             rows = []
         if not isinstance(rows, list):
             LOGGER.warning("active markets returned unexpected payload shape")
+            self.last_active_market_search_diagnostics = _empty_search_diagnostics(keyword, sport, category)
             return []
-        return [self._preserve_live_market_fields(market) for market in rows if isinstance(market, dict)]
+        preserved = [self._preserve_live_market_fields(market) for market in rows if isinstance(market, dict)]
+        filtered, diagnostics = filter_active_markets(preserved, keyword=keyword, sport=sport, category=category)
+        self.last_active_market_search_diagnostics = diagnostics
+        return filtered
+
+    def debug_active_market_search(
+        self,
+        keyword: str | None = None,
+        category: str | None = None,
+        sport: str | None = None,
+        limit: int = 100,
+        active: bool = True,
+    ) -> dict[str, Any]:
+        markets = self.get_active_markets(keyword=keyword, category=category, sport=sport, limit=limit, active=active)
+        diagnostics = dict(self.last_active_market_search_diagnostics)
+        diagnostics["filtered_markets"] = markets
+        return diagnostics
 
     def get_wallet_markets(self, wallet: str, include_market_details: bool = True) -> list[dict[str, Any]]:
         trades = self.get_user_trades(wallet)
@@ -225,3 +284,82 @@ def get_positions(wallet: str) -> list[dict[str, Any]]:
 
 def get_active_markets(keyword: str | None = None, category: str | None = None, sport: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
     return _default_client.get_active_markets(keyword=keyword, category=category, sport=sport, limit=limit)
+
+
+def filter_active_markets(markets: list[dict[str, Any]], keyword: str | None = None, sport: str | None = None, category: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    retained: list[dict[str, Any]] = []
+    discarded: list[dict[str, Any]] = []
+    for market in markets:
+        reasons = _discard_reasons(market, keyword=keyword, sport=sport, category=category)
+        if reasons:
+            discarded.append({"title": market.get("title") or market.get("question") or market.get("slug"), "market_id": market.get("condition_id") or market.get("market_id") or market.get("id"), "discard_reasons": reasons})
+        else:
+            retained.append(market)
+    diagnostics = {
+        "remote_filters_used": {"keyword_q": keyword, "sport_tag_slug": sport, "category": category},
+        "raw_markets_returned": len(markets),
+        "filtered_markets_retained": len(retained),
+        "markets_discarded": len(discarded),
+        "discarded_markets": discarded,
+    }
+    return retained, diagnostics
+
+
+def _discard_reasons(market: dict[str, Any], keyword: str | None = None, sport: str | None = None, category: str | None = None) -> list[str]:
+    text = _market_search_text(market)
+    reasons: list[str] = []
+    if keyword and not _keyword_matches(text, keyword):
+        reasons.append("keyword mismatch")
+    if sport and not _sport_matches(text, sport):
+        reasons.append("sport mismatch")
+    if category and not _category_matches(text, category):
+        reasons.append("category mismatch")
+    return reasons
+
+
+def _keyword_matches(text: str, keyword: str) -> bool:
+    terms = [term for term in re.split(r"[^a-z0-9]+", keyword.lower()) if term]
+    if not terms:
+        return True
+    return all(term in text for term in terms)
+
+
+def _sport_matches(text: str, sport: str) -> bool:
+    terms = SPORT_FILTER_TERMS.get(sport, {sport.replace("_", " ").lower(), sport.lower()})
+    return any(term in text for term in terms)
+
+
+def _category_matches(text: str, category: str) -> bool:
+    normalized = category.replace("_", " ").lower()
+    aliases = {normalized}
+    if normalized in {"sports", "sport"}:
+        aliases.update({"sports", "sport", "nba", "mlb", "nhl", "nfl", "basketball", "baseball", "hockey", "football"})
+    return any(alias in text for alias in aliases)
+
+
+def _market_search_text(market: dict[str, Any]) -> str:
+    fields = ["title", "question", "slug", "event_slug", "eventSlug", "category", "groupItemTitle", "description"]
+    parts = [str(market.get(field) or "") for field in fields]
+    events = market.get("events")
+    if isinstance(events, list):
+        for event in events:
+            if isinstance(event, dict):
+                parts.extend(str(event.get(field) or "") for field in ("title", "slug", "category"))
+    tags = market.get("tags")
+    if isinstance(tags, list):
+        for tag in tags:
+            if isinstance(tag, dict):
+                parts.extend(str(tag.get(field) or "") for field in ("label", "slug", "name"))
+            else:
+                parts.append(str(tag))
+    return " ".join(parts).lower()
+
+
+def _empty_search_diagnostics(keyword: str | None, sport: str | None, category: str | None) -> dict[str, Any]:
+    return {
+        "remote_filters_used": {"keyword_q": keyword, "sport_tag_slug": sport, "category": category},
+        "raw_markets_returned": 0,
+        "filtered_markets_retained": 0,
+        "markets_discarded": 0,
+        "discarded_markets": [],
+    }
