@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.analysis.hedge_leg_discovery import discover_hedge_leg
+
 TRUE_ARB_REASONS = {
     "markets not equivalent",
     "missing NO side",
@@ -41,8 +43,11 @@ def classify_candidate(candidate: dict[str, Any], bankroll: float | None = None,
         row.update(true_arb)
         return row
 
+    hedge_discovery = discover_hedge_leg(row, row.get("hedge_inventory") or [])
+    row["hedge_leg_discovery"] = hedge_discovery
     reason = _not_true_arbitrage_reason(row)
     row["true_arbitrage_rejection_reason"] = reason
+    row["hedge_leg_rejection_reason"] = hedge_discovery.get("diagnostic")
     if include_hedges:
         hedge = detect_cross_market_hedge(row)
         if hedge:
@@ -69,11 +74,16 @@ def detect_true_yes_no_arbitrage(candidate: dict[str, Any], bankroll: float | No
     sportsbook_prob = _num(candidate.get("sportsbook_implied_probability"))
     sportsbook_odds = candidate.get("odds")
     market_type = candidate.get("market_type")
+    hedge_discovery = discover_hedge_leg(candidate, candidate.get("hedge_inventory") or [])
     if sportsbook_prob is not None and market_type in {"game_winner", "championship_winner"}:
         if pm_no is not None and _fully_covers_sportsbook_leg(candidate):
             options.append(_arb_payload(str(candidate.get("sportsbook") or "sportsbook"), str(candidate.get("sportsbook_team") or "winner"), sportsbook_prob, "polymarket", "NO", pm_no, bankroll, odds_a=sportsbook_odds))
         if kalshi_no is not None and _fully_covers_sportsbook_leg(candidate):
             options.append(_arb_payload(str(candidate.get("sportsbook") or "sportsbook"), str(candidate.get("sportsbook_team") or "winner"), sportsbook_prob, "kalshi", "NO", kalshi_no, bankroll, odds_a=sportsbook_odds))
+        hedge_leg = hedge_discovery.get("hedge_leg") or {}
+        hedge_price = _num(hedge_leg.get("price") or hedge_leg.get("no_price") or hedge_leg.get("polymarket_no_price") or hedge_leg.get("kalshi_no_price"))
+        if hedge_price is not None and hedge_discovery.get("coverage_percent") == 100:
+            options.append(_arb_payload(str(candidate.get("sportsbook") or "sportsbook"), str(candidate.get("sportsbook_team") or "winner"), sportsbook_prob, str(hedge_leg.get("venue") or hedge_leg.get("source") or "prediction_market"), str(hedge_leg.get("outcome") or "NO/field"), hedge_price, bankroll, odds_a=sportsbook_odds))
 
     profitable = [item for item in options if item["total_cost"] < 1.0]
     if not profitable:
@@ -89,11 +99,12 @@ def detect_cross_market_hedge(candidate: dict[str, Any]) -> dict[str, Any] | Non
     if candidate.get("confidence_band") == "low":
         return None
     reason = _not_true_arbitrage_reason(candidate)
+    hedge_reason = (candidate.get("hedge_leg_discovery") or {}).get("diagnostic")
     if reason in {"missing NO side", "event scope mismatch", "settlement rules differ"}:
         return {
             "opportunity_type": "cross_market_hedge",
             "hedge_type": "cross_market_hedge",
-            "residual_risk": _residual_risk(candidate, reason),
+            "residual_risk": _residual_risk(candidate, hedge_reason or reason),
         }
     return None
 
@@ -145,6 +156,7 @@ def _not_true_arbitrage_reason(candidate: dict[str, Any]) -> str:
     if not _markets_equivalent(candidate):
         return "markets not equivalent"
     if not _has_no_side(candidate):
+        discovery = candidate.get("hedge_leg_discovery") or discover_hedge_leg(candidate, candidate.get("hedge_inventory") or [])
         return "missing NO side"
     if not _has_hedge_leg(candidate):
         return "no hedge leg"

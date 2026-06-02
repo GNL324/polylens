@@ -27,3 +27,14 @@ Sportsbook candidates are `positive_ev` by default. They are only promoted to tr
 python -m src.cli scan-true-arb --keyword knicks --sport basketball_nba --bankroll 1000 --json
 python -m src.cli scan-true-arb --keyword knicks --sport basketball_nba --include-hedges
 ```
+
+
+## Hedge-Leg Discovery
+
+`find-hedges` explains whether a complementary NO/field leg is available:
+
+```bash
+python -m src.cli find-hedges --keyword knicks --sport basketball_nba --json
+```
+
+Diagnostics include `missing hedge leg`, `partial hedge`, `full hedge`, and `settlement mismatch`. A discovered field or NO leg can upgrade a sportsbook/prediction-market structure into true arbitrage only when coverage is complete and total outcome cost is below payout.

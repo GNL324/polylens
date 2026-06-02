@@ -14,6 +14,7 @@ from src.alerts.notifier import MissingWebhookURLError, build_notifier
 from src.analysis.arb_pricing import enrich_candidates_with_pricing, enrich_sportsbook_candidates_with_pricing
 from src.analysis.arb_signals import detect_signals
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
+from src.analysis.hedge_leg_discovery import explain_hedge_search
 from src.analysis.hedged_arbitrage import classify_arbitrage_candidates
 from src.analysis.kalshi_inventory_filter import filter_kalshi_inventory
 from src.analysis.live_arbitrage import scan_live_arbitrage
@@ -306,6 +307,25 @@ def scan_sportsbook_arb(wallet: str, sport_key: str, bookmaker: str | None = Non
             print(f"- {candidate.get('confidence_band')} {candidate.get('polymarket_title')} <> {candidate.get('sportsbook')} {candidate.get('sportsbook_team')} ({edge_text})")
             print(f"  {candidate.get('pricing_reason') or candidate.get('reason')}")
     return priced
+
+
+def find_hedges(keyword: str | None = None, sport_key: str | None = None, limit: int = 100, as_json: bool = False) -> dict[str, Any]:
+    result = scan_live_arb(sport_key=sport_key, keyword=keyword, limit=limit, as_json=False, include_low_confidence=True)
+    candidates = result.get("top_scored_candidates") or result.get("top_candidates") or []
+    diagnostics = [explain_hedge_search(candidate, candidate.get("hedge_inventory") or []) for candidate in candidates]
+    counts: dict[str, int] = {}
+    for item in diagnostics:
+        key = item.get("diagnostic") or "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    output = {"hedge_diagnostics": diagnostics, "diagnostic_counts": counts}
+    if as_json:
+        print(json.dumps(output, indent=2, sort_keys=True))
+    else:
+        print("Polylens Hedge Discovery")
+        print("=" * 25)
+        print(f"Candidates inspected: {len(diagnostics)}")
+        print(f"Diagnostics: {counts}")
+    return output
 
 
 def scan_true_arb(
@@ -711,6 +731,12 @@ def main() -> None:
     sportsbook_parser.add_argument("--region", default="us")
     sportsbook_parser.add_argument("--json", action="store_true")
 
+    find_hedges_parser = sub.add_parser("find-hedges")
+    find_hedges_parser.add_argument("--keyword")
+    find_hedges_parser.add_argument("--sport", dest="sport_key")
+    find_hedges_parser.add_argument("--limit", type=int, default=100)
+    find_hedges_parser.add_argument("--json", action="store_true")
+
     scan_true_parser = sub.add_parser("scan-true-arb")
     scan_true_parser.add_argument("--keyword")
     scan_true_parser.add_argument("--sport", dest="sport_key")
@@ -810,6 +836,8 @@ def main() -> None:
         scan_live_arb(sport_key=args.sport_key, keyword=args.keyword, category=args.category, limit=args.limit, region=args.region, bookmaker=args.bookmaker, as_json=args.json, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, include_low_confidence=args.include_low_confidence, save=args.save, db_path=args.db_path)
     elif args.command == "scan-true-arb":
         scan_true_arb(keyword=args.keyword, sport_key=args.sport_key, limit=args.limit, bankroll=args.bankroll, min_guaranteed_roi=args.min_guaranteed_roi, include_hedges=args.include_hedges, as_json=args.json)
+    elif args.command == "find-hedges":
+        find_hedges(keyword=args.keyword, sport_key=args.sport_key, limit=args.limit, as_json=args.json)
     elif args.command == "explain-live-matches":
         explain_live_matches_cli(sport_key=args.sport_key, keyword=args.keyword, limit=args.limit, as_json=args.json, accepted_only=args.accepted_only, rejected_only=args.rejected_only)
     elif args.command == "debug-polymarket-search":
