@@ -14,6 +14,7 @@ from src.alerts.notifier import MissingWebhookURLError, build_notifier
 from src.analysis.arb_pricing import enrich_candidates_with_pricing, enrich_sportsbook_candidates_with_pricing
 from src.analysis.arb_signals import detect_signals
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
+from src.analysis.kalshi_inventory_filter import filter_kalshi_inventory
 from src.analysis.live_arbitrage import scan_live_arbitrage
 from src.analysis.live_match_diagnostics import explain_live_matches as explain_live_market_matches
 from src.analysis.market_inventory import summarize_market_inventory
@@ -310,8 +311,10 @@ def scan_live_arb(
         logger.warning("Polymarket live market discovery failed: %s", exc)
         polymarket_markets = []
         venue_errors["polymarket"] = f"Polymarket live discovery failed: {exc}"
+    kalshi_inventory_diagnostics: dict[str, Any] = {}
     try:
-        kalshi_markets = kalshi_client.get_markets(status="open", limit=min(max(limit, 1), 1000), max_pages=5)
+        kalshi_markets_raw = kalshi_client.get_markets(status="open", limit=min(max(limit, 1), 1000), max_pages=5)
+        kalshi_markets, kalshi_inventory_diagnostics = filter_kalshi_inventory(kalshi_markets_raw)
     except Exception as exc:
         logger.warning("Kalshi live market discovery failed: %s", exc)
         kalshi_markets = []
@@ -347,6 +350,10 @@ def scan_live_arb(
     result["polymarket_raw_markets"] = pm_diagnostics.get("raw_markets_returned", len(polymarket_markets))
     result["polymarket_filtered_markets"] = pm_diagnostics.get("filtered_markets_retained", len(polymarket_markets))
     result["polymarket_discarded_markets"] = pm_diagnostics.get("markets_discarded", 0)
+    result["kalshi_markets_fetched"] = kalshi_inventory_diagnostics.get("kalshi_markets_fetched", len(kalshi_markets))
+    result["kalshi_markets_retained"] = kalshi_inventory_diagnostics.get("kalshi_markets_retained", len(kalshi_markets))
+    result["kalshi_markets_discarded"] = kalshi_inventory_diagnostics.get("kalshi_markets_discarded", 0)
+    result["kalshi_inventory_discarded_reason_counts"] = kalshi_inventory_diagnostics.get("discarded_reason_counts", {})
     if save:
         scan_run_id, _opportunity_ids = OpportunityStore(db_path).save_scan_result(result, scan_mode="scan-live-arb", filters={"sport": sport_key, "keyword": keyword, "category": category, "limit": limit, "region": region, "bookmaker": bookmaker, "min_edge": min_edge, "min_score": min_score, "max_close_hours": max_close_hours, "include_low_confidence": include_low_confidence})
         result["saved_scan_run_id"] = scan_run_id
@@ -419,6 +426,25 @@ def debug_polymarket_search(keyword: str | None = None, sport_key: str | None = 
     return diagnostics
 
 
+def debug_kalshi_inventory(limit: int = 100, as_json: bool = False) -> dict[str, Any]:
+    client = KalshiClient(raw_dir="data/raw")
+    markets = client.get_markets(status="open", limit=min(max(limit, 1), 1000), max_pages=5)
+    _retained, diagnostics = filter_kalshi_inventory(markets)
+    if as_json:
+        print(json.dumps(diagnostics, indent=2, sort_keys=True))
+    else:
+        print("Polylens Kalshi Inventory Debug")
+        print("=" * 31)
+        print(f"Kalshi markets fetched: {diagnostics['kalshi_markets_fetched']}")
+        print(f"Kalshi markets retained: {diagnostics['kalshi_markets_retained']}")
+        print(f"Kalshi markets discarded: {diagnostics['kalshi_markets_discarded']}")
+        print(f"Discarded reason counts: {diagnostics['discarded_reason_counts']}")
+        print("Discarded sample:")
+        for item in diagnostics["discarded_sample"][:20]:
+            print(f"- {item.get('ticker')} {item.get('title')} ({item.get('discard_reason')})")
+    return diagnostics
+
+
 def explain_live_matches_cli(
     sport_key: str | None = None,
     keyword: str | None = None,
@@ -435,8 +461,10 @@ def explain_live_matches_cli(
     except Exception as exc:
         logger.warning("Polymarket live discovery failed during match diagnostics: %s", exc)
         polymarket_markets = []
+    kalshi_inventory_diagnostics: dict[str, Any] = {}
     try:
-        kalshi_markets = kalshi_client.get_markets(status="open", limit=min(max(limit, 1), 1000), max_pages=5)
+        kalshi_markets_raw = kalshi_client.get_markets(status="open", limit=min(max(limit, 1), 1000), max_pages=5)
+        kalshi_markets, kalshi_inventory_diagnostics = filter_kalshi_inventory(kalshi_markets_raw)
     except Exception as exc:
         logger.warning("Kalshi live discovery failed during match diagnostics: %s", exc)
         kalshi_markets = []
@@ -449,6 +477,7 @@ def explain_live_matches_cli(
         except Exception as exc:
             logger.warning("Sportsbook odds fetch failed during match diagnostics: %s", exc)
     diagnostics = explain_live_market_matches(polymarket_markets, kalshi_markets, sportsbook_lines, accepted_only=accepted_only, rejected_only=rejected_only)
+    diagnostics["kalshi_inventory_filter"] = kalshi_inventory_diagnostics
     if as_json:
         print(json.dumps(diagnostics, indent=2, sort_keys=True))
     else:
@@ -632,6 +661,10 @@ def main() -> None:
     debug_poly_parser.add_argument("--limit", type=int, default=100)
     debug_poly_parser.add_argument("--json", action="store_true")
 
+    debug_kalshi_parser = sub.add_parser("debug-kalshi-inventory")
+    debug_kalshi_parser.add_argument("--limit", type=int, default=100)
+    debug_kalshi_parser.add_argument("--json", action="store_true")
+
     watch_parser = sub.add_parser("watch-live-arb")
     watch_parser.add_argument("--interval", type=int, dest="interval_seconds")
     watch_parser.add_argument("--min-edge", type=float)
@@ -688,6 +721,8 @@ def main() -> None:
         explain_live_matches_cli(sport_key=args.sport_key, keyword=args.keyword, limit=args.limit, as_json=args.json, accepted_only=args.accepted_only, rejected_only=args.rejected_only)
     elif args.command == "debug-polymarket-search":
         debug_polymarket_search(keyword=args.keyword, sport_key=args.sport_key, category=args.category, limit=args.limit, as_json=args.json)
+    elif args.command == "debug-kalshi-inventory":
+        debug_kalshi_inventory(limit=args.limit, as_json=args.json)
     elif args.command == "watch-live-arb":
         watch_live_arb(interval_seconds=args.interval_seconds, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, sport_key=args.sport_key, keyword=args.keyword, category=args.category, bookmaker=args.bookmaker, region=args.region, use_webhook=args.use_webhook, once=args.once, as_json=args.json, save=args.save, db_path=args.db_path)
     elif args.command == "recent-opportunities":
