@@ -4,3 +4,5 @@ __pycache__/
 logs/*.log
 data/raw/*.json
 data/reports/*.json
+data/*.db
+data/*.db-*

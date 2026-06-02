@@ -24,6 +24,7 @@ from src.analysis.timing import summarize_timing
 from src.analysis.volume import summarize_volume
 from src.analysis.watch_mode import watch_live_arbitrage
 from src.reports.wallet_report import WalletReport
+from src.storage.opportunity_store import OpportunityStore
 
 
 def setup_logging() -> None:
@@ -164,7 +165,7 @@ def scan_arb(wallet: str) -> WalletReport:
     return report
 
 
-def explain_matches(wallet: str, as_json: bool = False) -> dict[str, Any]:
+def explain_matches(wallet: str, as_json: bool = False, save: bool = False, db_path: str = "data/polylens.db") -> dict[str, Any]:
     logger = logging.getLogger(__name__)
     poly_client = PolymarketClient(raw_dir="data/raw")
     kalshi_client = KalshiClient(raw_dir="data/raw")
@@ -175,6 +176,13 @@ def explain_matches(wallet: str, as_json: bool = False) -> dict[str, Any]:
         logger.warning("Kalshi market ingestion failed during diagnostics: %s", exc)
         kalshi_markets = []
     diagnostics = explain_market_matches(polymarket_markets, kalshi_markets)
+    if save:
+        store = OpportunityStore(db_path)
+        scan_run_id = store.save_scan_run(scan_mode="explain-matches", filters={"wallet": wallet}, venues_scanned={"polymarket": diagnostics.get("polymarket_markets_inspected"), "kalshi": diagnostics.get("kalshi_markets_inspected")}, candidate_count=len(diagnostics.get("accepted_matches", [])), skipped_summary={"top_rejected_candidate_reasons": diagnostics.get("top_rejected_candidate_reasons", [])}, raw_result=diagnostics)
+        for item in diagnostics.get("diagnostics", []):
+            if not item.get("accepted"):
+                store.save_rejected_candidate(item, scan_run_id=scan_run_id)
+        diagnostics["saved_scan_run_id"] = scan_run_id
     if as_json:
         print(json.dumps(diagnostics, indent=2, sort_keys=True))
         return diagnostics
@@ -287,6 +295,8 @@ def scan_live_arb(
     min_score: float | None = None,
     max_close_hours: float | None = None,
     include_low_confidence: bool = False,
+    save: bool = False,
+    db_path: str = "data/polylens.db",
 ) -> dict[str, Any]:
     logger = logging.getLogger(__name__)
     venue_errors: dict[str, str] = {}
@@ -329,6 +339,9 @@ def scan_live_arb(
         max_close_hours=max_close_hours,
         include_low_confidence=include_low_confidence,
     )
+    if save:
+        scan_run_id, _opportunity_ids = OpportunityStore(db_path).save_scan_result(result, scan_mode="scan-live-arb", filters={"sport": sport_key, "keyword": keyword, "category": category, "limit": limit, "region": region, "bookmaker": bookmaker, "min_edge": min_edge, "min_score": min_score, "max_close_hours": max_close_hours, "include_low_confidence": include_low_confidence})
+        result["saved_scan_run_id"] = scan_run_id
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -369,6 +382,8 @@ def watch_live_arb(
     use_webhook: bool = False,
     once: bool = False,
     as_json: bool = False,
+    save: bool = False,
+    db_path: str = "data/polylens.db",
 ) -> dict[str, Any]:
     notifier = build_notifier(use_webhook=use_webhook)
     result = watch_live_arbitrage(
@@ -385,6 +400,8 @@ def watch_live_arb(
         min_score=min_score,
         max_close_hours=max_close_hours,
         include_low_confidence=False,
+        save=save,
+        db_path=db_path,
     )
     if not as_json:
         print("Polylens Live Arbitrage Watch")
@@ -396,6 +413,40 @@ def watch_live_arb(
         print(f"Candidates after filtering: {scan.get('candidates_after_filtering', 0)}")
         print(f"Filter reasons: {scan.get('filter_reasons', {})}")
     return result
+
+
+def recent_opportunities(limit: int = 20, db_path: str = "data/polylens.db", as_json: bool = False) -> list[dict[str, Any]]:
+    rows = OpportunityStore(db_path).recent_opportunities(limit=limit)
+    if as_json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+    else:
+        for row in rows:
+            titles = row.get("market_titles") or {}
+            print(f"{row.get('id')} {row.get('timestamp')} {row.get('venue_pair')} edge={row.get('raw_edge')} score={row.get('execution_score')}: {titles.get('polymarket') or titles.get('kalshi')} <> {titles.get('kalshi') or titles.get('sportsbook') or titles.get('sportsbook_team')}")
+    return rows
+
+
+def recent_alerts(limit: int = 20, db_path: str = "data/polylens.db", as_json: bool = False) -> list[dict[str, Any]]:
+    rows = OpportunityStore(db_path).recent_alerts(limit=limit)
+    if as_json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+    else:
+        for row in rows:
+            print(f"{row.get('id')} {row.get('sent_timestamp')} {row.get('destination')} status={row.get('status')} opportunity={row.get('opportunity_id')}")
+    return rows
+
+
+def opportunity_stats(db_path: str = "data/polylens.db", as_json: bool = False) -> dict[str, Any]:
+    stats = OpportunityStore(db_path).stats()
+    if as_json:
+        print(json.dumps(stats, indent=2, sort_keys=True))
+    else:
+        print(f"Scan runs: {stats['scan_runs']}")
+        print(f"Opportunities: {stats['opportunities']}")
+        print(f"Alerts: {stats['alerts']}")
+        print(f"Rejected candidates: {stats['rejected_candidates']}")
+        print(f"Top venue pairs: {stats['top_venue_pairs']}")
+    return stats
 
 
 def main() -> None:
@@ -420,6 +471,8 @@ def main() -> None:
     explain_parser = sub.add_parser("explain-matches")
     explain_parser.add_argument("wallet")
     explain_parser.add_argument("--json", action="store_true", help="emit match diagnostics as JSON")
+    explain_parser.add_argument("--save", action="store_true")
+    explain_parser.add_argument("--db-path", default="data/polylens.db")
 
     inventory_parser = sub.add_parser("market-inventory")
     inventory_parser.add_argument("wallet")
@@ -455,6 +508,8 @@ def main() -> None:
     scan_live_parser.add_argument("--min-score", type=float)
     scan_live_parser.add_argument("--max-close-hours", type=float)
     scan_live_parser.add_argument("--include-low-confidence", action="store_true")
+    scan_live_parser.add_argument("--save", action="store_true")
+    scan_live_parser.add_argument("--db-path", default="data/polylens.db")
 
     watch_parser = sub.add_parser("watch-live-arb")
     watch_parser.add_argument("--interval", type=int, default=60, dest="interval_seconds")
@@ -469,6 +524,22 @@ def main() -> None:
     watch_parser.add_argument("--webhook", action="store_true", dest="use_webhook")
     watch_parser.add_argument("--once", action="store_true")
     watch_parser.add_argument("--json", action="store_true")
+    watch_parser.add_argument("--save", action="store_true")
+    watch_parser.add_argument("--db-path", default="data/polylens.db")
+
+    recent_parser = sub.add_parser("recent-opportunities")
+    recent_parser.add_argument("--limit", type=int, default=20)
+    recent_parser.add_argument("--db-path", default="data/polylens.db")
+    recent_parser.add_argument("--json", action="store_true")
+
+    alerts_parser = sub.add_parser("recent-alerts")
+    alerts_parser.add_argument("--limit", type=int, default=20)
+    alerts_parser.add_argument("--db-path", default="data/polylens.db")
+    alerts_parser.add_argument("--json", action="store_true")
+
+    stats_parser = sub.add_parser("opportunity-stats")
+    stats_parser.add_argument("--db-path", default="data/polylens.db")
+    stats_parser.add_argument("--json", action="store_true")
 
     args = parser.parse_args()
 
@@ -481,7 +552,7 @@ def main() -> None:
     elif args.command == "scan-arb":
         scan_arb(args.wallet)
     elif args.command == "explain-matches":
-        explain_matches(args.wallet, as_json=args.json)
+        explain_matches(args.wallet, as_json=args.json, save=args.save, db_path=args.db_path)
     elif args.command == "market-inventory":
         market_inventory(args.wallet, include_closed=args.include_closed, as_json=args.json)
     elif args.command == "list-sportsbooks":
@@ -491,9 +562,15 @@ def main() -> None:
     elif args.command == "scan-sportsbook-arb":
         scan_sportsbook_arb(args.wallet, args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
     elif args.command == "scan-live-arb":
-        scan_live_arb(sport_key=args.sport_key, keyword=args.keyword, category=args.category, limit=args.limit, region=args.region, bookmaker=args.bookmaker, as_json=args.json, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, include_low_confidence=args.include_low_confidence)
+        scan_live_arb(sport_key=args.sport_key, keyword=args.keyword, category=args.category, limit=args.limit, region=args.region, bookmaker=args.bookmaker, as_json=args.json, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, include_low_confidence=args.include_low_confidence, save=args.save, db_path=args.db_path)
     elif args.command == "watch-live-arb":
-        watch_live_arb(interval_seconds=args.interval_seconds, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, sport_key=args.sport_key, keyword=args.keyword, category=args.category, bookmaker=args.bookmaker, region=args.region, use_webhook=args.use_webhook, once=args.once, as_json=args.json)
+        watch_live_arb(interval_seconds=args.interval_seconds, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, sport_key=args.sport_key, keyword=args.keyword, category=args.category, bookmaker=args.bookmaker, region=args.region, use_webhook=args.use_webhook, once=args.once, as_json=args.json, save=args.save, db_path=args.db_path)
+    elif args.command == "recent-opportunities":
+        recent_opportunities(limit=args.limit, db_path=args.db_path, as_json=args.json)
+    elif args.command == "recent-alerts":
+        recent_alerts(limit=args.limit, db_path=args.db_path, as_json=args.json)
+    elif args.command == "opportunity-stats":
+        opportunity_stats(db_path=args.db_path, as_json=args.json)
 
 
 if __name__ == "__main__":

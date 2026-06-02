@@ -12,6 +12,7 @@ from src.adapters.polymarket import PolymarketClient
 from src.alerts.notifier import build_alert_payload
 from src.analysis.live_arbitrage import scan_live_arbitrage
 from src.analysis.odds_normalization import normalize_odds_events
+from src.storage.opportunity_store import OpportunityStore
 
 
 @dataclass
@@ -100,27 +101,48 @@ def watch_live_arbitrage(
     once: bool = False,
     as_json: bool = False,
     suppressor: DuplicateSuppressor | None = None,
+    save: bool = False,
+    db_path: str = "data/polylens.db",
     **scan_kwargs: Any,
 ) -> dict[str, Any]:
     suppressor = suppressor or DuplicateSuppressor()
     iterations = 0
     total_alerts = 0
     last_result: dict[str, Any] = {}
+    store = OpportunityStore(db_path) if save else None
     while True:
         iterations += 1
         timestamp = datetime.now(timezone.utc)
         result = run_live_scan(**scan_kwargs)
         sent_payloads = []
         suppressed = 0
+        scan_run_id = None
+        opportunity_ids: list[int] = []
+        if store:
+            scan_run_id, opportunity_ids = store.save_scan_result(result, scan_mode="watch-live-arb", filters=scan_kwargs, alert_count=0)
         for candidate in result.get("top_candidates", []):
             if suppressor.should_alert(candidate, timestamp=timestamp):
                 payload = build_alert_payload(candidate, timestamp=timestamp)
+                destination = "webhook" if notifier.__class__.__name__ == "WebhookNotifier" else "console"
+                status = "sent"
+                error = None
                 if not (as_json and notifier.__class__.__name__ == "ConsoleNotifier"):
-                    notifier.notify(payload)
+                    try:
+                        response = notifier.notify(payload)
+                        status = str(response.get("status") or "sent") if isinstance(response, dict) else "sent"
+                    except Exception as exc:
+                        status = "error"
+                        error = str(exc)
                 sent_payloads.append(payload)
+                if store:
+                    index = len(sent_payloads) - 1
+                    opportunity_id = opportunity_ids[index] if index < len(opportunity_ids) else None
+                    store.save_alert(opportunity_id=opportunity_id, scan_run_id=scan_run_id, destination=destination, status=status, error=error, payload=payload)
             else:
                 suppressed += 1
         total_alerts += len(sent_payloads)
+        if store and scan_run_id is not None and sent_payloads:
+            store.save_scan_run(scan_mode="watch-live-arb-alert-summary", filters=scan_kwargs, venues_scanned={}, candidate_count=0, alert_count=len(sent_payloads), raw_result={"scan_run_id": scan_run_id})
         last_result = {
             "iterations": iterations,
             "alerts_sent": len(sent_payloads),
