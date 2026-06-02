@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -369,6 +370,31 @@ def scan_live_arb(
     return result
 
 
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float | None = None) -> float | None:
+    value = os.environ.get(name)
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+def _env_str(name: str, default: str | None = None) -> str | None:
+    value = os.environ.get(name)
+    return default if value in (None, "") else value
+
+
 def watch_live_arb(
     interval_seconds: int = 60,
     min_edge: float | None = None,
@@ -385,6 +411,15 @@ def watch_live_arb(
     save: bool = False,
     db_path: str = "data/polylens.db",
 ) -> dict[str, Any]:
+    interval_seconds = interval_seconds if interval_seconds is not None else _env_int("POLYLENS_INTERVAL", 60)
+    min_score = min_score if min_score is not None else _env_float("POLYLENS_MIN_SCORE")
+    min_edge = min_edge if min_edge is not None else _env_float("POLYLENS_MIN_EDGE")
+    db_path = db_path if db_path is not None else _env_str("POLYLENS_DB_PATH", "data/polylens.db")
+    region = region or _env_str("POLYLENS_REGION", "us")
+    bookmaker = bookmaker or _env_str("POLYLENS_BOOKMAKER")
+    sport_key = sport_key or _env_str("POLYLENS_SPORT")
+    keyword = keyword or _env_str("POLYLENS_KEYWORD")
+    category = category or _env_str("POLYLENS_CATEGORY")
     notifier = build_notifier(use_webhook=use_webhook)
     result = watch_live_arbitrage(
         notifier,
@@ -512,7 +547,7 @@ def main() -> None:
     scan_live_parser.add_argument("--db-path", default="data/polylens.db")
 
     watch_parser = sub.add_parser("watch-live-arb")
-    watch_parser.add_argument("--interval", type=int, default=60, dest="interval_seconds")
+    watch_parser.add_argument("--interval", type=int, dest="interval_seconds")
     watch_parser.add_argument("--min-edge", type=float)
     watch_parser.add_argument("--min-score", type=float)
     watch_parser.add_argument("--max-close-hours", type=float)
@@ -520,12 +555,12 @@ def main() -> None:
     watch_parser.add_argument("--keyword")
     watch_parser.add_argument("--category")
     watch_parser.add_argument("--bookmaker")
-    watch_parser.add_argument("--region", default="us")
+    watch_parser.add_argument("--region")
     watch_parser.add_argument("--webhook", action="store_true", dest="use_webhook")
     watch_parser.add_argument("--once", action="store_true")
     watch_parser.add_argument("--json", action="store_true")
     watch_parser.add_argument("--save", action="store_true")
-    watch_parser.add_argument("--db-path", default="data/polylens.db")
+    watch_parser.add_argument("--db-path")
 
     recent_parser = sub.add_parser("recent-opportunities")
     recent_parser.add_argument("--limit", type=int, default=20)

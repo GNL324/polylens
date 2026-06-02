@@ -1,0 +1,16 @@
+[Unit]
+Description=Polylens live arbitrage watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=noel
+WorkingDirectory=/home/noel/polylens
+EnvironmentFile=/home/noel/polylens/deploy/systemd/polylens-live-arb.env
+ExecStart=/home/noel/.venv/bin/python -m src.cli watch-live-arb --save --interval 60 --min-score 0.7
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
