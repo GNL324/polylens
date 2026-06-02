@@ -60,6 +60,36 @@ class PolymarketClient:
             return {}
 
 
+
+    def get_active_markets(
+        self,
+        keyword: str | None = None,
+        category: str | None = None,
+        sport: str | None = None,
+        limit: int = 100,
+        active: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Fetch active public Gamma markets without requiring a wallet."""
+        params: dict[str, Any] = {"limit": max(1, min(int(limit or 100), 1000)), "active": str(active).lower()}
+        if keyword:
+            params["q"] = keyword
+        if category:
+            params["category"] = category
+        if sport:
+            params["tag_slug"] = sport
+        payload = self._get_json(self.gamma_base_url, "markets", params, "active_markets")
+        rows: Any
+        if isinstance(payload, list):
+            rows = payload
+        elif isinstance(payload, dict):
+            rows = payload.get("markets") or payload.get("data") or []
+        else:
+            rows = []
+        if not isinstance(rows, list):
+            LOGGER.warning("active markets returned unexpected payload shape")
+            return []
+        return [self._preserve_live_market_fields(market) for market in rows if isinstance(market, dict)]
+
     def get_wallet_markets(self, wallet: str, include_market_details: bool = True) -> list[dict[str, Any]]:
         trades = self.get_user_trades(wallet)
         grouped: dict[str, dict[str, Any]] = {}
@@ -79,6 +109,23 @@ class PolymarketClient:
                     market["outcome_prices"] = details.get("outcomePrices") or details.get("outcome_prices")
                     market["token_ids"] = details.get("clobTokenIds") or details.get("tokenIds") or details.get("token_ids") or market.get("token_ids")
         return list(grouped.values())
+
+
+    @staticmethod
+    def _preserve_live_market_fields(market: dict[str, Any]) -> dict[str, Any]:
+        preserved = dict(market)
+        preserved["condition_id"] = market.get("conditionId") or market.get("condition_id") or market.get("id")
+        preserved["market_id"] = market.get("id") or market.get("marketId") or market.get("conditionId")
+        preserved["title"] = market.get("question") or market.get("title") or market.get("slug")
+        preserved["question"] = market.get("question") or market.get("title")
+        preserved["category"] = market.get("category") or market.get("categorySlug") or market.get("groupItemTitle")
+        preserved["status"] = market.get("status") or market.get("active")
+        preserved["end_date"] = market.get("endDate") or market.get("end_date") or market.get("closeTime") or market.get("end_date_iso")
+        preserved["outcome_prices"] = market.get("outcomePrices") or market.get("outcome_prices")
+        preserved["outcomes"] = market.get("outcomes")
+        preserved["token_ids"] = market.get("clobTokenIds") or market.get("tokenIds") or market.get("token_ids")
+        preserved["liquidity"] = market.get("liquidity") or market.get("liquidityNum") or market.get("volumeNum")
+        return preserved
 
     @staticmethod
     def _preserve_trade_market_fields(trade: dict[str, Any]) -> dict[str, Any]:
@@ -174,3 +221,7 @@ def get_public_profile(wallet: str) -> dict[str, Any]:
 
 def get_positions(wallet: str) -> list[dict[str, Any]]:
     return _default_client.get_positions(wallet)
+
+
+def get_active_markets(keyword: str | None = None, category: str | None = None, sport: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    return _default_client.get_active_markets(keyword=keyword, category=category, sport=sport, limit=limit)

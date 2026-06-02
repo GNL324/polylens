@@ -12,6 +12,7 @@ from src.adapters.polymarket import PolymarketClient
 from src.analysis.arb_pricing import enrich_candidates_with_pricing, enrich_sportsbook_candidates_with_pricing
 from src.analysis.arb_signals import detect_signals
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
+from src.analysis.live_arbitrage import scan_live_arbitrage
 from src.analysis.market_inventory import summarize_market_inventory
 from src.analysis.markets import summarize_markets
 from src.analysis.match_diagnostics import explain_market_matches
@@ -272,6 +273,77 @@ def scan_sportsbook_arb(wallet: str, sport_key: str, bookmaker: str | None = Non
     return priced
 
 
+def scan_live_arb(
+    sport_key: str | None = None,
+    keyword: str | None = None,
+    category: str | None = None,
+    limit: int = 100,
+    region: str = "us",
+    bookmaker: str | None = None,
+    as_json: bool = False,
+) -> dict[str, Any]:
+    logger = logging.getLogger(__name__)
+    venue_errors: dict[str, str] = {}
+    poly_client = PolymarketClient(raw_dir="data/raw")
+    kalshi_client = KalshiClient(raw_dir="data/raw")
+    try:
+        polymarket_markets = poly_client.get_active_markets(keyword=keyword, category=category, sport=sport_key, limit=limit)
+    except Exception as exc:
+        logger.warning("Polymarket live market discovery failed: %s", exc)
+        polymarket_markets = []
+        venue_errors["polymarket"] = f"Polymarket live discovery failed: {exc}"
+    try:
+        kalshi_markets = kalshi_client.get_markets(status="open", limit=min(max(limit, 1), 1000), max_pages=5)
+    except Exception as exc:
+        logger.warning("Kalshi live market discovery failed: %s", exc)
+        kalshi_markets = []
+        venue_errors["kalshi"] = f"Kalshi live discovery failed: {exc}"
+
+    sportsbook_lines: list[dict[str, Any]] = []
+    sportsbook_skipped_reason: str | None = None
+    if sport_key:
+        try:
+            sportsbook_lines = fetch_odds(sport_key, bookmaker=bookmaker, region=region, markets="h2h,spreads,totals,outrights", quiet=True)
+        except MissingOddsAPIKey:
+            sportsbook_skipped_reason = "ODDS_API_KEY missing; sportsbook side skipped"
+        except Exception as exc:
+            logger.warning("Sportsbook odds fetch failed: %s", exc)
+            sportsbook_skipped_reason = f"sportsbook odds fetch failed: {exc}"
+    else:
+        sportsbook_skipped_reason = "--sport not provided; sportsbook side skipped"
+
+    result = scan_live_arbitrage(
+        polymarket_markets,
+        kalshi_markets,
+        sportsbook_lines=sportsbook_lines,
+        sportsbook_skipped_reason=sportsbook_skipped_reason,
+        venue_errors=venue_errors,
+    )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print("Polylens Live Arbitrage Scan")
+        print("=" * 29)
+        print(f"Markets scanned by venue: {result['markets_scanned_by_venue']}")
+        print(f"Matches found by venue pair: {result['matches_found_by_venue_pair']}")
+        print(f"Arbitrage candidates found: {result['arbitrage_candidates_found']}")
+        print("Skipped/rejected reasons:")
+        for reason, count in result["skipped_rejected_reason_counts"].items():
+            print(f"- {count}: {reason}")
+        if not result["skipped_rejected_reason_counts"]:
+            print("- none recorded")
+        print("Top candidates:")
+        for candidate in result["top_candidates"][:10]:
+            edge = candidate.get("estimated_edge")
+            edge_text = "insufficient pricing data" if edge is None else f"edge={edge:.4f}"
+            print(f"- {candidate.get('venue_pair')} {candidate.get('confidence_band')} {edge_text}")
+            print(f"  {candidate.get('polymarket_title') or candidate.get('kalshi_title')} <> {candidate.get('kalshi_title') or candidate.get('sportsbook')}")
+            print(f"  {candidate.get('pricing_reason') or candidate.get('reason')}")
+        if not result["top_candidates"]:
+            print("- none found; see skipped/rejected reasons above")
+    return result
+
+
 def main() -> None:
     setup_logging()
     parser = argparse.ArgumentParser(prog="polylens")
@@ -317,6 +389,15 @@ def main() -> None:
     sportsbook_parser.add_argument("--region", default="us")
     sportsbook_parser.add_argument("--json", action="store_true")
 
+    scan_live_parser = sub.add_parser("scan-live-arb")
+    scan_live_parser.add_argument("--sport", dest="sport_key")
+    scan_live_parser.add_argument("--keyword")
+    scan_live_parser.add_argument("--category")
+    scan_live_parser.add_argument("--limit", type=int, default=100)
+    scan_live_parser.add_argument("--region", default="us")
+    scan_live_parser.add_argument("--bookmaker")
+    scan_live_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -337,6 +418,8 @@ def main() -> None:
         fetch_odds(args.sport_key, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
     elif args.command == "scan-sportsbook-arb":
         scan_sportsbook_arb(args.wallet, args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
+    elif args.command == "scan-live-arb":
+        scan_live_arb(sport_key=args.sport_key, keyword=args.keyword, category=args.category, limit=args.limit, region=args.region, bookmaker=args.bookmaker, as_json=args.json)
 
 
 if __name__ == "__main__":
