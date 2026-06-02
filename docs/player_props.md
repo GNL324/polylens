@@ -54,3 +54,8 @@ python -m src.cli debug-player-props --sport basketball_nba --json
 ```
 
 The debug output includes event id, teams, available prop markets, prop count, discovered/scanned/failed event counts, and rejected markets.
+
+
+## Memory Safety
+
+Normalized player prop rows intentionally do not retain full Odds API event, bookmaker, or market payloads. They keep only lightweight debug fields: `raw_outcome_name`, `raw_outcome_description`, and `raw_price`. Prop arbitrage diagnostics are compact summaries and do not embed full prop objects.

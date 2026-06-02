@@ -61,7 +61,9 @@ def normalize_event_player_props(event: dict[str, Any], odds_format: str = "amer
                     "implied_probability": implied,
                     "commence_time": event.get("commence_time"),
                     "last_update": market.get("last_update") or bookmaker.get("last_update"),
-                    "raw": {"event": event, "bookmaker": bookmaker, "market": market, "outcome": outcome},
+                    "raw_outcome_name": outcome.get("name"),
+                    "raw_outcome_description": outcome.get("description"),
+                    "raw_price": price,
                 })
     return rows
 

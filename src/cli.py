@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import os
+import resource
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,12 @@ from src.analysis.volume import summarize_volume
 from src.analysis.watch_mode import watch_live_arbitrage
 from src.reports.wallet_report import WalletReport
 from src.storage.opportunity_store import OpportunityStore
+
+
+def _memory_mb() -> float:
+    usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # Linux reports kilobytes; macOS reports bytes. Predix is Linux, but keep this portable.
+    return round(usage / 1024 if usage > 10_000_000 else usage / 1024, 2)
 
 
 def setup_logging() -> None:
@@ -279,7 +286,10 @@ def fetch_player_props(sport_key: str, event_id: str | None = None, bookmaker: s
     client = OddsAPIClient(raw_dir="data/raw")
     payload = client.get_player_props(sport_key, event_id=event_id, regions=region, markets=markets, bookmakers=bookmaker)
     raw_events = payload.get("events") if isinstance(payload, dict) else payload
+    logger = logging.getLogger(__name__)
+    logger.info("player prop normalization starting events=%s memory_mb=%s", len(raw_events or []), _memory_mb())
     normalized = normalize_player_props(raw_events or [])
+    logger.info("player prop normalization complete props=%s memory_mb=%s", len(normalized), _memory_mb())
     diagnostics = _player_prop_diagnostics(payload, normalized)
     output = {"props": normalized, "diagnostics": diagnostics}
     if as_json:
@@ -296,7 +306,10 @@ def debug_player_props(sport_key: str, event_id: str | None = None, bookmaker: s
     client = OddsAPIClient(raw_dir="data/raw")
     payload = client.get_player_props(sport_key, event_id=event_id, regions=region, markets=markets, bookmakers=bookmaker)
     raw_events = payload.get("events") if isinstance(payload, dict) else payload
+    logger = logging.getLogger(__name__)
+    logger.info("player prop debug normalization starting events=%s memory_mb=%s", len(raw_events or []), _memory_mb())
     normalized = normalize_player_props(raw_events or [])
+    logger.info("player prop debug normalization complete props=%s memory_mb=%s", len(normalized), _memory_mb())
     diagnostics = _player_prop_diagnostics(payload, normalized)
     event_rows = []
     for event in raw_events or []:
