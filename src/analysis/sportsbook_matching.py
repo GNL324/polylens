@@ -137,7 +137,11 @@ def _diagnostic_base(pm_market: dict[str, Any], pm: Any, line: dict[str, Any], s
         "target_market_type": line.get("market_type"),
         "parsed_teams": {"source_team": pm.team, "target_team": line.get("team")},
         "parsed_opponents": {"source_opponent": pm.opponent, "target_opponent": line.get("opponent")},
-        "parsed_league": {"source_league": pm.league, "target_league": line.get("league")},
+        "parsed_league": {"source_league": pm.league, "target_league": line.get("league"), "raw_sport_key": line.get("raw_sport_key") or line.get("sport_key"), "raw_sport_title": line.get("raw_sport_title")},
+        "source_league": pm.league,
+        "target_league": line.get("league"),
+        "raw_sport_key": line.get("raw_sport_key") or line.get("sport_key"),
+        "raw_sport_title": line.get("raw_sport_title"),
         "parsed_event_date": {"source_season_year": pm.season_year, "target_commence_time": line.get("commence_time"), "target_season_year": line.get("season_year")},
         "parsed_fields": {source_venue: pm.to_dict(), "sportsbook": line},
     }

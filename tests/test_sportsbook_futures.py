@@ -149,3 +149,77 @@ def test_unsupported_futures_sport_handled_gracefully(mock_list_sports):
     result = OddsAPIClient(api_key="test").get_futures("basketball_nba")
 
     assert result == {"supported": False, "reason": "no futures endpoint for sport", "events": [], "sport_key": "basketball_nba", "futures_sport_key": None}
+
+
+def test_basketball_nba_championship_winner_normalizes_to_nba():
+    rows = normalize_futures_events([{
+        "id": "nba-title",
+        "sport_key": "basketball_nba_championship_winner",
+        "sport_title": "NBA Championship Winner",
+        "bookmakers": [{"key": "dk", "title": "DraftKings", "markets": [{"key": "outrights", "outcomes": [{"name": "New York Knicks", "price": 1200}]}]}],
+    }])
+
+    assert rows[0]["league"] == "NBA"
+    assert rows[0]["market_type"] == "championship_winner"
+    assert rows[0]["raw_sport_key"] == "basketball_nba_championship_winner"
+
+
+def test_knicks_futures_prefixed_sport_key_matches_polymarket():
+    pm = [{"conditionId": "pm-knicks", "title": "Will the New York Knicks win the 2026 NBA Finals?"}]
+    lines = normalize_futures_events([{
+        "id": "nba-title",
+        "sport_key": "basketball_nba_championship_winner",
+        "sport_title": "NBA Championship Winner",
+        "bookmakers": [{"key": "dk", "title": "DraftKings", "markets": [{"key": "outrights", "outcomes": [{"name": "New York Knicks", "price": 1200}]}]}],
+    }])
+
+    assert len(match_sportsbook_lines(pm, lines)) == 1
+
+
+def test_celtics_futures_prefixed_sport_key_matches_polymarket():
+    pm = [{"conditionId": "pm-celtics", "title": "Will the Boston Celtics win the 2026 NBA Finals?"}]
+    lines = normalize_futures_events([{
+        "id": "nba-title",
+        "sport_key": "basketball_nba_championship_winner",
+        "sport_title": "2026 NBA Champion",
+        "bookmakers": [{"key": "dk", "title": "DraftKings", "markets": [{"key": "outrights", "outcomes": [{"name": "Boston Celtics", "price": 450}]}]}],
+    }])
+
+    assert len(match_sportsbook_lines(pm, lines)) == 1
+
+
+def test_nfl_super_bowl_winner_normalizes_to_championship():
+    rows = normalize_futures_events([{
+        "id": "nfl-title",
+        "sport_key": "americanfootball_nfl_super_bowl_winner",
+        "sport_title": "NFL Super Bowl Winner",
+        "bookmakers": [{"key": "dk", "title": "DraftKings", "markets": [{"key": "outrights", "outcomes": [{"name": "Kansas City Chiefs", "price": 650}]}]}],
+    }])
+
+    assert rows[0]["league"] == "NFL"
+    assert rows[0]["market_type"] == "championship_winner"
+
+
+def test_mlb_world_series_winner_normalizes_to_championship():
+    rows = normalize_futures_events([{
+        "id": "mlb-title",
+        "sport_key": "baseball_mlb_world_series_winner",
+        "sport_title": "MLB World Series Winner",
+        "bookmakers": [{"key": "dk", "title": "DraftKings", "markets": [{"key": "outrights", "outcomes": [{"name": "New York Yankees", "price": 700}]}]}],
+    }])
+
+    assert rows[0]["league"] == "MLB"
+    assert rows[0]["market_type"] == "championship_winner"
+
+
+def test_futures_league_mismatch_diagnostic_includes_raw_sport_fields():
+    pm = [{"conditionId": "pm-knicks", "title": "Will the New York Knicks win the 2026 NBA Finals?"}]
+    lines = [{"event_id": "bad", "league": "NBA Championship Winner", "team": "New York Knicks", "market_type": "championship_winner", "raw_sport_key": "basketball_nba_championship_winner", "raw_sport_title": "NBA Championship Winner"}]
+
+    diagnostic = sportsbook_match_diagnostics(pm, lines)[0]
+
+    assert diagnostic["rejection_reason"] == "league mismatch"
+    assert diagnostic["source_league"] == "NBA"
+    assert diagnostic["target_league"] == "NBA Championship Winner"
+    assert diagnostic["raw_sport_key"] == "basketball_nba_championship_winner"
+    assert diagnostic["raw_sport_title"] == "NBA Championship Winner"

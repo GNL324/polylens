@@ -49,3 +49,8 @@ When The Odds API has no outright-capable sport key for the requested sport, `fe
 ```
 
 `scan-live-arb` only includes futures matching when normalized futures inventory is present. Game-line `h2h`, `spreads`, and `totals` are excluded from futures diagnostics.
+
+
+## League Normalization
+
+Futures sport keys are normalized by prefix. For example, `basketball_nba_championship_winner` maps to league `NBA`, `americanfootball_nfl_super_bowl_winner` maps to `NFL`, `baseball_mlb_world_series_winner` maps to `MLB`, and `icehockey_nhl_championship_winner` maps to `NHL`. Championship labels such as NBA Championship Winner, NBA Finals Winner, and 2026 NBA Champion normalize to `championship_winner`.

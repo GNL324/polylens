@@ -18,6 +18,13 @@ SPORT_LEAGUE_MAP = {
     "americanfootball_nfl": "NFL",
 }
 
+SPORT_KEY_LEAGUE_PATTERNS = (
+    ("basketball_nba", "NBA"),
+    ("americanfootball_nfl", "NFL"),
+    ("baseball_mlb", "MLB"),
+    ("icehockey_nhl", "NHL"),
+)
+
 
 def american_to_implied_probability(odds: int | float | str | None) -> float | None:
     if odds is None or odds == "":
@@ -45,6 +52,20 @@ def decimal_to_implied_probability(odds: int | float | str | None) -> float | No
     return round(1 / value, 4)
 
 
+def normalize_sport_league(sport_key: str | None, sport_title: str | None = None) -> str | None:
+    key = str(sport_key or "").lower()
+    if key in SPORT_LEAGUE_MAP:
+        return SPORT_LEAGUE_MAP[key]
+    for prefix, league in SPORT_KEY_LEAGUE_PATTERNS:
+        if key.startswith(prefix):
+            return league
+    title = str(sport_title or "").upper()
+    for league in SPORT_LEAGUE_MAP.values():
+        if league in title.split() or title.startswith(league):
+            return league
+    return title or None
+
+
 def normalize_odds_events(events: list[dict[str, Any]], odds_format: str = "american") -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for event in events:
@@ -55,7 +76,7 @@ def normalize_odds_events(events: list[dict[str, Any]], odds_format: str = "amer
 def normalize_event_odds(event: dict[str, Any], odds_format: str = "american") -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     sport_key = str(event.get("sport_key") or "")
-    league = SPORT_LEAGUE_MAP.get(sport_key, str(event.get("sport_title") or sport_key).upper() or None)
+    league = normalize_sport_league(sport_key, event.get("sport_title"))
     teams = [team for team in (event.get("home_team"), event.get("away_team")) if team]
     for bookmaker in event.get("bookmakers", []) or []:
         for market in bookmaker.get("markets", []) or []:
@@ -82,6 +103,8 @@ def normalize_event_odds(event: dict[str, Any], odds_format: str = "american") -
                     "implied_probability": implied,
                     "commence_time": event.get("commence_time"),
                     "last_update": market.get("last_update") or bookmaker.get("last_update"),
+                    "raw_sport_key": sport_key,
+                    "raw_sport_title": event.get("sport_title") or event.get("title"),
                     "raw": {"event": event, "bookmaker": bookmaker, "market": market, "outcome": outcome},
                 })
     return rows
@@ -111,7 +134,7 @@ def normalize_futures_events(events: list[dict[str, Any]], odds_format: str = "a
 def normalize_event_futures(event: dict[str, Any], odds_format: str = "american") -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     sport_key = str(event.get("sport_key") or "")
-    league = SPORT_LEAGUE_MAP.get(sport_key, str(event.get("sport_title") or sport_key).upper() or None)
+    league = normalize_sport_league(sport_key, event.get("sport_title"))
     event_title = str(event.get("title") or event.get("description") or event.get("sport_title") or "")
     for bookmaker in event.get("bookmakers", []) or []:
         for market in bookmaker.get("markets", []) or []:
@@ -140,6 +163,8 @@ def normalize_event_futures(event: dict[str, Any], odds_format: str = "american"
                     "last_update": market.get("last_update") or bookmaker.get("last_update"),
                     "season_year": _infer_futures_season(event, market),
                     "market_title": _futures_market_title(event, market, market_type),
+                    "raw_sport_key": sport_key,
+                    "raw_sport_title": event.get("sport_title") or event.get("title"),
                     "raw": {"event": event, "bookmaker": bookmaker, "market": market, "outcome": outcome},
                 })
     return rows
@@ -154,8 +179,11 @@ def _normalize_futures_market_type(market_key: str, event_title: str, market: di
         return "division_winner"
     if "award" in key or "mvp" in title or "rookie" in title:
         return "season_award"
+    championship_terms = ("championship", "champion", "finals", "super bowl", "world series", "stanley cup")
     if key in FUTURES_MARKET_TYPES:
         return FUTURES_MARKET_TYPES[key]
+    if any(term in key for term in ("championship_winner", "super_bowl_winner", "world_series_winner")) or any(term in title for term in championship_terms):
+        return "championship_winner"
     return "championship_winner" if key == "outrights" else _normalize_market_type(key)
 
 
@@ -163,7 +191,7 @@ def _futures_market_title(event: dict[str, Any], market: dict[str, Any], market_
     title = event.get("title") or event.get("description") or market.get("title")
     if title:
         return str(title)
-    league = SPORT_LEAGUE_MAP.get(str(event.get("sport_key") or ""), str(event.get("sport_title") or "League"))
+    league = normalize_sport_league(str(event.get("sport_key") or ""), event.get("sport_title")) or "League"
     label = {
         "championship_winner": "Championship Winner",
         "conference_winner": "Conference Winner",
