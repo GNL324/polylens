@@ -14,6 +14,7 @@ from src.alerts.notifier import MissingWebhookURLError, build_notifier
 from src.analysis.arb_pricing import enrich_candidates_with_pricing, enrich_sportsbook_candidates_with_pricing
 from src.analysis.arb_signals import detect_signals
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
+from src.analysis.hedged_arbitrage import classify_arbitrage_candidates
 from src.analysis.kalshi_inventory_filter import filter_kalshi_inventory
 from src.analysis.live_arbitrage import scan_live_arbitrage
 from src.analysis.live_match_diagnostics import explain_live_matches as explain_live_market_matches
@@ -305,6 +306,43 @@ def scan_sportsbook_arb(wallet: str, sport_key: str, bookmaker: str | None = Non
             print(f"- {candidate.get('confidence_band')} {candidate.get('polymarket_title')} <> {candidate.get('sportsbook')} {candidate.get('sportsbook_team')} ({edge_text})")
             print(f"  {candidate.get('pricing_reason') or candidate.get('reason')}")
     return priced
+
+
+def scan_true_arb(
+    keyword: str | None = None,
+    sport_key: str | None = None,
+    limit: int = 100,
+    bankroll: float | None = None,
+    min_guaranteed_roi: float | None = None,
+    include_hedges: bool = False,
+    as_json: bool = False,
+) -> dict[str, Any]:
+    result = scan_live_arb(sport_key=sport_key, keyword=keyword, limit=limit, as_json=False, include_low_confidence=include_hedges)
+    all_candidates = result.get("top_scored_candidates") or result.get("top_candidates") or []
+    classified = classify_arbitrage_candidates(all_candidates, bankroll=bankroll, include_hedges=include_hedges)
+    true_arbs = classified["true_arbitrage_candidates"]
+    if min_guaranteed_roi is not None:
+        true_arbs = [item for item in true_arbs if (item.get("guaranteed_roi") or 0) >= min_guaranteed_roi]
+    output = {
+        "true_arbitrage_candidates": true_arbs,
+        "cross_market_hedge_candidates": classified["cross_market_hedge_candidates"] if include_hedges else [],
+        "positive_ev_candidates": classified["positive_ev_candidates"],
+        "diagnostics": {
+            "candidates_scanned": len(all_candidates),
+            "true_arbitrage_count": len(true_arbs),
+            "cross_market_hedge_count": len(classified["cross_market_hedge_candidates"]) if include_hedges else 0,
+            "positive_ev_count": len(classified["positive_ev_candidates"]),
+        },
+    }
+    if as_json:
+        print(json.dumps(output, indent=2, sort_keys=True))
+    else:
+        print("Polylens True Arbitrage Scan")
+        print("=" * 29)
+        print(f"True arbitrage candidates: {len(true_arbs)}")
+        print(f"Cross-market hedges: {len(output['cross_market_hedge_candidates'])}")
+        print(f"Positive-EV candidates: {len(output['positive_ev_candidates'])}")
+    return output
 
 
 def scan_live_arb(
@@ -673,6 +711,15 @@ def main() -> None:
     sportsbook_parser.add_argument("--region", default="us")
     sportsbook_parser.add_argument("--json", action="store_true")
 
+    scan_true_parser = sub.add_parser("scan-true-arb")
+    scan_true_parser.add_argument("--keyword")
+    scan_true_parser.add_argument("--sport", dest="sport_key")
+    scan_true_parser.add_argument("--limit", type=int, default=100)
+    scan_true_parser.add_argument("--bankroll", type=float)
+    scan_true_parser.add_argument("--min-guaranteed-roi", type=float)
+    scan_true_parser.add_argument("--include-hedges", action="store_true")
+    scan_true_parser.add_argument("--json", action="store_true")
+
     scan_live_parser = sub.add_parser("scan-live-arb")
     scan_live_parser.add_argument("--sport", dest="sport_key")
     scan_live_parser.add_argument("--keyword")
@@ -761,6 +808,8 @@ def main() -> None:
         scan_sportsbook_arb(args.wallet, args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
     elif args.command == "scan-live-arb":
         scan_live_arb(sport_key=args.sport_key, keyword=args.keyword, category=args.category, limit=args.limit, region=args.region, bookmaker=args.bookmaker, as_json=args.json, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, include_low_confidence=args.include_low_confidence, save=args.save, db_path=args.db_path)
+    elif args.command == "scan-true-arb":
+        scan_true_arb(keyword=args.keyword, sport_key=args.sport_key, limit=args.limit, bankroll=args.bankroll, min_guaranteed_roi=args.min_guaranteed_roi, include_hedges=args.include_hedges, as_json=args.json)
     elif args.command == "explain-live-matches":
         explain_live_matches_cli(sport_key=args.sport_key, keyword=args.keyword, limit=args.limit, as_json=args.json, accepted_only=args.accepted_only, rejected_only=args.rejected_only)
     elif args.command == "debug-polymarket-search":

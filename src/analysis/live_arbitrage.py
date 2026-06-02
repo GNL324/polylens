@@ -7,6 +7,7 @@ from src.analysis.arb_pricing import extract_kalshi_pricing, normalize_price, pr
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
 from src.analysis.live_market_discovery import normalize_kalshi_live_markets, normalize_polymarket_live_markets, normalize_sportsbook_live_lines
 from src.analysis.live_match_diagnostics import live_match_summary
+from src.analysis.hedged_arbitrage import classify_arbitrage_candidates
 from src.analysis.opportunity_scoring import filter_scored_candidates, score_candidates
 from src.analysis.sportsbook_matching import match_sportsbook_lines
 
@@ -73,6 +74,7 @@ def scan_live_arbitrage(
         max_close_hours=max_close_hours,
         include_low_confidence=include_low_confidence,
     )
+    classified = classify_arbitrage_candidates(filtered_candidates)
     return {
         "markets_scanned_by_venue": {"polymarket": len(pm_live), "kalshi": len(kalshi_live), "sportsbook": len(sportsbook_live)},
         "matches_found_by_venue_pair": {
@@ -86,6 +88,9 @@ def scan_live_arbitrage(
         "filter_reasons": filter_reasons,
         "top_candidates": filtered_candidates[:25],
         "top_scored_candidates": filtered_candidates[:25],
+        "true_arbitrage_candidates": classified["true_arbitrage_candidates"][:25],
+        "cross_market_hedge_candidates": classified["cross_market_hedge_candidates"][:25],
+        "positive_ev_candidates": classified["positive_ev_candidates"][:25],
         "skipped_rejected_reason_counts": dict(skipped),
         "live_match_summary": live_match_summary(polymarket_markets, kalshi_markets, sportsbook_lines),
     }
