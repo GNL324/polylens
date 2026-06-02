@@ -27,24 +27,20 @@ class KalshiClient:
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         self.cache_path = self.raw_dir / "kalshi_markets_cache.json"
 
-    def get_markets(self, status: str = "open", limit: int = 1000, max_pages: int = 5, use_cache: bool = True) -> list[dict[str, Any]]:
+    def get_markets(self, status: str = "open", limit: int = 1000, max_pages: int = 5, use_cache: bool = True, include_closed: bool = False) -> list[dict[str, Any]]:
+        statuses = [status]
+        if include_closed and status == "open":
+            statuses = ["open", "closed", "settled"]
         markets: list[dict[str, Any]] = []
-        cursor: str | None = None
         try:
-            for page in range(max_pages):
-                params: dict[str, Any] = {"status": status, "limit": limit}
-                if cursor:
-                    params["cursor"] = cursor
-                payload = self._get_json("markets", params, page=page)
-                page_markets = payload.get("markets", []) if isinstance(payload, dict) else []
-                if not isinstance(page_markets, list):
-                    LOGGER.warning("Kalshi markets payload had unexpected shape on page %s", page)
-                    break
-                markets.extend(self._preserve_market_fields(market) for market in page_markets)
-                cursor = payload.get("cursor") if isinstance(payload, dict) else None
-                LOGGER.info("fetched Kalshi markets page=%s rows=%s", page, len(page_markets))
-                if not cursor or not page_markets:
-                    break
+            for status_value in statuses:
+                try:
+                    markets.extend(self._get_markets_for_status(status_value, limit=limit, max_pages=max_pages))
+                except KalshiAPIError:
+                    if include_closed and status_value != status:
+                        LOGGER.warning("Kalshi status=%s unavailable; continuing with fetched markets", status_value)
+                        continue
+                    raise
             self._write_cache(markets)
             return markets
         except KalshiAPIError:
@@ -54,6 +50,25 @@ class KalshiClient:
                     LOGGER.warning("using cached Kalshi markets after API failure rows=%s", len(cached))
                     return cached
             raise
+
+    def _get_markets_for_status(self, status: str, limit: int, max_pages: int) -> list[dict[str, Any]]:
+        markets: list[dict[str, Any]] = []
+        cursor: str | None = None
+        for page in range(max_pages):
+            params: dict[str, Any] = {"status": status, "limit": limit}
+            if cursor:
+                params["cursor"] = cursor
+            payload = self._get_json("markets", params, page=page)
+            page_markets = payload.get("markets", []) if isinstance(payload, dict) else []
+            if not isinstance(page_markets, list):
+                LOGGER.warning("Kalshi markets payload had unexpected shape on page %s status=%s", page, status)
+                break
+            markets.extend(self._preserve_market_fields(market) for market in page_markets)
+            cursor = payload.get("cursor") if isinstance(payload, dict) else None
+            LOGGER.info("fetched Kalshi markets status=%s page=%s rows=%s", status, page, len(page_markets))
+            if not cursor or not page_markets:
+                break
+        return markets
 
 
     @staticmethod
@@ -76,8 +91,11 @@ class KalshiClient:
             "event_ticker": market.get("event_ticker"),
             "title": market.get("title"),
             "subtitle": market.get("subtitle") or market.get("yes_sub_title") or market.get("no_sub_title"),
-            "close_time": market.get("close_time"),
+            "category": market.get("category"),
             "status": market.get("status"),
+            "open_time": market.get("open_time"),
+            "close_time": market.get("close_time"),
+            "expiration_time": market.get("expiration_time") or market.get("expected_expiration_time"),
         }
         return preserved
 

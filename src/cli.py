@@ -11,6 +11,7 @@ from src.adapters.polymarket import PolymarketClient
 from src.analysis.arb_pricing import enrich_candidates_with_pricing
 from src.analysis.arb_signals import detect_signals
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
+from src.analysis.market_inventory import summarize_market_inventory
 from src.analysis.markets import summarize_markets
 from src.analysis.match_diagnostics import explain_market_matches
 from src.analysis.pnl import summarize_pnl
@@ -161,13 +162,13 @@ def explain_matches(wallet: str, as_json: bool = False) -> dict[str, Any]:
     logger = logging.getLogger(__name__)
     poly_client = PolymarketClient(raw_dir="data/raw")
     kalshi_client = KalshiClient(raw_dir="data/raw")
-    trades = poly_client.get_user_trades(wallet)
+    polymarket_markets = poly_client.get_wallet_markets(wallet, include_market_details=True)
     try:
         kalshi_markets = kalshi_client.get_markets(status="open")
     except Exception as exc:
         logger.warning("Kalshi market ingestion failed during diagnostics: %s", exc)
         kalshi_markets = []
-    diagnostics = explain_market_matches(trades, kalshi_markets)
+    diagnostics = explain_market_matches(polymarket_markets, kalshi_markets)
     if as_json:
         print(json.dumps(diagnostics, indent=2, sort_keys=True))
         return diagnostics
@@ -183,11 +184,47 @@ def explain_matches(wallet: str, as_json: bool = False) -> dict[str, Any]:
         print(f"- {item['count']}: {item['reason']}")
     if not diagnostics["top_rejected_candidate_reasons"]:
         print("- none recorded")
+    print(f"Likely zero-candidate reason: {diagnostics.get('likely_zero_candidate_reason')}")
+    print(f"Polymarket open/closed: {diagnostics.get('polymarket_open_count')}/{diagnostics.get('polymarket_closed_count')}")
+    print(f"Kalshi open/closed: {diagnostics.get('kalshi_open_count')}/{diagnostics.get('kalshi_closed_count')}")
+    print(f"Unparsed Polymarket/Kalshi: {diagnostics.get('unparsed_polymarket_count')}/{diagnostics.get('unparsed_kalshi_count')}")
     print(f"Accepted matches: {len(diagnostics['accepted_matches'])}")
     for candidate in diagnostics["accepted_matches"][:10]:
         print(f"- {candidate.get('confidence_band')} {candidate.get('similarity_score', 0):.2f}: {candidate.get('polymarket_title')} <> {candidate.get('kalshi_title')}")
         print(f"  {candidate.get('reason')}")
     return diagnostics
+
+
+def market_inventory(wallet: str, include_closed: bool = False, as_json: bool = False) -> dict[str, Any]:
+    logger = logging.getLogger(__name__)
+    poly_client = PolymarketClient(raw_dir="data/raw")
+    kalshi_client = KalshiClient(raw_dir="data/raw")
+    polymarket_markets = poly_client.get_wallet_markets(wallet, include_market_details=True)
+    try:
+        kalshi_markets = kalshi_client.get_markets(status="open", include_closed=include_closed)
+    except Exception as exc:
+        logger.warning("Kalshi market ingestion failed during inventory: %s", exc)
+        kalshi_markets = []
+    inventory = summarize_market_inventory(polymarket_markets, kalshi_markets)
+    if as_json:
+        print(json.dumps(inventory, indent=2, sort_keys=True))
+        return inventory
+    print("Polylens Market Inventory")
+    print("=" * 26)
+    print(f"Polymarket markets: {inventory['polymarket']['total_count']}")
+    print(f"Kalshi markets: {inventory['kalshi']['total_count']}")
+    print(f"Polymarket open/closed/unknown: {inventory['polymarket_open_count']}/{inventory['polymarket_closed_count']}/{inventory['polymarket']['status_counts'].get('unknown', 0)}")
+    print(f"Kalshi open/closed/unknown: {inventory['kalshi_open_count']}/{inventory['kalshi_closed_count']}/{inventory['kalshi']['status_counts'].get('unknown', 0)}")
+    print(f"Polymarket categories: {inventory['polymarket']['category_counts']}")
+    print(f"Kalshi categories: {inventory['kalshi']['category_counts']}")
+    print(f"Crypto market types: {inventory['polymarket']['crypto_market_types_found']}")
+    print(f"Sports market types: {inventory['polymarket']['sports_market_types_found']}")
+    print(f"Unparsed Polymarket markets: {inventory['unparsed_polymarket_count']}")
+    print(f"Unparsed Kalshi markets: {inventory['unparsed_kalshi_count']}")
+    print("Top reasons no matches were available:")
+    for reason in inventory["top_reasons_no_matches_available"]:
+        print(f"- {reason}")
+    return inventory
 
 
 def main() -> None:
@@ -213,6 +250,11 @@ def main() -> None:
     explain_parser.add_argument("wallet")
     explain_parser.add_argument("--json", action="store_true", help="emit match diagnostics as JSON")
 
+    inventory_parser = sub.add_parser("market-inventory")
+    inventory_parser.add_argument("wallet")
+    inventory_parser.add_argument("--include-closed", action="store_true", help="include closed/settled Kalshi markets when the API supports them")
+    inventory_parser.add_argument("--json", action="store_true", help="emit market inventory as JSON")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -225,6 +267,8 @@ def main() -> None:
         scan_arb(args.wallet)
     elif args.command == "explain-matches":
         explain_matches(args.wallet, as_json=args.json)
+    elif args.command == "market-inventory":
+        market_inventory(args.wallet, include_closed=args.include_closed, as_json=args.json)
 
 
 if __name__ == "__main__":

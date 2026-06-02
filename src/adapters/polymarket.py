@@ -59,6 +59,46 @@ class PolymarketClient:
             LOGGER.debug("market lookup failed for %s: %s", slug, exc)
             return {}
 
+
+    def get_wallet_markets(self, wallet: str, include_market_details: bool = True) -> list[dict[str, Any]]:
+        trades = self.get_user_trades(wallet)
+        grouped: dict[str, dict[str, Any]] = {}
+        for trade in trades:
+            key = str(trade.get("conditionId") or trade.get("slug") or trade.get("title") or "unknown")
+            item = grouped.setdefault(key, self._preserve_trade_market_fields(trade))
+            item["trade_count"] += 1
+            item["trades"].append(trade)
+        if include_market_details:
+            for market in grouped.values():
+                details = self.get_market_by_slug(str(market.get("slug") or "")) if market.get("slug") else {}
+                if details:
+                    market["market_details"] = details
+                    market["status"] = details.get("status") or details.get("active") or market.get("status")
+                    market["end_date"] = details.get("endDate") or details.get("end_date") or details.get("closeTime") or market.get("end_date")
+                    market["resolved"] = details.get("closed") or details.get("resolved") or details.get("archived")
+                    market["outcome_prices"] = details.get("outcomePrices") or details.get("outcome_prices")
+                    market["token_ids"] = details.get("clobTokenIds") or details.get("tokenIds") or details.get("token_ids") or market.get("token_ids")
+        return list(grouped.values())
+
+    @staticmethod
+    def _preserve_trade_market_fields(trade: dict[str, Any]) -> dict[str, Any]:
+        token_ids = [trade.get("asset")] if trade.get("asset") else []
+        return {
+            "condition_id": trade.get("conditionId"),
+            "market_id": trade.get("market") or trade.get("marketId") or trade.get("conditionId"),
+            "slug": trade.get("slug"),
+            "event_slug": trade.get("eventSlug"),
+            "question": trade.get("question") or trade.get("title"),
+            "title": trade.get("title") or trade.get("question"),
+            "status": trade.get("status"),
+            "end_date": trade.get("endDate") or trade.get("end_date") or trade.get("closeTime"),
+            "resolved": trade.get("resolved") or trade.get("closed"),
+            "outcome_prices": trade.get("outcomePrices") or trade.get("outcome_prices"),
+            "token_ids": trade.get("clobTokenIds") or trade.get("tokenIds") or token_ids,
+            "trade_count": 0,
+            "trades": [],
+        }
+
     def _paginate_data(self, endpoint: str, wallet: str, limit: int, max_pages: int) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         offset = 0

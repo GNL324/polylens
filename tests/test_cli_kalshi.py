@@ -70,7 +70,7 @@ def test_explain_matches_cli_runs_without_crashing(mock_poly_client, mock_kalshi
     from src.cli import explain_matches
 
     poly = mock_poly_client.return_value
-    poly.get_user_trades.return_value = [
+    poly.get_wallet_markets.return_value = [
         {"conditionId": "pm-btc-day", "title": "Bitcoin up today", "outcome": "Up", "size": 1, "price": 0.5}
     ]
     mock_kalshi_client.return_value.get_markets.return_value = [

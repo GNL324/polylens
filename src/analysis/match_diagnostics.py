@@ -5,6 +5,7 @@ from typing import Any
 
 from src.analysis.cross_market import _dedupe_candidates, _unique_polymarket_markets, score_market_pair
 from src.analysis.crypto_matching import structured_crypto_candidates_with_diagnostics
+from src.analysis.market_inventory import summarize_market_inventory
 from src.analysis.market_normalization import normalize_kalshi_market, normalize_polymarket_market
 from src.analysis.structured_matching import structured_sports_candidates
 
@@ -17,7 +18,7 @@ def explain_market_matches(trades: list[dict[str, Any]], kalshi_markets: list[di
     accepted = _dedupe_candidates(sports + crypto + fallback, max_candidates)
     rejected = [item for item in crypto_diagnostics if not item.get("accepted")]
     rejected_counts = Counter(item.get("reason", "unknown") for item in rejected)
-    return {
+    result = {
         "polymarket_markets_inspected": len(polymarket_markets),
         "kalshi_markets_inspected": len(kalshi_markets),
         "sports_structured_matches": len(sports),
@@ -29,6 +30,16 @@ def explain_market_matches(trades: list[dict[str, Any]], kalshi_markets: list[di
         "accepted_matches": accepted,
         "diagnostics": [item for item in crypto_diagnostics if item.get("accepted")] + rejected[:50],
     }
+    inventory = summarize_market_inventory(polymarket_markets, kalshi_markets, result)
+    result["inventory_summary"] = inventory
+    result["polymarket_open_count"] = inventory["polymarket_open_count"]
+    result["polymarket_closed_count"] = inventory["polymarket_closed_count"]
+    result["kalshi_open_count"] = inventory["kalshi_open_count"]
+    result["kalshi_closed_count"] = inventory["kalshi_closed_count"]
+    result["unparsed_polymarket_count"] = inventory["unparsed_polymarket_count"]
+    result["unparsed_kalshi_count"] = inventory["unparsed_kalshi_count"]
+    result["likely_zero_candidate_reason"] = inventory["likely_zero_candidate_reason"]
+    return result
 
 
 def _fallback_text_candidates(polymarket_markets: list[dict[str, Any]], kalshi_markets: list[dict[str, Any]], max_candidates: int) -> list[dict[str, Any]]:
