@@ -17,3 +17,14 @@ python -m src.cli scan-multibook-arb --sport basketball_nba --bankroll 1000 --js
 ```
 
 Diagnostics include `no opposite side found`, `incomplete field`, `missing team outcomes`, `total implied probability >= 1`, `settlement mismatch`, `stale odds`, and `bookmaker mismatch` when detectable.
+
+
+## Synthetic Field Debugging
+
+Use the debug command to inspect deduped futures fields:
+
+```bash
+python -m src.cli debug-synthetic-field --sport basketball_nba --team Knicks --json
+```
+
+The field builder keeps only the best implied probability per unique outcome across all books. Diagnostics include `unique_outcomes`, `duplicate_outcomes_removed`, `books_considered`, `best_price_source`, field members, and the final implied probability sum.

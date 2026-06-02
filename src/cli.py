@@ -26,6 +26,7 @@ from src.analysis.match_diagnostics import explain_market_matches
 from src.analysis.odds_normalization import normalize_futures_events, normalize_odds_events
 from src.analysis.pnl import summarize_pnl
 from src.analysis.sportsbook_matching import match_sportsbook_lines
+from src.analysis.synthetic_field import debug_synthetic_field as build_debug_synthetic_field
 from src.analysis.timing import summarize_timing
 from src.analysis.volume import summarize_volume
 from src.analysis.watch_mode import watch_live_arbitrage
@@ -308,6 +309,24 @@ def scan_sportsbook_arb(wallet: str, sport_key: str, bookmaker: str | None = Non
             print(f"- {candidate.get('confidence_band')} {candidate.get('polymarket_title')} <> {candidate.get('sportsbook')} {candidate.get('sportsbook_team')} ({edge_text})")
             print(f"  {candidate.get('pricing_reason') or candidate.get('reason')}")
     return priced
+
+
+def debug_synthetic_field_cli(sport_key: str | None = None, selected_team: str | None = None, as_json: bool = False) -> dict[str, Any]:
+    if not sport_key or not selected_team:
+        raise ValueError("--sport and --team are required")
+    futures = fetch_futures(sport_key, quiet=True)
+    outcomes = futures.get("futures") if futures.get("supported") else []
+    result = build_debug_synthetic_field(outcomes or [], selected_team)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print("Polylens Synthetic Field Debug")
+        print("=" * 31)
+        print(f"Selected team: {result['selected_team']}")
+        print(f"Field members: {result['field_members']}")
+        print(f"Best book per outcome: {result['best_book_per_outcome']}")
+        print(f"Implied probability sum: {result['implied_probability_sum']}")
+    return result
 
 
 def scan_multibook_arb(sport_key: str | None = None, keyword: str | None = None, limit: int = 100, bankroll: float | None = None, min_guaranteed_roi: float | None = None, as_json: bool = False) -> dict[str, Any]:
@@ -762,6 +781,11 @@ def main() -> None:
     sportsbook_parser.add_argument("--region", default="us")
     sportsbook_parser.add_argument("--json", action="store_true")
 
+    debug_field_parser = sub.add_parser("debug-synthetic-field")
+    debug_field_parser.add_argument("--sport", dest="sport_key", required=True)
+    debug_field_parser.add_argument("--team", dest="selected_team", required=True)
+    debug_field_parser.add_argument("--json", action="store_true")
+
     scan_multibook_parser = sub.add_parser("scan-multibook-arb")
     scan_multibook_parser.add_argument("--sport", dest="sport_key")
     scan_multibook_parser.add_argument("--keyword")
@@ -877,6 +901,8 @@ def main() -> None:
         scan_true_arb(keyword=args.keyword, sport_key=args.sport_key, limit=args.limit, bankroll=args.bankroll, min_guaranteed_roi=args.min_guaranteed_roi, include_hedges=args.include_hedges, as_json=args.json)
     elif args.command == "scan-multibook-arb":
         scan_multibook_arb(sport_key=args.sport_key, keyword=args.keyword, limit=args.limit, bankroll=args.bankroll, min_guaranteed_roi=args.min_guaranteed_roi, as_json=args.json)
+    elif args.command == "debug-synthetic-field":
+        debug_synthetic_field_cli(sport_key=args.sport_key, selected_team=args.selected_team, as_json=args.json)
     elif args.command == "find-hedges":
         find_hedges(keyword=args.keyword, sport_key=args.sport_key, limit=args.limit, as_json=args.json)
     elif args.command == "explain-live-matches":

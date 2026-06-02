@@ -1,23 +1,50 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
+
+
+def dedupe_best_outcomes(outcomes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    books = {str(row.get("bookmaker_name") or row.get("bookmaker") or "unknown") for row in outcomes}
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in outcomes:
+        if row.get("team"):
+            grouped[_norm(str(row.get("team")))].append(row)
+    best_rows: list[dict[str, Any]] = []
+    best_sources: dict[str, dict[str, Any]] = {}
+    for team, rows in grouped.items():
+        best = min(rows, key=lambda row: _num(row.get("implied_probability") or row.get("price")) if _num(row.get("implied_probability") or row.get("price")) is not None else 999)
+        best_rows.append(best)
+        best_sources[str(best.get("team"))] = {
+            "bookmaker": best.get("bookmaker_name") or best.get("bookmaker"),
+            "odds": best.get("odds"),
+            "implied_probability": _num(best.get("implied_probability") or best.get("price")),
+        }
+    diagnostics = {
+        "unique_outcomes": len(grouped),
+        "duplicate_outcomes_removed": max(0, len([row for row in outcomes if row.get("team")]) - len(grouped)),
+        "books_considered": sorted(books),
+        "best_price_source": best_sources,
+    }
+    return best_rows, diagnostics
 
 
 def build_synthetic_field(outcomes: list[dict[str, Any]], selected_team: str, expected_teams: list[str] | None = None) -> dict[str, Any]:
     selected = _norm(selected_team)
-    rows = [row for row in outcomes if row.get("team")]
-    field_rows = [row for row in rows if _norm(str(row.get("team"))) != selected]
-    missing = _missing_expected(rows, expected_teams or [])
-    complete = bool(field_rows) and not missing and _has_selected(rows, selected)
+    unique_rows, diagnostics = dedupe_best_outcomes(outcomes)
+    field_rows = [row for row in unique_rows if _norm(str(row.get("team"))) != selected]
+    missing = _missing_expected(unique_rows, expected_teams or [])
+    complete = bool(field_rows) and not missing and _has_selected(unique_rows, selected)
     if not complete:
         return {
             "field_available": bool(field_rows),
             "coverage_complete": False,
-            "coverage_percent": _coverage_percent(rows, expected_teams),
+            "coverage_percent": _coverage_percent(unique_rows, expected_teams),
             "field_price": None,
             "field_outcomes": field_rows,
             "diagnostic": "missing team outcomes" if missing else "incomplete field",
             "missing_teams": missing,
+            **diagnostics,
         }
     field_price = _best_field_price(field_rows)
     return {
@@ -28,6 +55,22 @@ def build_synthetic_field(outcomes: list[dict[str, Any]], selected_team: str, ex
         "field_outcomes": field_rows,
         "diagnostic": "full hedge" if field_price is not None else "incomplete field",
         "missing_teams": [],
+        **diagnostics,
+    }
+
+
+def debug_synthetic_field(outcomes: list[dict[str, Any]], selected_team: str, expected_teams: list[str] | None = None) -> dict[str, Any]:
+    field = build_synthetic_field(outcomes, selected_team, expected_teams=expected_teams)
+    selected_row = next((row for row in dedupe_best_outcomes(outcomes)[0] if _norm(str(row.get("team"))) == _norm(selected_team)), None)
+    selected_price = _num((selected_row or {}).get("implied_probability") or (selected_row or {}).get("price"))
+    implied_sum = round((selected_price or 0) + (field.get("field_price") or 0), 6) if selected_price is not None and field.get("field_price") is not None else None
+    return {
+        "selected_team": selected_team,
+        "selected_price": selected_price,
+        "field_members": [row.get("team") for row in field.get("field_outcomes", [])],
+        "best_book_per_outcome": field.get("best_price_source", {}),
+        "implied_probability_sum": implied_sum,
+        **field,
     }
 
 
@@ -36,15 +79,12 @@ def _best_field_price(rows: list[dict[str, Any]]) -> float | None:
     prices = [price for price in prices if price is not None]
     if not prices:
         return None
-    # A synthetic field made from many mutually exclusive outcomes costs the sum of its legs.
     return round(sum(prices), 6)
 
 
 def _coverage_percent(rows: list[dict[str, Any]], expected: list[str] | None) -> int:
     if not expected:
         return 65 if rows else 0
-    if not expected:
-        return 0
     present = {_norm(str(row.get("team"))) for row in rows}
     return int(100 * len(present & {_norm(team) for team in expected}) / len(expected))
 

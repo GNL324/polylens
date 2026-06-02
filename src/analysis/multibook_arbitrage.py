@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from src.analysis.synthetic_field import build_synthetic_field
+from src.analysis.synthetic_field import build_synthetic_field, dedupe_best_outcomes
 
 
 def scan_multibook_arbitrage(lines: list[dict[str, Any]], bankroll: float | None = None, min_guaranteed_roi: float | None = None) -> dict[str, Any]:
@@ -60,19 +60,22 @@ def _scan_two_way_group(lines: list[dict[str, Any]], bankroll: float | None) -> 
 def _scan_futures_group(lines: list[dict[str, Any]], bankroll: float | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     arbs: list[dict[str, Any]] = []
     rejects: list[dict[str, Any]] = []
-    teams = sorted({str(line.get("team")) for line in lines if line.get("team")})
+    unique_lines, dedupe_diagnostics = dedupe_best_outcomes(lines)
+    teams = sorted({str(line.get("team")) for line in unique_lines if line.get("team")})
     for selected in teams:
-        selected_lines = [line for line in lines if str(line.get("team")) == selected]
+        selected_lines = [line for line in unique_lines if str(line.get("team")) == selected]
         selected_line = min(selected_lines, key=lambda line: _prob(line) or 999)
         field = build_synthetic_field(lines, selected, expected_teams=teams)
         if not field["coverage_complete"]:
-            rejects.append({"team": selected, "diagnostic": field.get("diagnostic") or "incomplete field", "coverage_percent": field.get("coverage_percent"), "missing_teams": field.get("missing_teams")})
+            rejects.append({"team": selected, "diagnostic": field.get("diagnostic") or "incomplete field", "coverage_percent": field.get("coverage_percent"), "missing_teams": field.get("missing_teams"), "unique_outcomes": field.get("unique_outcomes"), "duplicate_outcomes_removed": field.get("duplicate_outcomes_removed"), "books_considered": field.get("books_considered"), "best_price_source": field.get("best_price_source")})
             continue
         total = round((_prob(selected_line) or 999) + (field.get("field_price") or 999), 6)
         if total >= 1:
-            rejects.append({"team": selected, "diagnostic": "total implied probability >= 1", "implied_probability_sum": total})
+            rejects.append({"team": selected, "diagnostic": "total implied probability >= 1", "implied_probability_sum": total, "unique_outcomes": field.get("unique_outcomes"), "duplicate_outcomes_removed": field.get("duplicate_outcomes_removed"), "books_considered": field.get("books_considered"), "best_price_source": field.get("best_price_source")})
             continue
-        arbs.append(_arb_payload(selected_line, {"team": "Field", "bookmaker_name": "synthetic_field", "implied_probability": field["field_price"], "field_outcomes": field["field_outcomes"]}, total, bankroll, "synthetic_field"))
+        arb = _arb_payload(selected_line, {"team": "Field", "bookmaker_name": "synthetic_field", "implied_probability": field["field_price"], "field_outcomes": field["field_outcomes"]}, total, bankroll, "synthetic_field")
+        arb.update({"unique_outcomes": field.get("unique_outcomes"), "duplicate_outcomes_removed": field.get("duplicate_outcomes_removed"), "books_considered": field.get("books_considered"), "best_price_source": field.get("best_price_source")})
+        arbs.append(arb)
     return arbs, rejects
 
 
