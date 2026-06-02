@@ -5,6 +5,7 @@ from typing import Any
 
 from src.analysis.crypto_matching import structured_crypto_candidates
 from src.analysis.market_normalization import NormalizedMarketText, normalize_kalshi_market, normalize_polymarket_market, text_similarity
+from src.analysis.match_validation import validate_market_type_compatibility
 from src.analysis.structured_matching import structured_sports_candidates
 from src.analysis.volume import money_value
 
@@ -14,11 +15,11 @@ def compare_wallet_markets_to_kalshi(trades: list[dict[str, Any]], kalshi_market
     candidates: list[dict[str, Any]] = structured_sports_candidates(polymarket_markets, kalshi_markets, max_candidates=max_candidates * 2)
     candidates.extend(structured_crypto_candidates(polymarket_markets, kalshi_markets, max_candidates=max_candidates * 2))
 
-    normalized_pm = [normalize_polymarket_market(market) for market in polymarket_markets]
-    normalized_kalshi = [normalize_kalshi_market(market) for market in kalshi_markets]
-    for pm_market in normalized_pm:
-        for kalshi_market in normalized_kalshi:
-            candidate = score_market_pair(pm_market, kalshi_market)
+    normalized_pm = [(market, normalize_polymarket_market(market)) for market in polymarket_markets]
+    normalized_kalshi = [(market, normalize_kalshi_market(market)) for market in kalshi_markets]
+    for pm_raw, pm_market in normalized_pm:
+        for kalshi_raw, kalshi_market in normalized_kalshi:
+            candidate = score_market_pair(pm_market, kalshi_market, pm_raw, kalshi_raw)
             if candidate:
                 candidates.append(candidate)
 
@@ -40,7 +41,13 @@ def _dedupe_candidates(candidates: list[dict[str, Any]], max_candidates: int) ->
     return deduped
 
 
-def score_market_pair(pm_market: NormalizedMarketText, kalshi_market: NormalizedMarketText) -> dict[str, Any] | None:
+def score_market_pair(pm_market: NormalizedMarketText, kalshi_market: NormalizedMarketText, pm_raw: dict[str, Any] | None = None, kalshi_raw: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    if pm_raw is not None and kalshi_raw is not None:
+        validation = validate_market_type_compatibility(pm_raw, kalshi_raw)
+        if not validation.accepted:
+            return None
+    else:
+        validation = None
     shared_tokens = (pm_market.tokens & kalshi_market.tokens) - {"market"}
     shared_entities = pm_market.entities & kalshi_market.entities
     category_match = pm_market.category_guess == kalshi_market.category_guess and pm_market.category_guess != "Other"
@@ -83,6 +90,7 @@ def score_market_pair(pm_market: NormalizedMarketText, kalshi_market: Normalized
         "similarity_score": score,
         "confidence_band": confidence,
         "reason": reason,
+        "market_type_validation": validation.to_dict() if validation else None,
     }
 
 

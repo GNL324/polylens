@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.analysis.market_normalization import normalize_text
+from src.analysis.match_validation import validate_market_type_compatibility
 from src.analysis.sports_parser import ParsedSportsMarket, parse_market_record
 
 
@@ -22,6 +23,9 @@ def structured_sports_candidates(polymarket_markets: list[dict[str, Any]], kalsh
 
 
 def score_structured_sports_pair(pm_market: dict[str, Any], pm: ParsedSportsMarket, kalshi_market: dict[str, Any], kalshi: ParsedSportsMarket) -> dict[str, Any] | None:
+    validation = validate_market_type_compatibility(pm_market, kalshi_market, pm, kalshi)
+    if not validation.accepted:
+        return None
     if not pm.league or not kalshi.league:
         return None
     if pm.league != kalshi.league:
@@ -74,6 +78,7 @@ def score_structured_sports_pair(pm_market: dict[str, Any], pm: ParsedSportsMark
         "confidence_band": confidence,
         "reason": "; ".join(reasons),
         "structured_match": {"polymarket": pm.to_dict(), "kalshi": kalshi.to_dict()},
+        "market_type_validation": validation.to_dict(),
     }
 
 
