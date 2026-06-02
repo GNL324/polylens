@@ -20,6 +20,7 @@ from src.analysis.kalshi_inventory_filter import filter_kalshi_inventory
 from src.analysis.live_arbitrage import scan_live_arbitrage
 from src.analysis.live_match_diagnostics import explain_live_matches as explain_live_market_matches
 from src.analysis.market_inventory import summarize_market_inventory
+from src.analysis.multibook_arbitrage import scan_multibook_arbitrage
 from src.analysis.markets import summarize_markets
 from src.analysis.match_diagnostics import explain_market_matches
 from src.analysis.odds_normalization import normalize_futures_events, normalize_odds_events
@@ -309,6 +310,31 @@ def scan_sportsbook_arb(wallet: str, sport_key: str, bookmaker: str | None = Non
     return priced
 
 
+def scan_multibook_arb(sport_key: str | None = None, keyword: str | None = None, limit: int = 100, bankroll: float | None = None, min_guaranteed_roi: float | None = None, as_json: bool = False) -> dict[str, Any]:
+    lines: list[dict[str, Any]] = []
+    if sport_key:
+        try:
+            lines.extend(fetch_odds(sport_key, markets="h2h", quiet=True))
+        except MissingOddsAPIKey:
+            pass
+        try:
+            futures = fetch_futures(sport_key, quiet=True)
+            if futures.get("supported"):
+                lines.extend(futures.get("futures") or [])
+        except MissingOddsAPIKey:
+            pass
+    result = scan_multibook_arbitrage(lines, bankroll=bankroll, min_guaranteed_roi=min_guaranteed_roi)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print("Polylens Multibook Arbitrage")
+        print("=" * 29)
+        print(f"Sportsbook multibook arbs: {len(result['sportsbook_multibook_arbs'])}")
+        print(f"Synthetic field arbs: {len(result['synthetic_field_arbs'])}")
+        print(f"Incomplete hedges: {len(result['incomplete_hedges'])}")
+    return result
+
+
 def find_hedges(keyword: str | None = None, sport_key: str | None = None, limit: int = 100, as_json: bool = False) -> dict[str, Any]:
     result = scan_live_arb(sport_key=sport_key, keyword=keyword, limit=limit, as_json=False, include_low_confidence=True)
     candidates = result.get("top_scored_candidates") or result.get("top_candidates") or []
@@ -343,8 +369,13 @@ def scan_true_arb(
     true_arbs = classified["true_arbitrage_candidates"]
     if min_guaranteed_roi is not None:
         true_arbs = [item for item in true_arbs if (item.get("guaranteed_roi") or 0) >= min_guaranteed_roi]
+    multibook = scan_multibook_arb(sport_key=sport_key, keyword=keyword, limit=limit, bankroll=bankroll, min_guaranteed_roi=min_guaranteed_roi, as_json=False) if sport_key else {"sportsbook_multibook_arbs": [], "synthetic_field_arbs": [], "incomplete_hedges": []}
     output = {
+        "prediction_market_true_arbs": true_arbs,
         "true_arbitrage_candidates": true_arbs,
+        "sportsbook_multibook_arbs": multibook["sportsbook_multibook_arbs"],
+        "synthetic_field_arbs": multibook["synthetic_field_arbs"],
+        "incomplete_hedges": multibook["incomplete_hedges"],
         "cross_market_hedge_candidates": classified["cross_market_hedge_candidates"] if include_hedges else [],
         "positive_ev_candidates": classified["positive_ev_candidates"],
         "diagnostics": {
@@ -731,6 +762,14 @@ def main() -> None:
     sportsbook_parser.add_argument("--region", default="us")
     sportsbook_parser.add_argument("--json", action="store_true")
 
+    scan_multibook_parser = sub.add_parser("scan-multibook-arb")
+    scan_multibook_parser.add_argument("--sport", dest="sport_key")
+    scan_multibook_parser.add_argument("--keyword")
+    scan_multibook_parser.add_argument("--limit", type=int, default=100)
+    scan_multibook_parser.add_argument("--bankroll", type=float)
+    scan_multibook_parser.add_argument("--min-guaranteed-roi", type=float)
+    scan_multibook_parser.add_argument("--json", action="store_true")
+
     find_hedges_parser = sub.add_parser("find-hedges")
     find_hedges_parser.add_argument("--keyword")
     find_hedges_parser.add_argument("--sport", dest="sport_key")
@@ -836,6 +875,8 @@ def main() -> None:
         scan_live_arb(sport_key=args.sport_key, keyword=args.keyword, category=args.category, limit=args.limit, region=args.region, bookmaker=args.bookmaker, as_json=args.json, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, include_low_confidence=args.include_low_confidence, save=args.save, db_path=args.db_path)
     elif args.command == "scan-true-arb":
         scan_true_arb(keyword=args.keyword, sport_key=args.sport_key, limit=args.limit, bankroll=args.bankroll, min_guaranteed_roi=args.min_guaranteed_roi, include_hedges=args.include_hedges, as_json=args.json)
+    elif args.command == "scan-multibook-arb":
+        scan_multibook_arb(sport_key=args.sport_key, keyword=args.keyword, limit=args.limit, bankroll=args.bankroll, min_guaranteed_roi=args.min_guaranteed_roi, as_json=args.json)
     elif args.command == "find-hedges":
         find_hedges(keyword=args.keyword, sport_key=args.sport_key, limit=args.limit, as_json=args.json)
     elif args.command == "explain-live-matches":
