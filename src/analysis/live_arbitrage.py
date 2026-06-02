@@ -6,6 +6,7 @@ from typing import Any
 from src.analysis.arb_pricing import extract_kalshi_pricing, normalize_price, price_candidate
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
 from src.analysis.live_market_discovery import normalize_kalshi_live_markets, normalize_polymarket_live_markets, normalize_sportsbook_live_lines
+from src.analysis.opportunity_scoring import filter_scored_candidates, score_candidates
 from src.analysis.sportsbook_matching import match_sportsbook_lines
 
 
@@ -15,6 +16,10 @@ def scan_live_arbitrage(
     sportsbook_lines: list[dict[str, Any]] | None = None,
     sportsbook_skipped_reason: str | None = None,
     venue_errors: dict[str, str] | None = None,
+    min_edge: float | None = None,
+    min_score: float | None = None,
+    max_close_hours: float | None = None,
+    include_low_confidence: bool = False,
 ) -> dict[str, Any]:
     sportsbook_lines = sportsbook_lines or []
     venue_errors = venue_errors or {}
@@ -59,7 +64,14 @@ def scan_live_arbitrage(
     if not kalshi_markets:
         skipped["no Kalshi live markets available"] += 1
 
-    candidates.sort(key=lambda item: (item.get("estimated_edge") is not None, item.get("estimated_edge") or -1, item.get("similarity_score") or item.get("confidence_score") or 0), reverse=True)
+    scored_candidates = score_candidates(candidates)
+    filtered_candidates, filter_reasons = filter_scored_candidates(
+        scored_candidates,
+        min_edge=min_edge,
+        min_score=min_score,
+        max_close_hours=max_close_hours,
+        include_low_confidence=include_low_confidence,
+    )
     return {
         "markets_scanned_by_venue": {"polymarket": len(pm_live), "kalshi": len(kalshi_live), "sportsbook": len(sportsbook_live)},
         "matches_found_by_venue_pair": {
@@ -67,8 +79,12 @@ def scan_live_arbitrage(
             "polymarket_sportsbook": len(pm_sportsbook_matches),
             "kalshi_sportsbook": len(kalshi_sportsbook_matches),
         },
-        "arbitrage_candidates_found": len(candidates),
-        "top_candidates": candidates[:25],
+        "arbitrage_candidates_found": len(filtered_candidates),
+        "candidates_before_filtering": len(scored_candidates),
+        "candidates_after_filtering": len(filtered_candidates),
+        "filter_reasons": filter_reasons,
+        "top_candidates": filtered_candidates[:25],
+        "top_scored_candidates": filtered_candidates[:25],
         "skipped_rejected_reason_counts": dict(skipped),
     }
 
@@ -85,7 +101,8 @@ def _synthetic_polymarket_trade(market: dict[str, Any]) -> dict[str, Any]:
         "outcome": "Yes",
         "outcomeIndex": 0,
         "size": 1,
-        "timestamp": market.get("updatedAt") or market.get("createdAt") or 0,
+        "timestamp": _numeric_timestamp(market.get("updatedAt") or market.get("createdAt")),
+        "updatedAt": market.get("updatedAt"),
     }
 
 
@@ -139,6 +156,7 @@ def _price_kalshi_sportsbook(candidate: dict[str, Any]) -> dict[str, Any]:
     result.pop("kalshi_market", None)
     result.update({
         "kalshi_implied_yes_price": yes_price,
+        "kalshi_liquidity": kalshi.get("liquidity"),
         "sportsbook_implied_probability": sportsbook_probability,
         "spread": _spread(yes_price, sportsbook_probability),
         "estimated_edge": None,
@@ -163,3 +181,21 @@ def _spread(left: float | None, right: float | None) -> float | None:
     if left is None or right is None:
         return None
     return round(abs(float(left) - float(right)), 4)
+
+
+def _numeric_timestamp(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            from datetime import datetime
+
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            try:
+                return float(value)
+            except ValueError:
+                return 0.0
+    return 0.0

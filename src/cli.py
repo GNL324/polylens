@@ -281,6 +281,10 @@ def scan_live_arb(
     region: str = "us",
     bookmaker: str | None = None,
     as_json: bool = False,
+    min_edge: float | None = None,
+    min_score: float | None = None,
+    max_close_hours: float | None = None,
+    include_low_confidence: bool = False,
 ) -> dict[str, Any]:
     logger = logging.getLogger(__name__)
     venue_errors: dict[str, str] = {}
@@ -318,6 +322,10 @@ def scan_live_arb(
         sportsbook_lines=sportsbook_lines,
         sportsbook_skipped_reason=sportsbook_skipped_reason,
         venue_errors=venue_errors,
+        min_edge=min_edge,
+        min_score=min_score,
+        max_close_hours=max_close_hours,
+        include_low_confidence=include_low_confidence,
     )
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
@@ -327,6 +335,8 @@ def scan_live_arb(
         print(f"Markets scanned by venue: {result['markets_scanned_by_venue']}")
         print(f"Matches found by venue pair: {result['matches_found_by_venue_pair']}")
         print(f"Arbitrage candidates found: {result['arbitrage_candidates_found']}")
+        print(f"Candidates before/after filtering: {result.get('candidates_before_filtering', 0)}/{result.get('candidates_after_filtering', 0)}")
+        print(f"Filter reasons: {result.get('filter_reasons', {})}")
         print("Skipped/rejected reasons:")
         for reason, count in result["skipped_rejected_reason_counts"].items():
             print(f"- {count}: {reason}")
@@ -336,7 +346,7 @@ def scan_live_arb(
         for candidate in result["top_candidates"][:10]:
             edge = candidate.get("estimated_edge")
             edge_text = "insufficient pricing data" if edge is None else f"edge={edge:.4f}"
-            print(f"- {candidate.get('venue_pair')} {candidate.get('confidence_band')} {edge_text}")
+            print(f"- {candidate.get('venue_pair')} score={candidate.get('execution_score')} {candidate.get('confidence_band')} {edge_text}")
             print(f"  {candidate.get('polymarket_title') or candidate.get('kalshi_title')} <> {candidate.get('kalshi_title') or candidate.get('sportsbook')}")
             print(f"  {candidate.get('pricing_reason') or candidate.get('reason')}")
         if not result["top_candidates"]:
@@ -397,6 +407,10 @@ def main() -> None:
     scan_live_parser.add_argument("--region", default="us")
     scan_live_parser.add_argument("--bookmaker")
     scan_live_parser.add_argument("--json", action="store_true")
+    scan_live_parser.add_argument("--min-edge", type=float)
+    scan_live_parser.add_argument("--min-score", type=float)
+    scan_live_parser.add_argument("--max-close-hours", type=float)
+    scan_live_parser.add_argument("--include-low-confidence", action="store_true")
 
     args = parser.parse_args()
 
@@ -419,7 +433,7 @@ def main() -> None:
     elif args.command == "scan-sportsbook-arb":
         scan_sportsbook_arb(args.wallet, args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
     elif args.command == "scan-live-arb":
-        scan_live_arb(sport_key=args.sport_key, keyword=args.keyword, category=args.category, limit=args.limit, region=args.region, bookmaker=args.bookmaker, as_json=args.json)
+        scan_live_arb(sport_key=args.sport_key, keyword=args.keyword, category=args.category, limit=args.limit, region=args.region, bookmaker=args.bookmaker, as_json=args.json, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, include_low_confidence=args.include_low_confidence)
 
 
 if __name__ == "__main__":

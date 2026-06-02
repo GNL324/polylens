@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from src.analysis.opportunity_scoring import score_candidates
+
 
 def normalize_price(value: Any) -> float | None:
     if value is None or value == "":
@@ -101,8 +103,7 @@ def enrich_candidates_with_pricing(candidates: list[dict[str, Any]], trades: lis
         kalshi_market = kalshi_by_ticker.get(str(candidate.get("kalshi_ticker")), {})
         pricing = price_candidate(candidate, trades, kalshi_market)
         enriched.append(pricing)
-    enriched.sort(key=lambda item: (item.get("theoretical_yes_no_arbitrage_exists") is True, item.get("estimated_edge") or -1), reverse=True)
-    return enriched
+    return score_candidates(enriched)
 
 
 def price_candidate(candidate: dict[str, Any], trades: list[dict[str, Any]], kalshi_market: dict[str, Any]) -> dict[str, Any]:
@@ -124,6 +125,7 @@ def price_candidate(candidate: dict[str, Any], trades: list[dict[str, Any]], kal
         "kalshi_best_bid": kalshi.get("yes_bid"),
         "kalshi_best_ask": kalshi.get("yes_ask"),
         "kalshi_last_price": kalshi.get("last_price"),
+        "kalshi_liquidity": kalshi.get("liquidity"),
         "spread": _spread(pm_yes, kalshi.get("kalshi_implied_yes_price")),
         "estimated_edge": None,
         "theoretical_yes_no_arbitrage_exists": False,
@@ -162,8 +164,7 @@ def _spread(left: float | None, right: float | None) -> float | None:
 
 def enrich_sportsbook_candidates_with_pricing(candidates: list[dict[str, Any]], trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
     enriched = [price_sportsbook_candidate(candidate, trades) for candidate in candidates]
-    enriched.sort(key=lambda item: (item.get("theoretical_sportsbook_arbitrage_exists") is True, item.get("estimated_edge") or -1), reverse=True)
-    return enriched
+    return score_candidates(enriched)
 
 
 def price_sportsbook_candidate(candidate: dict[str, Any], trades: list[dict[str, Any]]) -> dict[str, Any]:
