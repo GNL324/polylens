@@ -6,6 +6,7 @@ from typing import Any
 from src.analysis.arb_pricing import extract_kalshi_pricing, normalize_price, price_candidate
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
 from src.analysis.live_market_discovery import normalize_kalshi_live_markets, normalize_polymarket_live_markets, normalize_sportsbook_live_lines
+from src.analysis.live_match_diagnostics import live_match_summary
 from src.analysis.opportunity_scoring import filter_scored_candidates, score_candidates
 from src.analysis.sportsbook_matching import match_sportsbook_lines
 
@@ -86,6 +87,7 @@ def scan_live_arbitrage(
         "top_candidates": filtered_candidates[:25],
         "top_scored_candidates": filtered_candidates[:25],
         "skipped_rejected_reason_counts": dict(skipped),
+        "live_match_summary": live_match_summary(polymarket_markets, kalshi_markets, sportsbook_lines),
     }
 
 

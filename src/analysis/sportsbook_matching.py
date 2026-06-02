@@ -7,36 +7,65 @@ from src.analysis.sports_parser import parse_market_record
 
 
 def match_sportsbook_lines(polymarket_markets: list[dict[str, Any]], sportsbook_lines: list[dict[str, Any]], max_candidates: int = 20) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    parsed_pm = [(market, parse_market_record(market, "polymarket")) for market in polymarket_markets]
-    for pm_market, pm in parsed_pm:
-        if not pm.league:
-            continue
-        for line in sportsbook_lines:
-            candidate = score_sportsbook_match(pm_market, pm, line)
-            if candidate:
-                candidates.append(candidate)
+    candidates = [item["candidate"] for item in sportsbook_match_diagnostics(polymarket_markets, sportsbook_lines) if item["accepted"] and item.get("candidate")]
     candidates.sort(key=lambda item: item["confidence_score"], reverse=True)
     return candidates[:max_candidates]
 
 
+def sportsbook_match_diagnostics(polymarket_markets: list[dict[str, Any]], sportsbook_lines: list[dict[str, Any]], source_venue: str = "polymarket") -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    parsed_pm = [(market, parse_market_record(market, "polymarket")) for market in polymarket_markets]
+    for pm_market, pm in parsed_pm:
+        for line in sportsbook_lines:
+            candidate, diagnostic = score_sportsbook_match_with_diagnostic(pm_market, pm, line, source_venue=source_venue)
+            diagnostic["candidate"] = candidate
+            diagnostics.append(diagnostic)
+    return diagnostics
+
+
 def score_sportsbook_match(pm_market: dict[str, Any], pm: Any, line: dict[str, Any]) -> dict[str, Any] | None:
+    candidate, _diagnostic = score_sportsbook_match_with_diagnostic(pm_market, pm, line)
+    return candidate
+
+
+def score_sportsbook_match_with_diagnostic(pm_market: dict[str, Any], pm: Any, line: dict[str, Any], source_venue: str = "polymarket") -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    target_title = _sportsbook_title(line)
+    base = _diagnostic_base(pm_market, pm, line, source_venue, target_title)
+
+    def reject(reason: str, confidence: float = 0.0) -> tuple[None, dict[str, Any]]:
+        item = dict(base)
+        item.update({"accepted": False, "rejection_reason": reason, "confidence_score": round(confidence, 4)})
+        return None, item
+
     league = line.get("league")
+    if not pm.league or not pm.team:
+        return reject("missing structured fields")
     if not league or pm.league != league:
-        return None
-    if not pm.team:
-        return None
-    teams = {str(line.get("team") or "").lower(), str(line.get("opponent") or "").lower()}
-    pm_teams = {value.lower() for value in (pm.team, pm.opponent) if value}
-    if pm_teams and not all(any(_team_matches(pm_team, candidate) for candidate in teams) for pm_team in pm_teams):
-        return None
+        return reject("league mismatch")
+
+    book_team = str(line.get("team") or "").lower()
+    book_opponent = str(line.get("opponent") or "").lower()
+    if not book_team:
+        return reject("missing structured fields")
+    if not _team_matches(pm.team.lower(), book_team) and not _team_matches(pm.team.lower(), book_opponent):
+        return reject("team mismatch")
+    if pm.opponent and book_opponent and not (_team_matches(pm.opponent.lower(), book_opponent) or _team_matches(pm.opponent.lower(), book_team)):
+        return reject("opponent mismatch")
+
     market_type = line.get("market_type")
     if pm.market_type and market_type and not _market_types_compatible(pm.market_type, str(market_type)):
-        return None
-    if market_type in {"spread", "total"} and line.get("line") is None:
-        return None
+        if market_type == "spread":
+            return reject("spread mismatch", 0.35)
+        if market_type == "total":
+            return reject("total mismatch", 0.35)
+        return reject("market type mismatch", 0.35)
+    if market_type == "spread" and line.get("line") is None:
+        return reject("spread mismatch", 0.45)
+    if market_type == "total" and line.get("line") is None:
+        return reject("total mismatch", 0.45)
     if pm.season_year and line.get("commence_time") and str(pm.season_year) not in str(line.get("commence_time")):
-        return None
+        return reject("event date mismatch", 0.5)
+
     score = 0.45
     reasons = [f"league match: {pm.league}", "team/opponent compatible"]
     if pm.market_type and market_type:
@@ -49,9 +78,10 @@ def score_sportsbook_match(pm_market: dict[str, Any], pm: Any, line: dict[str, A
         score += 0.15
         reasons.append("sportsbook implied probability available")
     if score < 0.7:
-        return None
+        return reject("confidence below threshold", score)
+
     title = str(pm_market.get("title") or pm_market.get("question") or pm_market.get("slug") or "")
-    return {
+    candidate = {
         "polymarket_id": str(pm_market.get("conditionId") or pm_market.get("condition_id") or pm_market.get("slug") or title),
         "polymarket_title": title,
         "sportsbook": line.get("bookmaker_name"),
@@ -68,8 +98,33 @@ def score_sportsbook_match(pm_market: dict[str, Any], pm: Any, line: dict[str, A
         "confidence_score": round(min(score, 0.95), 4),
         "confidence_band": "high" if score >= 0.85 else "medium",
         "reason": "; ".join(reasons),
-        "structured_match": {"polymarket": pm.to_dict(), "sportsbook": line},
+        "structured_match": {source_venue: pm.to_dict(), "sportsbook": line},
     }
+    item = dict(base)
+    item.update({"accepted": True, "rejection_reason": None, "confidence_score": candidate["confidence_score"], "candidate": candidate})
+    return candidate, item
+
+
+def _diagnostic_base(pm_market: dict[str, Any], pm: Any, line: dict[str, Any], source_venue: str, target_title: str) -> dict[str, Any]:
+    source_title = str(pm_market.get("title") or pm_market.get("question") or pm_market.get("slug") or pm_market.get("ticker") or "")
+    return {
+        "source_venue": source_venue,
+        "target_venue": "sportsbook",
+        "source_market_title": source_title,
+        "target_market_title": target_title,
+        "source_market_type": pm.market_type,
+        "target_market_type": line.get("market_type"),
+        "parsed_teams": {"source_team": pm.team, "target_team": line.get("team")},
+        "parsed_opponents": {"source_opponent": pm.opponent, "target_opponent": line.get("opponent")},
+        "parsed_league": {"source_league": pm.league, "target_league": line.get("league")},
+        "parsed_event_date": {"source_season_year": pm.season_year, "target_commence_time": line.get("commence_time")},
+        "parsed_fields": {source_venue: pm.to_dict(), "sportsbook": line},
+    }
+
+
+def _sportsbook_title(line: dict[str, Any]) -> str:
+    teams = [str(value) for value in (line.get("team"), line.get("opponent")) if value]
+    return " vs ".join(teams) or str(line.get("event_id") or "sportsbook line")
 
 
 def _team_matches(left: str, right: str) -> bool:
@@ -83,4 +138,4 @@ def _team_matches(left: str, right: str) -> bool:
 def _market_types_compatible(pm_type: str, sportsbook_type: str) -> bool:
     if pm_type == sportsbook_type:
         return True
-    return pm_type in {"game_winner", "championship_winner"} and sportsbook_type in {"game_winner", "championship_winner"}
+    return pm_type == "championship_winner" and sportsbook_type == "championship_winner"

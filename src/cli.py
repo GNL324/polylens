@@ -15,6 +15,7 @@ from src.analysis.arb_pricing import enrich_candidates_with_pricing, enrich_spor
 from src.analysis.arb_signals import detect_signals
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
 from src.analysis.live_arbitrage import scan_live_arbitrage
+from src.analysis.live_match_diagnostics import explain_live_matches as explain_live_market_matches
 from src.analysis.market_inventory import summarize_market_inventory
 from src.analysis.markets import summarize_markets
 from src.analysis.match_diagnostics import explain_market_matches
@@ -395,6 +396,53 @@ def _env_str(name: str, default: str | None = None) -> str | None:
     return default if value in (None, "") else value
 
 
+def explain_live_matches_cli(
+    sport_key: str | None = None,
+    keyword: str | None = None,
+    limit: int = 100,
+    as_json: bool = False,
+    accepted_only: bool = False,
+    rejected_only: bool = False,
+) -> dict[str, Any]:
+    logger = logging.getLogger(__name__)
+    poly_client = PolymarketClient(raw_dir="data/raw")
+    kalshi_client = KalshiClient(raw_dir="data/raw")
+    try:
+        polymarket_markets = poly_client.get_active_markets(keyword=keyword, sport=sport_key, limit=limit)
+    except Exception as exc:
+        logger.warning("Polymarket live discovery failed during match diagnostics: %s", exc)
+        polymarket_markets = []
+    try:
+        kalshi_markets = kalshi_client.get_markets(status="open", limit=min(max(limit, 1), 1000), max_pages=5)
+    except Exception as exc:
+        logger.warning("Kalshi live discovery failed during match diagnostics: %s", exc)
+        kalshi_markets = []
+    sportsbook_lines: list[dict[str, Any]] = []
+    if sport_key:
+        try:
+            sportsbook_lines = fetch_odds(sport_key, markets="h2h,spreads,totals,outrights", quiet=True)
+        except MissingOddsAPIKey:
+            sportsbook_lines = []
+        except Exception as exc:
+            logger.warning("Sportsbook odds fetch failed during match diagnostics: %s", exc)
+    diagnostics = explain_live_market_matches(polymarket_markets, kalshi_markets, sportsbook_lines, accepted_only=accepted_only, rejected_only=rejected_only)
+    if as_json:
+        print(json.dumps(diagnostics, indent=2, sort_keys=True))
+    else:
+        print("Polylens Live Match Diagnostics")
+        print("=" * 32)
+        print(f"Matches attempted: {diagnostics['matches_attempted']}")
+        print(f"Matches accepted: {diagnostics['matches_accepted']}")
+        print(f"Matches rejected: {diagnostics['matches_rejected']}")
+        print(f"Top rejection reasons: {diagnostics['top_rejection_reasons']}")
+        print("Sample rejected matches:")
+        for item in diagnostics["rejected_matches_sample"][:20]:
+            print(f"- {item.get('source_venue')} <> {item.get('target_venue')}: {item.get('rejection_reason')}")
+            print(f"  {item.get('source_market_title')} <> {item.get('target_market_title')}")
+            print(f"  parsed={item.get('parsed_fields')}")
+    return diagnostics
+
+
 def watch_live_arb(
     interval_seconds: int = 60,
     min_edge: float | None = None,
@@ -546,6 +594,14 @@ def main() -> None:
     scan_live_parser.add_argument("--save", action="store_true")
     scan_live_parser.add_argument("--db-path", default="data/polylens.db")
 
+    explain_live_parser = sub.add_parser("explain-live-matches")
+    explain_live_parser.add_argument("--sport", dest="sport_key")
+    explain_live_parser.add_argument("--keyword")
+    explain_live_parser.add_argument("--limit", type=int, default=100)
+    explain_live_parser.add_argument("--json", action="store_true")
+    explain_live_parser.add_argument("--accepted-only", action="store_true")
+    explain_live_parser.add_argument("--rejected-only", action="store_true")
+
     watch_parser = sub.add_parser("watch-live-arb")
     watch_parser.add_argument("--interval", type=int, dest="interval_seconds")
     watch_parser.add_argument("--min-edge", type=float)
@@ -598,6 +654,8 @@ def main() -> None:
         scan_sportsbook_arb(args.wallet, args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
     elif args.command == "scan-live-arb":
         scan_live_arb(sport_key=args.sport_key, keyword=args.keyword, category=args.category, limit=args.limit, region=args.region, bookmaker=args.bookmaker, as_json=args.json, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, include_low_confidence=args.include_low_confidence, save=args.save, db_path=args.db_path)
+    elif args.command == "explain-live-matches":
+        explain_live_matches_cli(sport_key=args.sport_key, keyword=args.keyword, limit=args.limit, as_json=args.json, accepted_only=args.accepted_only, rejected_only=args.rejected_only)
     elif args.command == "watch-live-arb":
         watch_live_arb(interval_seconds=args.interval_seconds, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, sport_key=args.sport_key, keyword=args.keyword, category=args.category, bookmaker=args.bookmaker, region=args.region, use_webhook=args.use_webhook, once=args.once, as_json=args.json, save=args.save, db_path=args.db_path)
     elif args.command == "recent-opportunities":
