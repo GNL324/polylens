@@ -9,6 +9,7 @@ from typing import Any
 from src.adapters.kalshi import KalshiClient
 from src.adapters.odds_api import MissingOddsAPIKey, OddsAPIClient
 from src.adapters.polymarket import PolymarketClient
+from src.alerts.notifier import MissingWebhookURLError, build_notifier
 from src.analysis.arb_pricing import enrich_candidates_with_pricing, enrich_sportsbook_candidates_with_pricing
 from src.analysis.arb_signals import detect_signals
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
@@ -21,6 +22,7 @@ from src.analysis.pnl import summarize_pnl
 from src.analysis.sportsbook_matching import match_sportsbook_lines
 from src.analysis.timing import summarize_timing
 from src.analysis.volume import summarize_volume
+from src.analysis.watch_mode import watch_live_arbitrage
 from src.reports.wallet_report import WalletReport
 
 
@@ -354,6 +356,48 @@ def scan_live_arb(
     return result
 
 
+def watch_live_arb(
+    interval_seconds: int = 60,
+    min_edge: float | None = None,
+    min_score: float | None = None,
+    max_close_hours: float | None = None,
+    sport_key: str | None = None,
+    keyword: str | None = None,
+    category: str | None = None,
+    bookmaker: str | None = None,
+    region: str = "us",
+    use_webhook: bool = False,
+    once: bool = False,
+    as_json: bool = False,
+) -> dict[str, Any]:
+    notifier = build_notifier(use_webhook=use_webhook)
+    result = watch_live_arbitrage(
+        notifier,
+        interval_seconds=interval_seconds,
+        once=once,
+        as_json=as_json,
+        sport_key=sport_key,
+        keyword=keyword,
+        category=category,
+        bookmaker=bookmaker,
+        region=region,
+        min_edge=min_edge,
+        min_score=min_score,
+        max_close_hours=max_close_hours,
+        include_low_confidence=False,
+    )
+    if not as_json:
+        print("Polylens Live Arbitrage Watch")
+        print("=" * 31)
+        print(f"Iterations: {result.get('iterations')}")
+        print(f"Alerts sent: {result.get('alerts_sent')}")
+        print(f"Duplicates suppressed: {result.get('duplicates_suppressed')}")
+        scan = result.get("scan", {})
+        print(f"Candidates after filtering: {scan.get('candidates_after_filtering', 0)}")
+        print(f"Filter reasons: {scan.get('filter_reasons', {})}")
+    return result
+
+
 def main() -> None:
     setup_logging()
     parser = argparse.ArgumentParser(prog="polylens")
@@ -412,6 +456,20 @@ def main() -> None:
     scan_live_parser.add_argument("--max-close-hours", type=float)
     scan_live_parser.add_argument("--include-low-confidence", action="store_true")
 
+    watch_parser = sub.add_parser("watch-live-arb")
+    watch_parser.add_argument("--interval", type=int, default=60, dest="interval_seconds")
+    watch_parser.add_argument("--min-edge", type=float)
+    watch_parser.add_argument("--min-score", type=float)
+    watch_parser.add_argument("--max-close-hours", type=float)
+    watch_parser.add_argument("--sport", dest="sport_key")
+    watch_parser.add_argument("--keyword")
+    watch_parser.add_argument("--category")
+    watch_parser.add_argument("--bookmaker")
+    watch_parser.add_argument("--region", default="us")
+    watch_parser.add_argument("--webhook", action="store_true", dest="use_webhook")
+    watch_parser.add_argument("--once", action="store_true")
+    watch_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -434,10 +492,12 @@ def main() -> None:
         scan_sportsbook_arb(args.wallet, args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
     elif args.command == "scan-live-arb":
         scan_live_arb(sport_key=args.sport_key, keyword=args.keyword, category=args.category, limit=args.limit, region=args.region, bookmaker=args.bookmaker, as_json=args.json, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, include_low_confidence=args.include_low_confidence)
+    elif args.command == "watch-live-arb":
+        watch_live_arb(interval_seconds=args.interval_seconds, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, sport_key=args.sport_key, keyword=args.keyword, category=args.category, bookmaker=args.bookmaker, region=args.region, use_webhook=args.use_webhook, once=args.once, as_json=args.json)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except MissingOddsAPIKey as exc:
+    except (MissingOddsAPIKey, MissingWebhookURLError) as exc:
         raise SystemExit(str(exc)) from exc
