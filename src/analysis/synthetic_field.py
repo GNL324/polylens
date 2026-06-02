@@ -21,6 +21,7 @@ def dedupe_best_outcomes(outcomes: list[dict[str, Any]]) -> tuple[list[dict[str,
             "implied_probability": _num(best.get("implied_probability") or best.get("price")),
         }
     diagnostics = {
+        "futures_retained_outcomes": len([row for row in outcomes if row.get("team")]),
         "unique_outcomes": len(grouped),
         "duplicate_outcomes_removed": max(0, len([row for row in outcomes if row.get("team")]) - len(grouped)),
         "books_considered": sorted(books),

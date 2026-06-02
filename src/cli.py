@@ -14,6 +14,7 @@ from src.alerts.notifier import MissingWebhookURLError, build_notifier
 from src.analysis.arb_pricing import enrich_candidates_with_pricing, enrich_sportsbook_candidates_with_pricing
 from src.analysis.arb_signals import detect_signals
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
+from src.analysis.futures_inventory import summarize_futures_inventory
 from src.analysis.hedge_leg_discovery import explain_hedge_search
 from src.analysis.hedged_arbitrage import classify_arbitrage_candidates
 from src.analysis.kalshi_inventory_filter import filter_kalshi_inventory
@@ -282,8 +283,10 @@ def fetch_futures(sport_key: str, bookmaker: str | None = None, region: str = "u
         elif not quiet:
             print(result["reason"])
         return result
-    normalized = normalize_futures_events(payload.get("events") or [])
-    result = {"supported": True, "reason": None, "sport_key": sport_key, "futures_sport_key": payload.get("futures_sport_key"), "futures": normalized}
+    raw_events = payload.get("events") or []
+    normalized = normalize_futures_events(raw_events)
+    inventory = summarize_futures_inventory(raw_events, normalized, normalized)
+    result = {"supported": True, "reason": None, "sport_key": sport_key, "futures_sport_key": payload.get("futures_sport_key"), "futures": normalized, "inventory": inventory, "futures_raw_outcomes": inventory["futures_raw_outcomes"], "futures_normalized_outcomes": inventory["futures_normalized_outcomes"], "futures_retained_outcomes": inventory["futures_retained_outcomes"]}
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     elif not quiet:
@@ -309,6 +312,34 @@ def scan_sportsbook_arb(wallet: str, sport_key: str, bookmaker: str | None = Non
             print(f"- {candidate.get('confidence_band')} {candidate.get('polymarket_title')} <> {candidate.get('sportsbook')} {candidate.get('sportsbook_team')} ({edge_text})")
             print(f"  {candidate.get('pricing_reason') or candidate.get('reason')}")
     return priced
+
+
+def debug_futures_inventory(sport_key: str, bookmaker: str | None = None, as_json: bool = False) -> dict[str, Any]:
+    client = OddsAPIClient(raw_dir="data/raw")
+    payload = client.get_futures(sport_key, bookmakers=bookmaker)
+    raw_events = payload.get("events") or [] if payload.get("supported") else []
+    normalized = normalize_futures_events(raw_events)
+    summary = summarize_futures_inventory(raw_events, normalized, normalized)
+    summary.update({
+        "supported": payload.get("supported"),
+        "reason": payload.get("reason"),
+        "requested_sport_key": sport_key,
+        "futures_sport_key": payload.get("futures_sport_key"),
+        "bookmaker": bookmaker,
+    })
+    if as_json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+    else:
+        print("Polylens Futures Inventory Debug")
+        print("=" * 32)
+        print(f"Requested sport: {sport_key}")
+        print(f"Futures sport: {summary.get('futures_sport_key')}")
+        print(f"Raw outcomes: {summary['futures_raw_outcomes']}")
+        print(f"Normalized outcomes: {summary['futures_normalized_outcomes']}")
+        print(f"Retained outcomes: {summary['futures_retained_outcomes']}")
+        for market in summary["markets"]:
+            print(f"- {market.get('bookmaker')} {market.get('market_key')} outcomes={market.get('outcome_count')}: {', '.join(str(name) for name in market.get('outcome_names', []))}")
+    return summary
 
 
 def debug_synthetic_field_cli(sport_key: str | None = None, selected_team: str | None = None, as_json: bool = False) -> dict[str, Any]:
@@ -781,6 +812,11 @@ def main() -> None:
     sportsbook_parser.add_argument("--region", default="us")
     sportsbook_parser.add_argument("--json", action="store_true")
 
+    debug_futures_parser = sub.add_parser("debug-futures-inventory")
+    debug_futures_parser.add_argument("--sport", dest="sport_key", required=True)
+    debug_futures_parser.add_argument("--bookmaker")
+    debug_futures_parser.add_argument("--json", action="store_true")
+
     debug_field_parser = sub.add_parser("debug-synthetic-field")
     debug_field_parser.add_argument("--sport", dest="sport_key", required=True)
     debug_field_parser.add_argument("--team", dest="selected_team", required=True)
@@ -903,6 +939,8 @@ def main() -> None:
         scan_multibook_arb(sport_key=args.sport_key, keyword=args.keyword, limit=args.limit, bankroll=args.bankroll, min_guaranteed_roi=args.min_guaranteed_roi, as_json=args.json)
     elif args.command == "debug-synthetic-field":
         debug_synthetic_field_cli(sport_key=args.sport_key, selected_team=args.selected_team, as_json=args.json)
+    elif args.command == "debug-futures-inventory":
+        debug_futures_inventory(sport_key=args.sport_key, bookmaker=args.bookmaker, as_json=args.json)
     elif args.command == "find-hedges":
         find_hedges(keyword=args.keyword, sport_key=args.sport_key, limit=args.limit, as_json=args.json)
     elif args.command == "explain-live-matches":
