@@ -26,6 +26,8 @@ from src.analysis.markets import summarize_markets
 from src.analysis.match_diagnostics import explain_market_matches
 from src.analysis.odds_normalization import normalize_futures_events, normalize_odds_events
 from src.analysis.pnl import summarize_pnl
+from src.analysis.prop_arbitrage import scan_prop_arbitrage
+from src.analysis.prop_normalization import normalize_player_props
 from src.analysis.sportsbook_matching import match_sportsbook_lines
 from src.analysis.synthetic_field import debug_synthetic_field as build_debug_synthetic_field
 from src.analysis.timing import summarize_timing
@@ -271,6 +273,34 @@ def fetch_odds(sport_key: str, bookmaker: str | None = None, region: str = "us",
         for line in normalized[:20]:
             print(f"- {line.get('bookmaker_name')} {line.get('league')} {line.get('market_type')}: {line.get('team')} {line.get('odds')} p={line.get('implied_probability')}")
     return normalized
+
+
+def fetch_player_props(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, as_json: bool = False, quiet: bool = False) -> list[dict[str, Any]]:
+    client = OddsAPIClient(raw_dir="data/raw")
+    events = client.get_player_props(sport_key, event_id=event_id, regions=region, markets=markets, bookmakers=bookmaker)
+    normalized = normalize_player_props(events)
+    if as_json:
+        print(json.dumps(normalized, indent=2, sort_keys=True))
+    elif not quiet:
+        print(f"Fetched player props: {len(normalized)}")
+        for row in normalized[:20]:
+            print(f"- {row.get('player')} {row.get('market_type')} {row.get('side')} {row.get('line')} {row.get('bookmaker')} odds={row.get('odds')}")
+    return normalized
+
+
+def scan_prop_arb(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, bankroll: float | None = None, min_guaranteed_roi: float | None = None, as_json: bool = False) -> dict[str, Any]:
+    props = fetch_player_props(sport_key, event_id=event_id, bookmaker=bookmaker, region=region, markets=markets, quiet=True)
+    result = scan_prop_arbitrage(props, bankroll=bankroll, min_guaranteed_roi=min_guaranteed_roi)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print("Polylens Player Prop Arbitrage")
+        print("=" * 31)
+        print(f"Props fetched: {result['props_fetched']}")
+        print(f"Matched prop pairs: {result['matched_prop_pairs']}")
+        print(f"True arb candidates: {len(result['prop_arbitrage_candidates'])}")
+        print(f"Rejection reasons: {result['rejection_reasons']}")
+    return result
 
 
 def fetch_futures(sport_key: str, bookmaker: str | None = None, region: str = "us", as_json: bool = False, quiet: bool = False) -> dict[str, Any]:
@@ -799,6 +829,24 @@ def main() -> None:
     odds_parser.add_argument("--markets", default="h2h,spreads,totals")
     odds_parser.add_argument("--json", action="store_true")
 
+    props_parser = sub.add_parser("fetch-player-props")
+    props_parser.add_argument("--sport", required=True, dest="sport_key")
+    props_parser.add_argument("--event-id")
+    props_parser.add_argument("--bookmaker")
+    props_parser.add_argument("--region", default="us")
+    props_parser.add_argument("--markets")
+    props_parser.add_argument("--json", action="store_true")
+
+    prop_arb_parser = sub.add_parser("scan-prop-arb")
+    prop_arb_parser.add_argument("--sport", required=True, dest="sport_key")
+    prop_arb_parser.add_argument("--event-id")
+    prop_arb_parser.add_argument("--bookmaker")
+    prop_arb_parser.add_argument("--region", default="us")
+    prop_arb_parser.add_argument("--markets")
+    prop_arb_parser.add_argument("--bankroll", type=float)
+    prop_arb_parser.add_argument("--min-guaranteed-roi", type=float)
+    prop_arb_parser.add_argument("--json", action="store_true")
+
     futures_parser = sub.add_parser("fetch-futures")
     futures_parser.add_argument("--sport", required=True, dest="sport_key")
     futures_parser.add_argument("--bookmaker")
@@ -927,6 +975,10 @@ def main() -> None:
         list_sportsbooks(as_json=args.json)
     elif args.command == "fetch-odds":
         fetch_odds(args.sport_key, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
+    elif args.command == "fetch-player-props":
+        fetch_player_props(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
+    elif args.command == "scan-prop-arb":
+        scan_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, bankroll=args.bankroll, min_guaranteed_roi=args.min_guaranteed_roi, as_json=args.json)
     elif args.command == "fetch-futures":
         fetch_futures(args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
     elif args.command == "scan-sportsbook-arb":

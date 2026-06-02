@@ -12,6 +12,20 @@ from urllib.request import Request, urlopen
 
 LOGGER = logging.getLogger(__name__)
 
+PLAYER_PROP_MARKETS = (
+    "player_points",
+    "player_rebounds",
+    "player_assists",
+    "player_threes",
+    "player_blocks",
+    "player_steals",
+    "player_turnovers",
+    "player_points_rebounds_assists",
+    "player_points_rebounds",
+    "player_points_assists",
+    "player_rebounds_assists",
+)
+
 
 class OddsAPIError(RuntimeError):
     pass
@@ -57,6 +71,25 @@ class OddsAPIClient:
         payload = self._get_json(f"sports/{sport_key}/odds", params, raw_key=f"odds_{sport_key}")
         return payload if isinstance(payload, list) else []
 
+
+    def get_player_props(
+        self,
+        sport_key: str,
+        event_id: str | None = None,
+        regions: str = "us",
+        markets: str | None = None,
+        bookmakers: str | None = None,
+        odds_format: str = "american",
+    ) -> list[dict[str, Any]]:
+        if not sport_key:
+            raise ValueError("sport_key is required")
+        market_list = markets or ",".join(PLAYER_PROP_MARKETS)
+        endpoint = f"sports/{sport_key}/events/{event_id}/odds" if event_id else f"sports/{sport_key}/odds"
+        params: dict[str, Any] = {"regions": regions, "markets": market_list, "oddsFormat": odds_format}
+        if bookmakers:
+            params["bookmakers"] = bookmakers
+        payload = self._get_json(endpoint, params, raw_key=f"player_props_{sport_key}_{event_id or 'all'}")
+        return payload if isinstance(payload, list) else ([payload] if isinstance(payload, dict) else [])
 
     def get_futures(
         self,
