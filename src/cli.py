@@ -7,14 +7,17 @@ from pathlib import Path
 from typing import Any
 
 from src.adapters.kalshi import KalshiClient
+from src.adapters.odds_api import MissingOddsAPIKey, OddsAPIClient
 from src.adapters.polymarket import PolymarketClient
-from src.analysis.arb_pricing import enrich_candidates_with_pricing
+from src.analysis.arb_pricing import enrich_candidates_with_pricing, enrich_sportsbook_candidates_with_pricing
 from src.analysis.arb_signals import detect_signals
 from src.analysis.cross_market import compare_wallet_markets_to_kalshi
 from src.analysis.market_inventory import summarize_market_inventory
 from src.analysis.markets import summarize_markets
 from src.analysis.match_diagnostics import explain_market_matches
+from src.analysis.odds_normalization import normalize_odds_events
 from src.analysis.pnl import summarize_pnl
+from src.analysis.sportsbook_matching import match_sportsbook_lines
 from src.analysis.timing import summarize_timing
 from src.analysis.volume import summarize_volume
 from src.reports.wallet_report import WalletReport
@@ -227,6 +230,48 @@ def market_inventory(wallet: str, include_closed: bool = False, as_json: bool = 
     return inventory
 
 
+def list_sportsbooks(as_json: bool = False) -> list[dict[str, Any]]:
+    client = OddsAPIClient(raw_dir="data/raw")
+    sports = client.list_sports()
+    if as_json:
+        print(json.dumps(sports, indent=2, sort_keys=True))
+    else:
+        for sport in sports:
+            print(f"{sport.get('key')} - {sport.get('title')} ({sport.get('group')})")
+    return sports
+
+
+def fetch_odds(sport_key: str, bookmaker: str | None = None, region: str = "us", markets: str = "h2h,spreads,totals", as_json: bool = False, quiet: bool = False) -> list[dict[str, Any]]:
+    client = OddsAPIClient(raw_dir="data/raw")
+    events = client.get_odds(sport_key, regions=region, markets=markets, bookmakers=bookmaker)
+    normalized = normalize_odds_events(events)
+    if as_json:
+        print(json.dumps(normalized, indent=2, sort_keys=True))
+    elif not quiet:
+        print(f"Fetched sportsbook lines: {len(normalized)}")
+        for line in normalized[:20]:
+            print(f"- {line.get('bookmaker_name')} {line.get('league')} {line.get('market_type')}: {line.get('team')} {line.get('odds')} p={line.get('implied_probability')}")
+    return normalized
+
+
+def scan_sportsbook_arb(wallet: str, sport_key: str, bookmaker: str | None = None, region: str = "us", as_json: bool = False) -> list[dict[str, Any]]:
+    poly_client = PolymarketClient(raw_dir="data/raw")
+    trades = poly_client.get_user_trades(wallet)
+    odds_lines = fetch_odds(sport_key, bookmaker=bookmaker, region=region, markets="h2h,spreads,totals,outrights", quiet=True)
+    candidates = match_sportsbook_lines(trades, odds_lines)
+    priced = enrich_sportsbook_candidates_with_pricing(candidates, trades)
+    if as_json:
+        print(json.dumps(priced, indent=2, sort_keys=True))
+    else:
+        print(f"Sportsbook arbitrage candidates: {len(priced)}")
+        for candidate in priced[:20]:
+            edge = candidate.get("estimated_edge")
+            edge_text = "insufficient pricing data" if edge is None else f"edge={edge:.4f}"
+            print(f"- {candidate.get('confidence_band')} {candidate.get('polymarket_title')} <> {candidate.get('sportsbook')} {candidate.get('sportsbook_team')} ({edge_text})")
+            print(f"  {candidate.get('pricing_reason') or candidate.get('reason')}")
+    return priced
+
+
 def main() -> None:
     setup_logging()
     parser = argparse.ArgumentParser(prog="polylens")
@@ -255,6 +300,23 @@ def main() -> None:
     inventory_parser.add_argument("--include-closed", action="store_true", help="include closed/settled Kalshi markets when the API supports them")
     inventory_parser.add_argument("--json", action="store_true", help="emit market inventory as JSON")
 
+    sports_parser = sub.add_parser("list-sportsbooks")
+    sports_parser.add_argument("--json", action="store_true", help="emit sports list as JSON")
+
+    odds_parser = sub.add_parser("fetch-odds")
+    odds_parser.add_argument("--sport", required=True, dest="sport_key")
+    odds_parser.add_argument("--bookmaker")
+    odds_parser.add_argument("--region", default="us")
+    odds_parser.add_argument("--markets", default="h2h,spreads,totals")
+    odds_parser.add_argument("--json", action="store_true")
+
+    sportsbook_parser = sub.add_parser("scan-sportsbook-arb")
+    sportsbook_parser.add_argument("wallet")
+    sportsbook_parser.add_argument("--sport", required=True, dest="sport_key")
+    sportsbook_parser.add_argument("--bookmaker")
+    sportsbook_parser.add_argument("--region", default="us")
+    sportsbook_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -269,7 +331,16 @@ def main() -> None:
         explain_matches(args.wallet, as_json=args.json)
     elif args.command == "market-inventory":
         market_inventory(args.wallet, include_closed=args.include_closed, as_json=args.json)
+    elif args.command == "list-sportsbooks":
+        list_sportsbooks(as_json=args.json)
+    elif args.command == "fetch-odds":
+        fetch_odds(args.sport_key, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
+    elif args.command == "scan-sportsbook-arb":
+        scan_sportsbook_arb(args.wallet, args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except MissingOddsAPIKey as exc:
+        raise SystemExit(str(exc)) from exc

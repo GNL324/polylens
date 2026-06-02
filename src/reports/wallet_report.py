@@ -28,6 +28,7 @@ class WalletReport:
     raw_counts: dict[str, int]
     cross_platform_arbitrage_candidates: list[dict[str, Any]] = field(default_factory=list)
     price_aware_arbitrage_candidates: list[dict[str, Any]] = field(default_factory=list)
+    sportsbook_arbitrage_candidates: list[dict[str, Any]] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:

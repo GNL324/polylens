@@ -157,3 +157,37 @@ def _spread(left: float | None, right: float | None) -> float | None:
     if left is None or right is None:
         return None
     return round(abs(left - right), 4)
+
+
+
+def enrich_sportsbook_candidates_with_pricing(candidates: list[dict[str, Any]], trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched = [price_sportsbook_candidate(candidate, trades) for candidate in candidates]
+    enriched.sort(key=lambda item: (item.get("theoretical_sportsbook_arbitrage_exists") is True, item.get("estimated_edge") or -1), reverse=True)
+    return enriched
+
+
+def price_sportsbook_candidate(candidate: dict[str, Any], trades: list[dict[str, Any]]) -> dict[str, Any]:
+    pm = summarize_polymarket_market_price(trades, str(candidate.get("polymarket_id")))
+    pm_yes = pm.get("implied_yes_price")
+    sportsbook_probability = candidate.get("sportsbook_implied_probability")
+    result = dict(candidate)
+    result.update({
+        "polymarket_implied_yes_price": pm_yes,
+        "sportsbook_implied_probability": sportsbook_probability,
+        "spread": _spread(pm_yes, sportsbook_probability),
+        "estimated_edge": None,
+        "theoretical_sportsbook_arbitrage_exists": False,
+        "pricing_status": "insufficient pricing data",
+        "pricing_reason": "insufficient pricing data",
+    })
+    if pm_yes is None or sportsbook_probability is None:
+        return result
+    edge = round(float(sportsbook_probability) - float(pm_yes), 4)
+    result["estimated_edge"] = edge
+    result["pricing_status"] = "priced"
+    if edge > 0:
+        result["theoretical_sportsbook_arbitrage_exists"] = True
+        result["pricing_reason"] = "Polymarket implied YES price is below sportsbook implied probability before fees/slippage"
+    else:
+        result["pricing_reason"] = "no theoretical sportsbook edge at indicative prices"
+    return result
