@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import time
 from typing import Any
@@ -8,7 +7,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from src.trading.paper import PaperPortfolio
-from src.trading.risk import RiskConfig, RiskDecision, RiskState, evaluate_order, live_trading_enabled
+from src.trading.risk import RiskConfig, RiskState, evaluate_order, live_trading_enabled, normalize_order_signal, signal_key
 
 
 class KalshiExecutor:
@@ -18,26 +17,26 @@ class KalshiExecutor:
         self.portfolio = portfolio or PaperPortfolio()
 
     def submit_order(self, ticker: str, side: str, price: float, count: int) -> dict[str, Any]:
-        signal = {"ticker": ticker, "side": side.lower(), "price": float(price), "count": int(count)}
+        raw_signal = {"ticker": ticker, "side": side, "price": price, "count": count}
+        try:
+            signal = normalize_order_signal(raw_signal)
+        except ValueError as exc:
+            return {"accepted": False, "mode": "rejected", "reason": str(exc), "signal": raw_signal}
         decision = evaluate_order(signal, self.config, self.state)
         if not decision.accepted:
             return {"accepted": False, "mode": "rejected", "reason": decision.reason, "signal": signal}
         if live_trading_enabled(self.config):
             return self._submit_live_order(signal)
-        order = self.portfolio.place_order(ticker, side, price, count)
-        self.state.open_exposure += float(price) * int(count)
-        self.state.signal_timestamps[self._key(signal)] = time.time()
+        order = self.portfolio.place_order(signal["ticker"], signal["side"], signal["price"], signal["count"])
+        self.state.open_exposure += signal["price"] * signal["count"]
+        self.state.signal_timestamps[signal_key(signal)] = time.time()
         result = {"accepted": True, "mode": "paper", "order": order.to_dict(), "risk": {"open_exposure": self.state.open_exposure}}
-        _telegram_notify(f"Kalshi paper order: {ticker} {side} {count} @ {price}")
+        _telegram_notify(f"Kalshi paper order: {signal['ticker']} {signal['side']} {signal['count']} @ {signal['price']}")
         return result
 
     def _submit_live_order(self, signal: dict[str, Any]) -> dict[str, Any]:
         # Intentional safety gate: real Kalshi order placement is not implemented in this release.
         return {"accepted": False, "mode": "live_disabled", "reason": "live order placement is not implemented", "signal": signal}
-
-    @staticmethod
-    def _key(signal: dict[str, Any]) -> str:
-        return "|".join(str(signal.get(field) or "") for field in ("ticker", "side", "price", "count"))
 
 
 def _telegram_notify(message: str) -> None:
