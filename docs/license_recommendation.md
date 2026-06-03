@@ -1,24 +1,35 @@
-# License Recommendation
+# License Selection
 
-Polylens has not selected a license yet. Do not publish publicly without one.
+Polylens uses the MIT License.
 
-## Recommended Default: Apache License 2.0
+## Rationale
 
-Apache-2.0 is a strong default for developer tooling and analytics software because it:
+MIT is a good fit for Polylens because it is simple, widely understood, permissive, and friendly to both individual contributors and organizations evaluating OSS tooling. It keeps adoption friction low for an analytics-first project while still requiring that the copyright and license notice travel with copies of the software.
 
+## Tradeoffs Considered
+
+### MIT
+
+Pros:
+
+- Very easy to understand.
 - Allows commercial and non-commercial use.
-- Includes an explicit patent grant.
-- Requires preservation of license notices.
-- Is familiar to companies and OSS programs.
+- Maximizes adoption and experimentation.
+- Common across Python CLI and analytics projects.
 
-## Alternative: MIT
+Cons:
 
-MIT is simpler and very permissive. It is easy for contributors and companies to understand, but it lacks Apache-2.0's explicit patent language.
+- Does not include Apache-2.0's explicit patent grant.
+- Does not require derivative services to publish source code.
 
-## Alternative: AGPL-3.0
+### Apache License 2.0
 
-AGPL can protect against closed hosted derivatives, but it is less business-friendly and may discourage adoption or contributions.
+Apache-2.0 was considered because of its explicit patent grant and enterprise familiarity. It remains a strong alternative, but MIT was chosen for simplicity and lower contribution friction.
 
-## Suggested Decision
+### AGPL-3.0
 
-Use Apache-2.0 if the goal is broad adoption, compatibility with commercial users, and a professional OSS posture. Use MIT if maximum simplicity is more important than patent language. Use AGPL only if preserving network-service openness is a core project goal.
+AGPL-3.0 was considered for stronger copyleft protections around hosted services. It was not selected because it may discourage adoption and is heavier than needed for this stage of the project.
+
+## Final Decision
+
+Selected license: MIT License.

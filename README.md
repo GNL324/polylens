@@ -83,4 +83,4 @@ Do not commit API keys, Telegram credentials, webhook URLs, private wallet notes
 
 ## License
 
-A license has not been selected yet. See [docs/license_recommendation.md](docs/license_recommendation.md) for recommended options and tradeoffs.
+Polylens is released under the MIT License. See [LICENSE](LICENSE).
