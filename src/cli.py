@@ -38,6 +38,9 @@ from src.analysis.watch_mode import watch_live_arbitrage
 from src.reports.wallet_report import WalletReport
 from src.storage.opportunity_store import OpportunityStore
 from src.storage.opportunities import load_recent_alerts as load_prop_recent_alerts, load_recent_opportunities as load_prop_recent_opportunities, opportunity_key as prop_opportunity_key, opportunity_stats as prop_opportunity_stats, save_alert as save_prop_alert, save_opportunity as save_prop_opportunity
+from src.trading.executor import KalshiExecutor
+from src.trading.kalshi_strategy import scan_markets_for_signals
+from src.trading.risk import RiskConfig
 from src.notifications.telegram import send_telegram_alert
 
 
@@ -259,6 +262,66 @@ def market_inventory(wallet: str, include_closed: bool = False, as_json: bool = 
     for reason in inventory["top_reasons_no_matches_available"]:
         print(f"- {reason}")
     return inventory
+
+
+def kalshi_markets_cli(limit: int = 20, as_json: bool = False) -> list[dict[str, Any]]:
+    markets = KalshiClient(raw_dir="data/raw").get_markets(status="open", limit=min(max(limit, 1), 1000), max_pages=1)
+    rows = markets[:limit]
+    if as_json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+    else:
+        for market in rows:
+            ident = market.get("market_identity") or {}
+            pricing = market.get("pricing") or {}
+            print(f"{ident.get('ticker') or market.get('ticker')} {ident.get('title') or market.get('title')} yes_ask={pricing.get('yes_ask')}")
+    return rows
+
+
+def kalshi_orderbook_cli(ticker: str, as_json: bool = False) -> dict[str, Any]:
+    orderbook = KalshiClient(raw_dir="data/raw").get_orderbook(ticker)
+    if as_json:
+        print(json.dumps(orderbook, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(orderbook, indent=2, sort_keys=True))
+    return orderbook
+
+
+def kalshi_paper_scan(limit: int = 20, max_price: float = 0.5, as_json: bool = False) -> list[dict[str, Any]]:
+    markets = KalshiClient(raw_dir="data/raw").get_markets(status="open", limit=min(max(limit, 1), 1000), max_pages=1)
+    signals = scan_markets_for_signals(markets, max_price=max_price, limit=limit)
+    if as_json:
+        print(json.dumps(signals, indent=2, sort_keys=True))
+    else:
+        for signal in signals:
+            print(f"{signal['ticker']} {signal['side']} {signal['count']} @ {signal['price']} - {signal['reason']}")
+    return signals
+
+
+def kalshi_paper_trade(ticker: str, side: str, price: float, count: int, as_json: bool = False) -> dict[str, Any]:
+    result = KalshiExecutor(RiskConfig.from_env()).submit_order(ticker, side, price, count)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def kalshi_status(as_json: bool = False) -> dict[str, Any]:
+    config = RiskConfig.from_env()
+    status = {
+        "live_trading": config.live_trading,
+        "dry_run": config.dry_run,
+        "paper_mode": not (config.live_trading and not config.dry_run),
+        "max_trade_dollars": config.max_trade_dollars,
+        "max_open_exposure": config.max_open_exposure,
+        "max_daily_loss": config.max_daily_loss,
+        "duplicate_signal_cooldown_seconds": config.duplicate_signal_cooldown_seconds,
+    }
+    if as_json:
+        print(json.dumps(status, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(status, indent=2, sort_keys=True))
+    return status
 
 
 def list_sportsbooks(as_json: bool = False) -> list[dict[str, Any]]:
@@ -938,6 +1001,29 @@ def main() -> None:
     inventory_parser.add_argument("--include-closed", action="store_true", help="include closed/settled Kalshi markets when the API supports them")
     inventory_parser.add_argument("--json", action="store_true", help="emit market inventory as JSON")
 
+    kalshi_markets_parser = sub.add_parser("kalshi-markets")
+    kalshi_markets_parser.add_argument("--limit", type=int, default=20)
+    kalshi_markets_parser.add_argument("--json", action="store_true")
+
+    kalshi_orderbook_parser = sub.add_parser("kalshi-orderbook")
+    kalshi_orderbook_parser.add_argument("--ticker", required=True)
+    kalshi_orderbook_parser.add_argument("--json", action="store_true")
+
+    kalshi_scan_parser = sub.add_parser("kalshi-paper-scan")
+    kalshi_scan_parser.add_argument("--limit", type=int, default=20)
+    kalshi_scan_parser.add_argument("--max-price", type=float, default=0.5)
+    kalshi_scan_parser.add_argument("--json", action="store_true")
+
+    kalshi_trade_parser = sub.add_parser("kalshi-paper-trade")
+    kalshi_trade_parser.add_argument("--ticker", required=True)
+    kalshi_trade_parser.add_argument("--side", required=True, choices=["yes", "no"])
+    kalshi_trade_parser.add_argument("--price", required=True, type=float)
+    kalshi_trade_parser.add_argument("--count", required=True, type=int)
+    kalshi_trade_parser.add_argument("--json", action="store_true")
+
+    kalshi_status_parser = sub.add_parser("kalshi-status")
+    kalshi_status_parser.add_argument("--json", action="store_true")
+
     sports_parser = sub.add_parser("list-sportsbooks")
     sports_parser.add_argument("--json", action="store_true", help="emit sports list as JSON")
 
@@ -1114,6 +1200,16 @@ def main() -> None:
         explain_matches(args.wallet, as_json=args.json, save=args.save, db_path=args.db_path)
     elif args.command == "market-inventory":
         market_inventory(args.wallet, include_closed=args.include_closed, as_json=args.json)
+    elif args.command == "kalshi-markets":
+        kalshi_markets_cli(limit=args.limit, as_json=args.json)
+    elif args.command == "kalshi-orderbook":
+        kalshi_orderbook_cli(args.ticker, as_json=args.json)
+    elif args.command == "kalshi-paper-scan":
+        kalshi_paper_scan(limit=args.limit, max_price=args.max_price, as_json=args.json)
+    elif args.command == "kalshi-paper-trade":
+        kalshi_paper_trade(args.ticker, args.side, args.price, args.count, as_json=args.json)
+    elif args.command == "kalshi-status":
+        kalshi_status(as_json=args.json)
     elif args.command == "list-sportsbooks":
         list_sportsbooks(as_json=args.json)
     elif args.command == "fetch-odds":

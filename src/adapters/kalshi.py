@@ -99,6 +99,12 @@ class KalshiClient:
         }
         return preserved
 
+    def get_orderbook(self, ticker: str) -> dict[str, Any]:
+        if not ticker:
+            raise ValueError("ticker is required")
+        payload = self._get_json(f"markets/{ticker}/orderbook", {}, page=None)
+        return payload if isinstance(payload, dict) else {}
+
     def _get_json(self, endpoint: str, params: dict[str, Any], page: int | None = None) -> Any:
         query = urlencode({key: value for key, value in params.items() if value is not None})
         url = f"{self.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
