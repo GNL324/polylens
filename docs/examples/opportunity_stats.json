@@ -1,0 +1,9 @@
+{
+  "total_opportunities": 42,
+  "average_roi": 0.0142,
+  "best_roi": 0.0375,
+  "most_common_bookmaker_pair": "BetRivers / Bovada",
+  "opportunities_by_sport": {
+    "basketball_nba": 42
+  }
+}

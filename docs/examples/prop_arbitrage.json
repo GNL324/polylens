@@ -1,0 +1,19 @@
+{
+  "props_fetched": 374,
+  "matched_prop_pairs": 505,
+  "candidates_before_filter": 3,
+  "candidates_after_filter": 1,
+  "prop_arbitrage_candidates": [
+    {
+      "player": "Mitchell Robinson",
+      "prop_type": "player_points",
+      "line": 2.5,
+      "over_book": "BetRivers",
+      "over_odds": -157,
+      "under_book": "Bovada",
+      "under_odds": 170,
+      "guaranteed_roi": 0.0191,
+      "guaranteed_profit_amount": 19.06
+    }
+  ]
+}

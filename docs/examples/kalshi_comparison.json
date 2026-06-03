@@ -1,0 +1,11 @@
+{
+  "cross_platform_arbitrage_candidates": [
+    {
+      "polymarket_title": "Will BTC be above $100,000 on June 30?",
+      "kalshi_title": "Bitcoin above $100,000",
+      "confidence_band": "medium",
+      "reason": "same asset and compatible target"
+    }
+  ],
+  "price_aware_arbitrage_candidates": []
+}

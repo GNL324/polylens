@@ -1,0 +1,15 @@
+{
+  "wallet_address": "0x0000000000000000000000000000000000000000",
+  "username": "sanitized_user",
+  "trade_count": 128,
+  "volume": 24500.75,
+  "largest_trade": "Will Bitcoin hit $100k by June 30?",
+  "favorite_categories": [
+    {
+      "category": "Crypto",
+      "count": 42
+    }
+  ],
+  "behavior_classification": "Crypto Specialist",
+  "confidence_score": 0.82
+}
