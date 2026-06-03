@@ -64,3 +64,12 @@ Normalized player prop rows intentionally do not retain full Odds API event, boo
 ## Grouped Matching
 
 Prop matching groups rows by sport, league, event, normalized player, market type, and line before comparing sides. Only over/under rows inside the same group are compared, so player, event, and line mismatches are eliminated before pair construction. Diagnostics retain meaningful rejects such as missing opposite side, invalid side, and total implied probability >= 1.
+
+
+## Continuous Prop Scanner
+
+```bash
+python -m src.cli watch-prop-arb --sport basketball_nba --markets player_points --interval 30 --bankroll 1000 --min-roi 0.01
+```
+
+The scanner filters opportunities before output, persists new qualifying opportunities to `data/opportunities.db`, and sends Telegram alerts when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are configured. Duplicate alerts are suppressed for 15 minutes.

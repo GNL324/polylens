@@ -6,7 +6,7 @@ from typing import Any
 from src.analysis.prop_matching import match_prop_pairs_with_metrics
 
 
-def scan_prop_arbitrage(props: list[dict[str, Any]], bankroll: float | None = None, min_guaranteed_roi: float | None = None) -> dict[str, Any]:
+def scan_prop_arbitrage(props: list[dict[str, Any]], bankroll: float | None = None, min_guaranteed_roi: float | None = None, min_profit: float | None = None, scan_duration_seconds: float | None = None, api_calls: int | None = None) -> dict[str, Any]:
     match_result = match_prop_pairs_with_metrics(props)
     pairs = match_result["matches"]
     rejects = match_result["rejects"]
@@ -43,9 +43,14 @@ def scan_prop_arbitrage(props: list[dict[str, Any]], bankroll: float | None = No
         }
         if bankroll is not None:
             arb.update(_stake_size(float(over.get("implied_probability") or 0), float(under.get("implied_probability") or 0), bankroll, total))
+        arb["ranking_score"] = _ranking_score(arb)
         arbs.append(arb)
+    candidates_before = len(arbs)
     if min_guaranteed_roi is not None:
         arbs = [arb for arb in arbs if (arb.get("guaranteed_roi") or 0) >= min_guaranteed_roi]
+    if min_profit is not None:
+        arbs = [arb for arb in arbs if (arb.get("guaranteed_profit_amount") or 0) >= min_profit]
+    candidates_after = len(arbs)
     reasons = Counter(item["rejection_reason"] for item in rejects + pair_rejects)
     return {
         "props_fetched": len(props),
@@ -56,7 +61,12 @@ def scan_prop_arbitrage(props: list[dict[str, Any]], bankroll: float | None = No
         "comparisons_before_grouping": metrics["comparisons_before_grouping"],
         "comparisons_after_grouping": metrics["comparisons_after_grouping"],
         "grouping_reduction_percent": metrics["grouping_reduction_percent"],
-        "prop_arbitrage_candidates": sorted(arbs, key=lambda item: item.get("guaranteed_roi") or 0, reverse=True),
+        "candidates_before_filter": candidates_before,
+        "candidates_after_filter": candidates_after,
+        "scan_duration_seconds": scan_duration_seconds,
+        "arb_candidates": candidates_after,
+        "api_calls": api_calls,
+        "prop_arbitrage_candidates": sorted(arbs, key=lambda item: (item.get("guaranteed_roi") or 0, item.get("guaranteed_profit_amount") or 0, item.get("last_update") or ""), reverse=True),
         "diagnostics": [_compact_match_reject(item) for item in rejects] + pair_rejects,
     }
 
@@ -88,3 +98,10 @@ def _compact_match_reject(item: dict[str, Any]) -> dict[str, Any]:
         "left_side": left.get("side"),
         "right_side": right.get("side"),
     }
+
+
+def _ranking_score(arb: dict[str, Any]) -> float:
+    roi = float(arb.get("guaranteed_roi") or 0)
+    profit = float(arb.get("guaranteed_profit_amount") or 0)
+    freshness = 1.0 if (arb.get("over", {}).get("last_update") or arb.get("under", {}).get("last_update")) else 0.0
+    return round((roi * 1000) + (profit / 100) + freshness, 6)

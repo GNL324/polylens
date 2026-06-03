@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import resource
+import time
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,8 @@ from src.analysis.volume import summarize_volume
 from src.analysis.watch_mode import watch_live_arbitrage
 from src.reports.wallet_report import WalletReport
 from src.storage.opportunity_store import OpportunityStore
+from src.storage.opportunities import load_recent_alerts as load_prop_recent_alerts, load_recent_opportunities as load_prop_recent_opportunities, opportunity_key as prop_opportunity_key, opportunity_stats as prop_opportunity_stats, save_alert as save_prop_alert, save_opportunity as save_prop_opportunity
+from src.notifications.telegram import send_telegram_alert
 
 
 def _memory_mb() -> float:
@@ -338,9 +341,11 @@ def _player_prop_diagnostics(payload: Any, normalized: list[dict[str, Any]]) -> 
     return {"events_discovered": payload.get("events_discovered", 0), "events_scanned": payload.get("events_scanned", 0), "events_failed": payload.get("events_failed", 0), "prop_markets_supported": payload.get("prop_markets_supported", []), "prop_markets_rejected": payload.get("prop_markets_rejected", []), "props_normalized": len(normalized)}
 
 
-def scan_prop_arb(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, bankroll: float | None = None, min_guaranteed_roi: float | None = None, as_json: bool = False) -> dict[str, Any]:
+def scan_prop_arb(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, bankroll: float | None = None, min_guaranteed_roi: float | None = None, min_profit: float | None = None, as_json: bool = False) -> dict[str, Any]:
+    started = time.time()
     props = fetch_player_props(sport_key, event_id=event_id, bookmaker=bookmaker, region=region, markets=markets, quiet=True)
-    result = scan_prop_arbitrage(props, bankroll=bankroll, min_guaranteed_roi=min_guaranteed_roi)
+    duration = round(time.time() - started, 4)
+    result = scan_prop_arbitrage(props, bankroll=bankroll, min_guaranteed_roi=min_guaranteed_roi, min_profit=min_profit, scan_duration_seconds=duration, api_calls=None)
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -351,6 +356,70 @@ def scan_prop_arb(sport_key: str, event_id: str | None = None, bookmaker: str | 
         print(f"True arb candidates: {len(result['prop_arbitrage_candidates'])}")
         print(f"Rejection reasons: {result['rejection_reasons']}")
     return result
+
+
+def watch_prop_arb(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, interval: int = 30, bankroll: float | None = None, min_roi: float | None = None, min_profit: float | None = None, once: bool = False, as_json: bool = False, db_path: str = "data/opportunities.db") -> dict[str, Any]:
+    seen: set[str] = set()
+    iterations = 0
+    alerts_sent = 0
+    last_result: dict[str, Any] = {}
+    while True:
+        iterations += 1
+        result = scan_prop_arb(sport_key, event_id=event_id, bookmaker=bookmaker, region=region, markets=markets, bankroll=bankroll, min_guaranteed_roi=min_roi, min_profit=min_profit, as_json=False)
+        new_items = []
+        for opp in result.get("prop_arbitrage_candidates", []):
+            key = prop_opportunity_key(opp)
+            if key in seen:
+                continue
+            seen.add(key)
+            save_prop_opportunity(opp, db_path=db_path, sport=sport_key)
+            alert = send_telegram_alert(opp, key, bankroll=bankroll)
+            save_prop_alert(key, "telegram", alert.get("status", "unknown"), alert.get("error"), db_path=db_path)
+            if alert.get("sent"):
+                alerts_sent += 1
+            new_items.append(opp)
+        last_result = {"iterations": iterations, "new_opportunities": new_items, "alerts_sent": alerts_sent, "scan": result}
+        if as_json:
+            print(json.dumps(last_result, indent=2, sort_keys=True))
+        else:
+            for opp in new_items:
+                print(f"NEW PROP ARB {opp.get('player')} {opp.get('prop_type')} {opp.get('line')} ROI={opp.get('guaranteed_roi')}")
+        if once:
+            return last_result
+        time.sleep(interval)
+
+
+def recent_prop_opportunities(limit: int = 20, db_path: str = "data/opportunities.db", as_json: bool = False) -> list[dict[str, Any]]:
+    rows = load_prop_recent_opportunities(limit=limit, db_path=db_path)
+    if as_json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+    else:
+        for row in rows:
+            print(f"{row.get('timestamp')} {row.get('player')} {row.get('market_type')} {row.get('line')} ROI={row.get('guaranteed_roi')}")
+    return rows
+
+
+def recent_prop_alerts(limit: int = 20, db_path: str = "data/opportunities.db", as_json: bool = False) -> list[dict[str, Any]]:
+    rows = load_prop_recent_alerts(limit=limit, db_path=db_path)
+    if as_json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+    else:
+        for row in rows:
+            print(f"{row.get('timestamp')} {row.get('destination')} {row.get('status')} {row.get('opportunity_key')}")
+    return rows
+
+
+def prop_stats(db_path: str = "data/opportunities.db", as_json: bool = False) -> dict[str, Any]:
+    stats = prop_opportunity_stats(db_path=db_path)
+    if as_json:
+        print(json.dumps(stats, indent=2, sort_keys=True))
+    else:
+        print(f"Total opportunities: {stats['total_opportunities']}")
+        print(f"Average ROI: {stats['average_roi']}")
+        print(f"Best ROI: {stats['best_roi']}")
+        print(f"Most common bookmaker pair: {stats['most_common_bookmaker_pair']}")
+        print(f"Opportunities by sport: {stats['opportunities_by_sport']}")
+    return stats
 
 
 def fetch_futures(sport_key: str, bookmaker: str | None = None, region: str = "us", as_json: bool = False, quiet: bool = False) -> dict[str, Any]:
@@ -903,7 +972,23 @@ def main() -> None:
     prop_arb_parser.add_argument("--markets")
     prop_arb_parser.add_argument("--bankroll", type=float)
     prop_arb_parser.add_argument("--min-guaranteed-roi", type=float)
+    prop_arb_parser.add_argument("--min-roi", type=float, dest="min_roi")
+    prop_arb_parser.add_argument("--min-profit", type=float)
     prop_arb_parser.add_argument("--json", action="store_true")
+
+    watch_prop_parser = sub.add_parser("watch-prop-arb")
+    watch_prop_parser.add_argument("--sport", required=True, dest="sport_key")
+    watch_prop_parser.add_argument("--event-id")
+    watch_prop_parser.add_argument("--bookmaker")
+    watch_prop_parser.add_argument("--region", default="us")
+    watch_prop_parser.add_argument("--markets")
+    watch_prop_parser.add_argument("--interval", type=int, default=30)
+    watch_prop_parser.add_argument("--bankroll", type=float)
+    watch_prop_parser.add_argument("--min-roi", type=float)
+    watch_prop_parser.add_argument("--min-profit", type=float)
+    watch_prop_parser.add_argument("--once", action="store_true")
+    watch_prop_parser.add_argument("--json", action="store_true")
+    watch_prop_parser.add_argument("--db-path", default="data/opportunities.db")
 
     futures_parser = sub.add_parser("fetch-futures")
     futures_parser.add_argument("--sport", required=True, dest="sport_key")
@@ -1038,7 +1123,9 @@ def main() -> None:
     elif args.command == "debug-player-props":
         debug_player_props(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
     elif args.command == "scan-prop-arb":
-        scan_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, bankroll=args.bankroll, min_guaranteed_roi=args.min_guaranteed_roi, as_json=args.json)
+        scan_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, bankroll=args.bankroll, min_guaranteed_roi=args.min_roi if args.min_roi is not None else args.min_guaranteed_roi, min_profit=args.min_profit, as_json=args.json)
+    elif args.command == "watch-prop-arb":
+        watch_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, interval=args.interval, bankroll=args.bankroll, min_roi=args.min_roi, min_profit=args.min_profit, once=args.once, as_json=args.json, db_path=args.db_path)
     elif args.command == "fetch-futures":
         fetch_futures(args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
     elif args.command == "scan-sportsbook-arb":
@@ -1064,11 +1151,11 @@ def main() -> None:
     elif args.command == "watch-live-arb":
         watch_live_arb(interval_seconds=args.interval_seconds, min_edge=args.min_edge, min_score=args.min_score, max_close_hours=args.max_close_hours, sport_key=args.sport_key, keyword=args.keyword, category=args.category, bookmaker=args.bookmaker, region=args.region, use_webhook=args.use_webhook, once=args.once, as_json=args.json, save=args.save, db_path=args.db_path)
     elif args.command == "recent-opportunities":
-        recent_opportunities(limit=args.limit, db_path=args.db_path, as_json=args.json)
+        recent_prop_opportunities(limit=args.limit, db_path=args.db_path if args.db_path != "data/polylens.db" else "data/opportunities.db", as_json=args.json)
     elif args.command == "recent-alerts":
-        recent_alerts(limit=args.limit, db_path=args.db_path, as_json=args.json)
+        recent_prop_alerts(limit=args.limit, db_path=args.db_path if args.db_path != "data/polylens.db" else "data/opportunities.db", as_json=args.json)
     elif args.command == "opportunity-stats":
-        opportunity_stats(db_path=args.db_path, as_json=args.json)
+        prop_stats(db_path=args.db_path if args.db_path != "data/polylens.db" else "data/opportunities.db", as_json=args.json)
 
 
 if __name__ == "__main__":
