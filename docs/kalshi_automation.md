@@ -64,3 +64,41 @@ If `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are configured, paper orders emit
 ```bash
 pytest
 ```
+
+## Authenticated Read-Only Setup
+
+Kalshi authenticated reads require an API key ID and a local private key file. Do not paste private key contents into `.env`.
+
+```text
+KALSHI_API_KEY_ID=00000000-0000-0000-0000-000000000000
+KALSHI_PRIVATE_KEY_PATH=/home/noel/.secrets/kalshi-demo.key
+KALSHI_ENV=demo
+# Optional advanced override:
+KALSHI_BASE_URL=https://external-api.demo.kalshi.co/trade-api/v2
+```
+
+Supported environments:
+
+- `KALSHI_ENV=demo` uses `https://external-api.demo.kalshi.co/trade-api/v2`.
+- `KALSHI_ENV=production` uses `https://external-api.kalshi.com/trade-api/v2`.
+- `KALSHI_BASE_URL` can override either for testing.
+
+The signer follows Kalshi's documented authenticated request flow: sign `timestamp + HTTP_METHOD + path` with RSA-PSS/SHA256, excluding query parameters from the signed path. The key file path may be logged in setup errors, but key contents and signatures are never logged.
+
+Install `cryptography` in the virtual environment before using authenticated reads if it is not already present:
+
+```bash
+source /home/noel/.venv/bin/activate
+pip install cryptography
+```
+
+## Authenticated Read-Only Commands
+
+```bash
+python -m src.cli kalshi-account --json
+python -m src.cli kalshi-balance --json
+python -m src.cli kalshi-positions --limit 100 --json
+python -m src.cli kalshi-orders --limit 100 --json
+```
+
+These commands only use GET endpoints. Live order placement and order cancellation remain disabled. Any attempted write helper returns `write_blocked` and does not call Kalshi.

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from src.adapters.kalshi import KalshiClient
+from src.adapters.kalshi import KalshiAuthenticatedClient, KalshiAuthConfigError, KalshiClient
 from src.adapters.odds_api import MissingOddsAPIKey, OddsAPIClient
 from src.adapters.polymarket import PolymarketClient
 from src.alerts.notifier import MissingWebhookURLError, build_notifier
@@ -322,6 +322,35 @@ def kalshi_status(as_json: bool = False) -> dict[str, Any]:
     else:
         print(json.dumps(status, indent=2, sort_keys=True))
     return status
+
+
+def _print_kalshi_auth_result(action: str, as_json: bool, **kwargs: Any) -> dict[str, Any]:
+    try:
+        client = KalshiAuthenticatedClient(raw_dir="data/raw")
+        result = getattr(client, action)(**kwargs)
+    except (KalshiAuthConfigError, Exception) as exc:
+        result = {"accepted": False, "mode": "auth_error", "reason": str(exc)}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def kalshi_account(as_json: bool = False) -> dict[str, Any]:
+    return _print_kalshi_auth_result("get_account", as_json)
+
+
+def kalshi_balance(as_json: bool = False) -> dict[str, Any]:
+    return _print_kalshi_auth_result("get_balance", as_json)
+
+
+def kalshi_positions(limit: int = 100, as_json: bool = False) -> dict[str, Any]:
+    return _print_kalshi_auth_result("get_positions", as_json, limit=limit)
+
+
+def kalshi_orders(limit: int = 100, as_json: bool = False) -> dict[str, Any]:
+    return _print_kalshi_auth_result("get_orders", as_json, limit=limit)
 
 
 def list_sportsbooks(as_json: bool = False) -> list[dict[str, Any]]:
@@ -1024,6 +1053,20 @@ def main() -> None:
     kalshi_status_parser = sub.add_parser("kalshi-status")
     kalshi_status_parser.add_argument("--json", action="store_true")
 
+    kalshi_account_parser = sub.add_parser("kalshi-account")
+    kalshi_account_parser.add_argument("--json", action="store_true")
+
+    kalshi_balance_parser = sub.add_parser("kalshi-balance")
+    kalshi_balance_parser.add_argument("--json", action="store_true")
+
+    kalshi_positions_parser = sub.add_parser("kalshi-positions")
+    kalshi_positions_parser.add_argument("--limit", type=int, default=100)
+    kalshi_positions_parser.add_argument("--json", action="store_true")
+
+    kalshi_orders_parser = sub.add_parser("kalshi-orders")
+    kalshi_orders_parser.add_argument("--limit", type=int, default=100)
+    kalshi_orders_parser.add_argument("--json", action="store_true")
+
     sports_parser = sub.add_parser("list-sportsbooks")
     sports_parser.add_argument("--json", action="store_true", help="emit sports list as JSON")
 
@@ -1210,6 +1253,14 @@ def main() -> None:
         kalshi_paper_trade(args.ticker, args.side, args.price, args.count, as_json=args.json)
     elif args.command == "kalshi-status":
         kalshi_status(as_json=args.json)
+    elif args.command == "kalshi-account":
+        kalshi_account(as_json=args.json)
+    elif args.command == "kalshi-balance":
+        kalshi_balance(as_json=args.json)
+    elif args.command == "kalshi-positions":
+        kalshi_positions(limit=args.limit, as_json=args.json)
+    elif args.command == "kalshi-orders":
+        kalshi_orders(limit=args.limit, as_json=args.json)
     elif args.command == "list-sportsbooks":
         list_sportsbooks(as_json=args.json)
     elif args.command == "fetch-odds":
