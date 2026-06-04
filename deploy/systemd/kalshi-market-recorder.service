@@ -1,0 +1,16 @@
+[Unit]
+Description=Polylens Kalshi Market Data Recorder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=noel
+WorkingDirectory=/home/noel/polylens
+EnvironmentFile=/home/noel/polylens/deploy/systemd/kalshi-market-recorder.env
+ExecStart=/home/noel/.venv/bin/python -m src.cli kalshi-record-markets --assets ${KALSHI_RECORDER_ASSETS} --market-types ${KALSHI_RECORDER_MARKET_TYPES} --interval ${KALSHI_RECORDER_INTERVAL} --limit ${KALSHI_RECORDER_LIMIT} --discovery-limit ${KALSHI_RECORDER_DISCOVERY_LIMIT} --db-path ${KALSHI_RECORDER_DB_PATH}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
