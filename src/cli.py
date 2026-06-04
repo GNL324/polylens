@@ -20,6 +20,7 @@ from src.analysis.futures_inventory import summarize_futures_inventory
 from src.analysis.hedge_leg_discovery import explain_hedge_search
 from src.analysis.hedged_arbitrage import classify_arbitrage_candidates
 from src.analysis.kalshi_account_analytics import build_kalshi_account_report, detect_kalshi_patterns, export_kalshi_report
+from src.analysis.kalshi_backtest import run_kalshi_backtest, summarize_kalshi_backtests
 from src.analysis.kalshi_strategy_simulator import SimulationConfig, compare_kalshi_strategies, export_kalshi_simulation, parse_csv_filter, parse_price_bands, simulate_kalshi_strategy
 from src.analysis.kalshi_market_recorder import record_kalshi_markets, summarize_kalshi_market_data
 from src.analysis.kalshi_inventory_filter import filter_kalshi_inventory
@@ -459,6 +460,38 @@ def kalshi_simulate(assets: str | None = None, market_types: str | None = None, 
             print(f"Average trade size: {summary.get('average_trade_size')}")
             print(f"Classification: {summary.get('strategy_classification')}")
             print(f"Enough data to automate safely: {summary.get('enough_data_to_automate_safely')}")
+    return result
+
+
+def kalshi_backtest(db_path: str = DEFAULT_KALSHI_DATA_DB, strategy: str = "all", fee_assumption: float = 0.0, spread_threshold: float = 0.05, bankroll: float = 1000.0, export: bool = False, as_json: bool = False) -> dict[str, Any]:
+    try:
+        result = run_kalshi_backtest(db_path=db_path, strategy=strategy, fee_assumption=fee_assumption, spread_threshold=spread_threshold, bankroll=bankroll, export=export)
+    except Exception as exc:
+        result = {"accepted": False, "mode": "backtest_error", "reason": str(exc)}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        if result.get("strategies"):
+            print("Kalshi Backtest")
+            print("===============")
+            print(f"Data points: {(result.get('data') or {}).get('price_points')}")
+            for row in result["strategies"]:
+                print(f"{row['strategy']}: trades={row['trade_count']} net_pnl={row['net_pnl']} win_rate={row['win_rate']} drawdown={row['max_drawdown']}")
+            print(f"Best strategy: {(result.get('summary') or {}).get('best_strategy')}")
+        else:
+            print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def kalshi_backtest_summary(db_path: str = DEFAULT_KALSHI_DATA_DB, as_json: bool = False) -> dict[str, Any]:
+    try:
+        result = summarize_kalshi_backtests(db_path=db_path)
+    except Exception as exc:
+        result = {"accepted": False, "mode": "backtest_error", "reason": str(exc)}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
     return result
 
 
@@ -1217,6 +1250,19 @@ def main() -> None:
     kalshi_sim_parser.add_argument("--export", action="store_true")
     kalshi_sim_parser.add_argument("--json", action="store_true")
 
+    kalshi_backtest_parser = sub.add_parser("kalshi-backtest")
+    kalshi_backtest_parser.add_argument("--db-path", default=DEFAULT_KALSHI_DATA_DB)
+    kalshi_backtest_parser.add_argument("--strategy", choices=["all", "spread-compression", "momentum", "mean-reversion", "probability-extremes"], default="all")
+    kalshi_backtest_parser.add_argument("--fee-assumption", type=float, default=0.0)
+    kalshi_backtest_parser.add_argument("--spread-threshold", type=float, default=0.05)
+    kalshi_backtest_parser.add_argument("--bankroll", type=float, default=1000.0)
+    kalshi_backtest_parser.add_argument("--export", action="store_true")
+    kalshi_backtest_parser.add_argument("--json", action="store_true")
+
+    kalshi_backtest_summary_parser = sub.add_parser("kalshi-backtest-summary")
+    kalshi_backtest_summary_parser.add_argument("--db-path", default=DEFAULT_KALSHI_DATA_DB)
+    kalshi_backtest_summary_parser.add_argument("--json", action="store_true")
+
     kalshi_record_parser = sub.add_parser("kalshi-record-markets")
     kalshi_record_parser.add_argument("--assets")
     kalshi_record_parser.add_argument("--market-types")
@@ -1435,6 +1481,10 @@ def main() -> None:
         kalshi_patterns(as_json=args.json)
     elif args.command == "kalshi-simulate":
         kalshi_simulate(assets=args.assets, market_types=args.market_types, price_bands=args.price_bands, max_contracts=args.max_contracts, bankroll=args.bankroll, fee_assumption=args.fee_assumption, strategy_mode=args.strategy_mode, export=args.export, as_json=args.json)
+    elif args.command == "kalshi-backtest":
+        kalshi_backtest(db_path=args.db_path, strategy=args.strategy, fee_assumption=args.fee_assumption, spread_threshold=args.spread_threshold, bankroll=args.bankroll, export=args.export, as_json=args.json)
+    elif args.command == "kalshi-backtest-summary":
+        kalshi_backtest_summary(db_path=args.db_path, as_json=args.json)
     elif args.command == "kalshi-record-markets":
         kalshi_record_markets(assets=args.assets, market_types=args.market_types, interval=args.interval, duration_minutes=args.duration_minutes, limit=args.limit, discovery_limit=args.discovery_limit, event_ticker_prefix=args.event_ticker_prefix, ticker_prefix=args.ticker_prefix, db_path=args.db_path, as_json=args.json)
     elif args.command == "kalshi-data-summary":

@@ -197,3 +197,28 @@ Recorder discovery notes:
 - `--ticker-prefix` and `--event-ticker-prefix` can target families such as `KXBTC`, `KXETH`, `KXSOL`, or `KXSOLANA`.
 
 When asset filters include BTC, ETH, or SOL, discovery probes Kalshi `series_ticker` families such as `KXBTC`, `KXETH`, `KXSOL`, and `KXSOLANA` before falling back to broad pagination. Asset-filtered runs reject `KXMVE` multi-event bundle products.
+
+## Market Data Backtesting
+
+Run read-only backtests over `data/kalshi_market_data.db`:
+
+```bash
+python -m src.cli kalshi-backtest --strategy all --export
+python -m src.cli kalshi-backtest-summary
+```
+
+Supported strategies:
+
+- `spread-compression`
+- `momentum`
+- `mean-reversion`
+- `probability-extremes`
+
+Backtests use `kalshi_market_snapshots`, `kalshi_orderbook_snapshots`, and `kalshi_price_series` where available. Reports include PnL, fees, sharpe-like score, max drawdown, win rate, average hold time, and average spread captured. Export files:
+
+```text
+data/reports/kalshi_backtest.json
+data/reports/kalshi_backtest.csv
+```
+
+This is read-only analysis and does not place or cancel orders.
