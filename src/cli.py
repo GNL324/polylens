@@ -20,6 +20,7 @@ from src.analysis.futures_inventory import summarize_futures_inventory
 from src.analysis.hedge_leg_discovery import explain_hedge_search
 from src.analysis.hedged_arbitrage import classify_arbitrage_candidates
 from src.analysis.kalshi_account_analytics import build_kalshi_account_report, detect_kalshi_patterns, export_kalshi_report
+from src.analysis.kalshi_strategy_simulator import SimulationConfig, compare_kalshi_strategies, export_kalshi_simulation, parse_csv_filter, parse_price_bands, simulate_kalshi_strategy
 from src.analysis.kalshi_inventory_filter import filter_kalshi_inventory
 from src.analysis.live_arbitrage import scan_live_arbitrage
 from src.analysis.live_match_diagnostics import explain_live_matches as explain_live_market_matches
@@ -418,6 +419,45 @@ def kalshi_patterns(as_json: bool = False) -> dict[str, Any]:
     else:
         print(json.dumps(patterns, indent=2, sort_keys=True))
     return patterns
+
+
+def kalshi_simulate(assets: str | None = None, market_types: str | None = None, price_bands: str | None = None, max_contracts: int = 1, bankroll: float = 1000.0, fee_assumption: float = 0.0, strategy_mode: str = "extreme-probability", export: bool = False, as_json: bool = False) -> dict[str, Any]:
+    try:
+        client = KalshiAuthenticatedClient(raw_dir="data/raw")
+        balance = client.get_balance()
+        positions = client.get_positions()
+        orders = client.get_orders()
+        try:
+            fills = client.get_fills()
+        except Exception as exc:
+            fills = {"fills": [], "error": str(exc)}
+        config = SimulationConfig(assets=parse_csv_filter(assets), market_types=parse_csv_filter(market_types), price_bands=parse_price_bands(price_bands), max_contracts=max_contracts, bankroll=bankroll, fee_assumption=fee_assumption, strategy_mode=strategy_mode)
+        result = simulate_kalshi_strategy(balance, positions, orders, fills, config)
+        result["strategy_comparison"] = compare_kalshi_strategies(balance, positions, orders, fills, config)
+        if export:
+            result["exported_files"] = export_kalshi_simulation(result)
+    except (KalshiAuthConfigError, Exception) as exc:
+        result = {"accepted": False, "mode": "auth_error", "reason": str(exc)}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        summary = result.get("summary") if isinstance(result, dict) else None
+        if not summary:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print("Kalshi Strategy Simulation")
+            print("==========================")
+            print(f"Mode: {summary.get('strategy_mode')}")
+            print(f"Simulated trades: {summary.get('simulated_trades')}")
+            print(f"Simulated PnL: {summary.get('simulated_pnl')}")
+            print(f"Fees: {summary.get('fees')}")
+            print(f"Net PnL: {summary.get('net_pnl')}")
+            print(f"Win/Loss: {summary.get('win_count')}/{summary.get('loss_count')}")
+            print(f"Max drawdown: {summary.get('max_drawdown')}")
+            print(f"Average trade size: {summary.get('average_trade_size')}")
+            print(f"Classification: {summary.get('strategy_classification')}")
+            print(f"Enough data to automate safely: {summary.get('enough_data_to_automate_safely')}")
+    return result
 
 
 def list_sportsbooks(as_json: bool = False) -> list[dict[str, Any]]:
@@ -1143,6 +1183,17 @@ def main() -> None:
     kalshi_patterns_parser = sub.add_parser("kalshi-patterns")
     kalshi_patterns_parser.add_argument("--json", action="store_true")
 
+    kalshi_sim_parser = sub.add_parser("kalshi-simulate")
+    kalshi_sim_parser.add_argument("--assets")
+    kalshi_sim_parser.add_argument("--market-types")
+    kalshi_sim_parser.add_argument("--price-bands")
+    kalshi_sim_parser.add_argument("--max-contracts", type=int, default=1)
+    kalshi_sim_parser.add_argument("--bankroll", type=float, default=1000.0)
+    kalshi_sim_parser.add_argument("--fee-assumption", type=float, default=0.0)
+    kalshi_sim_parser.add_argument("--strategy-mode", choices=["extreme-probability", "mean-reversion", "momentum", "no-trade-baseline"], default="extreme-probability")
+    kalshi_sim_parser.add_argument("--export", action="store_true")
+    kalshi_sim_parser.add_argument("--json", action="store_true")
+
     sports_parser = sub.add_parser("list-sportsbooks")
     sports_parser.add_argument("--json", action="store_true", help="emit sports list as JSON")
 
@@ -1343,6 +1394,8 @@ def main() -> None:
         kalshi_export(as_json=args.json)
     elif args.command == "kalshi-patterns":
         kalshi_patterns(as_json=args.json)
+    elif args.command == "kalshi-simulate":
+        kalshi_simulate(assets=args.assets, market_types=args.market_types, price_bands=args.price_bands, max_contracts=args.max_contracts, bankroll=args.bankroll, fee_assumption=args.fee_assumption, strategy_mode=args.strategy_mode, export=args.export, as_json=args.json)
     elif args.command == "list-sportsbooks":
         list_sportsbooks(as_json=args.json)
     elif args.command == "fetch-odds":

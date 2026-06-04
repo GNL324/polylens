@@ -139,3 +139,25 @@ data/reports/kalshi_report.csv
 ```
 
 `kalshi-patterns` highlights repeated trading behavior, frequently traded markets, high ROI trades, worst trades, scalp-like behavior, and possible arbitrage behavior. These are read-only analytics and should be treated as heuristics.
+
+## Strategy Simulation
+
+```bash
+python -m src.cli kalshi-simulate   --assets BTC,ETH,SOL   --market-types crypto   --price-bands 0.01-0.10,0.90-0.99   --max-contracts 5   --bankroll 1000   --fee-assumption 0.01   --strategy-mode extreme-probability   --export
+```
+
+Supported modes:
+
+- `extreme-probability`
+- `mean-reversion`
+- `momentum`
+- `no-trade-baseline`
+
+The simulator uses authenticated historical Kalshi fills when available, then filled orders as a fallback. It reports simulated PnL, fees, win/loss count, max drawdown, average trade size, best/worst trade, and a strategy classification. It can export:
+
+```text
+data/reports/kalshi_simulation.json
+data/reports/kalshi_simulation.csv
+```
+
+This is a read-only backtest-style tool. It does not place or cancel orders.
