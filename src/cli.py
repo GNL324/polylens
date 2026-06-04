@@ -31,6 +31,7 @@ from src.analysis.multibook_arbitrage import scan_multibook_arbitrage
 from src.analysis.markets import summarize_markets
 from src.analysis.match_diagnostics import explain_market_matches
 from src.analysis.odds_normalization import normalize_futures_events, normalize_odds_events
+from src.analysis.opportunity_ranker import rank_opportunities
 from src.analysis.pnl import summarize_pnl
 from src.analysis.prop_arbitrage import scan_prop_arbitrage
 from src.analysis.prop_normalization import normalize_player_props
@@ -523,6 +524,56 @@ def kalshi_data_summary(db_path: str = DEFAULT_KALSHI_DATA_DB, as_json: bool = F
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
         print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def opportunity_ranker(
+    venue: str | None = None,
+    market_type: str | None = None,
+    asset: str | None = None,
+    sport: str | None = None,
+    min_roi: float | None = None,
+    min_confidence: float | None = None,
+    max_age_seconds: int | None = None,
+    limit: int = 20,
+    export: bool = False,
+    as_json: bool = False,
+) -> dict[str, Any]:
+    result = rank_opportunities(
+        venue=venue,
+        market_type=market_type,
+        asset=asset,
+        sport=sport,
+        min_roi=min_roi,
+        min_confidence=min_confidence,
+        max_age_seconds=max_age_seconds,
+        limit=limit,
+        export=export,
+    )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        summary = result.get("summary") or {}
+        print("Opportunity Rankings")
+        print("====================")
+        print(f"Status: {summary.get('status')}")
+        print(f"Best category: {summary.get('best_opportunity_category')}")
+        print(f"Real trading decision ready: {summary.get('real_trading_decision_ready')}")
+        for row in result.get("ranked_opportunities", []):
+            print(
+                f"{row.get('rank')}. {row.get('venue_pair')} {row.get('market_type')} "
+                f"EV={row.get('expected_value')} ROI={row.get('estimated_roi')} "
+                f"score={row.get('ranking_score')} confidence={row.get('confidence_score')}"
+            )
+            print(f"   risk: {row.get('risk_notes')}")
+        warnings = summary.get("data_quality_warnings") or []
+        if warnings:
+            print("Warnings:")
+            for warning in warnings:
+                print(f"- {warning}")
+        if result.get("files"):
+            print(f"Saved JSON report: {result['files'].get('json')}")
+            print(f"Saved CSV report: {result['files'].get('csv')}")
     return result
 
 
@@ -1297,6 +1348,18 @@ def main() -> None:
     kalshi_data_summary_parser.add_argument("--db-path", default=DEFAULT_KALSHI_DATA_DB)
     kalshi_data_summary_parser.add_argument("--json", action="store_true")
 
+    opportunity_ranker_parser = sub.add_parser("opportunity-ranker")
+    opportunity_ranker_parser.add_argument("--venue", choices=["kalshi", "polymarket", "sportsbook"])
+    opportunity_ranker_parser.add_argument("--market-type", choices=["crypto", "sports", "event", "prop", "futures"])
+    opportunity_ranker_parser.add_argument("--asset", choices=["BTC", "ETH", "SOL"])
+    opportunity_ranker_parser.add_argument("--sport", choices=["MLB", "NBA", "NFL", "NHL"])
+    opportunity_ranker_parser.add_argument("--min-roi", type=float)
+    opportunity_ranker_parser.add_argument("--min-confidence", type=float)
+    opportunity_ranker_parser.add_argument("--max-age-seconds", type=int)
+    opportunity_ranker_parser.add_argument("--limit", type=int, default=20)
+    opportunity_ranker_parser.add_argument("--json", action="store_true")
+    opportunity_ranker_parser.add_argument("--export", action="store_true")
+
     sports_parser = sub.add_parser("list-sportsbooks")
     sports_parser.add_argument("--json", action="store_true", help="emit sports list as JSON")
 
@@ -1509,6 +1572,8 @@ def main() -> None:
         kalshi_record_markets(assets=args.assets, market_types=args.market_types, interval=args.interval, duration_minutes=args.duration_minutes, limit=args.limit, discovery_limit=args.discovery_limit, event_ticker_prefix=args.event_ticker_prefix, ticker_prefix=args.ticker_prefix, db_path=args.db_path, as_json=args.json)
     elif args.command == "kalshi-data-summary":
         kalshi_data_summary(db_path=args.db_path, as_json=args.json)
+    elif args.command == "opportunity-ranker":
+        opportunity_ranker(venue=args.venue, market_type=args.market_type, asset=args.asset, sport=args.sport, min_roi=args.min_roi, min_confidence=args.min_confidence, max_age_seconds=args.max_age_seconds, limit=args.limit, export=args.export, as_json=args.json)
     elif args.command == "list-sportsbooks":
         list_sportsbooks(as_json=args.json)
     elif args.command == "fetch-odds":
