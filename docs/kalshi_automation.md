@@ -161,3 +161,31 @@ data/reports/kalshi_simulation.csv
 ```
 
 This is a read-only backtest-style tool. It does not place or cancel orders.
+
+## Market Data Recorder
+
+Collect read-only Kalshi market and orderbook snapshots before considering live trading:
+
+```bash
+python -m src.cli kalshi-record-markets   --assets BTC,ETH   --market-types crypto   --interval 60   --duration-minutes 60   --limit 100
+```
+
+Default database path:
+
+```text
+data/kalshi_market_data.db
+```
+
+Tables:
+
+- `kalshi_market_snapshots`
+- `kalshi_orderbook_snapshots`
+- `kalshi_price_series`
+
+Summarize collected data:
+
+```bash
+python -m src.cli kalshi-data-summary
+```
+
+The recorder stores timestamps, tickers, asset and market type classifications, yes/no bid/ask values, spreads, liquidity or volume when available, close/expiration times, and compact raw snapshots. It does not place or cancel orders.

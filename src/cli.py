@@ -21,6 +21,7 @@ from src.analysis.hedge_leg_discovery import explain_hedge_search
 from src.analysis.hedged_arbitrage import classify_arbitrage_candidates
 from src.analysis.kalshi_account_analytics import build_kalshi_account_report, detect_kalshi_patterns, export_kalshi_report
 from src.analysis.kalshi_strategy_simulator import SimulationConfig, compare_kalshi_strategies, export_kalshi_simulation, parse_csv_filter, parse_price_bands, simulate_kalshi_strategy
+from src.analysis.kalshi_market_recorder import record_kalshi_markets, summarize_kalshi_market_data
 from src.analysis.kalshi_inventory_filter import filter_kalshi_inventory
 from src.analysis.live_arbitrage import scan_live_arbitrage
 from src.analysis.live_match_diagnostics import explain_live_matches as explain_live_market_matches
@@ -38,6 +39,7 @@ from src.analysis.timing import summarize_timing
 from src.analysis.volume import summarize_volume
 from src.analysis.watch_mode import watch_live_arbitrage
 from src.reports.wallet_report import WalletReport
+from src.storage.kalshi_market_data import DEFAULT_KALSHI_DATA_DB
 from src.storage.opportunity_store import OpportunityStore
 from src.storage.opportunities import load_recent_alerts as load_prop_recent_alerts, load_recent_opportunities as load_prop_recent_opportunities, opportunity_key as prop_opportunity_key, opportunity_stats as prop_opportunity_stats, save_alert as save_prop_alert, save_opportunity as save_prop_opportunity
 from src.trading.executor import KalshiExecutor
@@ -457,6 +459,27 @@ def kalshi_simulate(assets: str | None = None, market_types: str | None = None, 
             print(f"Average trade size: {summary.get('average_trade_size')}")
             print(f"Classification: {summary.get('strategy_classification')}")
             print(f"Enough data to automate safely: {summary.get('enough_data_to_automate_safely')}")
+    return result
+
+
+def kalshi_record_markets(assets: str | None = None, market_types: str | None = None, interval: int = 60, duration_minutes: float | None = None, limit: int = 100, db_path: str = DEFAULT_KALSHI_DATA_DB, as_json: bool = False) -> dict[str, Any]:
+    try:
+        result = record_kalshi_markets(KalshiClient(raw_dir="data/raw"), assets=parse_csv_filter(assets), market_types=parse_csv_filter(market_types), interval=interval, duration_minutes=duration_minutes, limit=limit, db_path=db_path)
+    except Exception as exc:
+        result = {"accepted": False, "mode": "record_error", "reason": str(exc)}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def kalshi_data_summary(db_path: str = DEFAULT_KALSHI_DATA_DB, as_json: bool = False) -> dict[str, Any]:
+    result = summarize_kalshi_market_data(db_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
     return result
 
 
@@ -1194,6 +1217,19 @@ def main() -> None:
     kalshi_sim_parser.add_argument("--export", action="store_true")
     kalshi_sim_parser.add_argument("--json", action="store_true")
 
+    kalshi_record_parser = sub.add_parser("kalshi-record-markets")
+    kalshi_record_parser.add_argument("--assets")
+    kalshi_record_parser.add_argument("--market-types")
+    kalshi_record_parser.add_argument("--interval", type=int, default=60)
+    kalshi_record_parser.add_argument("--duration-minutes", type=float)
+    kalshi_record_parser.add_argument("--limit", type=int, default=100)
+    kalshi_record_parser.add_argument("--db-path", default=DEFAULT_KALSHI_DATA_DB)
+    kalshi_record_parser.add_argument("--json", action="store_true")
+
+    kalshi_data_summary_parser = sub.add_parser("kalshi-data-summary")
+    kalshi_data_summary_parser.add_argument("--db-path", default=DEFAULT_KALSHI_DATA_DB)
+    kalshi_data_summary_parser.add_argument("--json", action="store_true")
+
     sports_parser = sub.add_parser("list-sportsbooks")
     sports_parser.add_argument("--json", action="store_true", help="emit sports list as JSON")
 
@@ -1396,6 +1432,10 @@ def main() -> None:
         kalshi_patterns(as_json=args.json)
     elif args.command == "kalshi-simulate":
         kalshi_simulate(assets=args.assets, market_types=args.market_types, price_bands=args.price_bands, max_contracts=args.max_contracts, bankroll=args.bankroll, fee_assumption=args.fee_assumption, strategy_mode=args.strategy_mode, export=args.export, as_json=args.json)
+    elif args.command == "kalshi-record-markets":
+        kalshi_record_markets(assets=args.assets, market_types=args.market_types, interval=args.interval, duration_minutes=args.duration_minutes, limit=args.limit, db_path=args.db_path, as_json=args.json)
+    elif args.command == "kalshi-data-summary":
+        kalshi_data_summary(db_path=args.db_path, as_json=args.json)
     elif args.command == "list-sportsbooks":
         list_sportsbooks(as_json=args.json)
     elif args.command == "fetch-odds":
