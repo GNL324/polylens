@@ -45,6 +45,7 @@ from src.storage.opportunity_store import OpportunityStore
 from src.storage.opportunities import load_recent_alerts as load_prop_recent_alerts, load_recent_opportunities as load_prop_recent_opportunities, opportunity_key as prop_opportunity_key, opportunity_stats as prop_opportunity_stats, save_alert as save_prop_alert, save_opportunity as save_prop_opportunity
 from src.trading.executor import KalshiExecutor
 from src.trading.kalshi_strategy import scan_markets_for_signals
+from src.trading.kalshi_live_smoke import run_kalshi_live_smoke_test
 from src.trading.risk import RiskConfig
 from src.notifications.telegram import send_telegram_alert
 
@@ -304,6 +305,15 @@ def kalshi_paper_scan(limit: int = 20, max_price: float = 0.5, as_json: bool = F
 
 def kalshi_paper_trade(ticker: str, side: str, price: float, count: int, as_json: bool = False) -> dict[str, Any]:
     result = KalshiExecutor(RiskConfig.from_env()).submit_order(ticker, side, price, count)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def kalshi_live_smoke_test(ticker: str, side: str, price: float, count: int, max_notional: float = 1.0, as_json: bool = False) -> dict[str, Any]:
+    result = run_kalshi_live_smoke_test(ticker=ticker, side=side, price=price, count=count, max_notional=max_notional)
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -1216,6 +1226,14 @@ def main() -> None:
     kalshi_status_parser = sub.add_parser("kalshi-status")
     kalshi_status_parser.add_argument("--json", action="store_true")
 
+    kalshi_live_smoke_parser = sub.add_parser("kalshi-live-smoke-test")
+    kalshi_live_smoke_parser.add_argument("--ticker", required=True)
+    kalshi_live_smoke_parser.add_argument("--side", required=True, choices=["yes", "no"])
+    kalshi_live_smoke_parser.add_argument("--price", required=True, type=float)
+    kalshi_live_smoke_parser.add_argument("--count", required=True, type=int)
+    kalshi_live_smoke_parser.add_argument("--max-notional", type=float, default=1.0)
+    kalshi_live_smoke_parser.add_argument("--json", action="store_true")
+
     kalshi_account_parser = sub.add_parser("kalshi-account")
     kalshi_account_parser.add_argument("--json", action="store_true")
 
@@ -1465,6 +1483,8 @@ def main() -> None:
         kalshi_paper_trade(args.ticker, args.side, args.price, args.count, as_json=args.json)
     elif args.command == "kalshi-status":
         kalshi_status(as_json=args.json)
+    elif args.command == "kalshi-live-smoke-test":
+        kalshi_live_smoke_test(args.ticker, args.side, args.price, args.count, max_notional=args.max_notional, as_json=args.json)
     elif args.command == "kalshi-account":
         kalshi_account(as_json=args.json)
     elif args.command == "kalshi-balance":

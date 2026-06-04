@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -225,6 +226,36 @@ class KalshiAuthenticatedClient:
     def cancel_order(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return self.write_blocked("cancel_order")
 
+    def create_order_v2_smoke_test_only(self, ticker: str, side: str, price: float, count: int, client_order_id: str | None = None) -> dict[str, Any]:
+        side = side.lower().strip()
+        if side not in {"yes", "no"}:
+            raise ValueError("side must be yes or no")
+        cents = _price_to_cents(price)
+        if int(count) <= 0:
+            raise ValueError("count must be positive")
+        client_order_id = client_order_id or f"polylens-smoke-{int(time.time())}-{uuid.uuid4().hex[:12]}"
+        payload = {
+            "ticker": ticker,
+            "client_order_id": client_order_id,
+            "side": side,
+            "action": "buy",
+            "type": "limit",
+            "count": int(count),
+            "post_only": True,
+        }
+        payload[f"{side}_price"] = cents
+        return self._request_smoke_test_json("POST", "portfolio/orders", json_body=payload)
+
+    def cancel_order_v2_smoke_test_only(self, order_id: str) -> dict[str, Any]:
+        if not order_id:
+            raise ValueError("order_id is required")
+        return self._request_smoke_test_json("DELETE", f"portfolio/orders/{order_id}")
+
+    def get_order_v2_smoke_test_only(self, order_id: str) -> dict[str, Any]:
+        if not order_id:
+            raise ValueError("order_id is required")
+        return self._get_authenticated_json(f"portfolio/orders/{order_id}")
+
     def write_blocked(self, operation: str) -> dict[str, Any]:
         return {"accepted": False, "mode": "write_blocked", "operation": operation, "reason": "Kalshi live order writes are disabled"}
 
@@ -288,6 +319,43 @@ class KalshiAuthenticatedClient:
             self._write_raw(endpoint, {"url": _redact_url(url), "error": str(exc)}, page=page, error=True)
             raise KalshiAPIError(f"authenticated Kalshi GET failed: {exc}") from exc
         self._write_raw(endpoint, {"url": _redact_url(url), "payload": payload}, page=page)
+        return payload if isinstance(payload, dict) else {"payload": payload}
+
+    def _request_smoke_test_json(self, method: str, endpoint: str, params: dict[str, Any] | None = None, json_body: dict[str, Any] | None = None) -> dict[str, Any]:
+        method = method.upper()
+        if method not in {"POST", "DELETE"}:
+            return self.write_blocked(f"{method} {endpoint}")
+        params = params or {}
+        query = urlencode({key: value for key, value in params.items() if value is not None})
+        url = f"{self.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+        if query:
+            url = f"{url}?{query}"
+        timestamp = str(int(time.time() * 1000))
+        sign_path = urlparse(url).path
+        body = json.dumps(json_body).encode("utf-8") if json_body is not None else None
+        headers = {
+            "User-Agent": "polylens/0.1",
+            "Accept": "application/json",
+            "KALSHI-ACCESS-KEY": self.config.api_key_id,
+            "KALSHI-ACCESS-TIMESTAMP": timestamp,
+            "KALSHI-ACCESS-SIGNATURE": self._sign_request(timestamp, method, sign_path),
+        }
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        LOGGER.warning("Kalshi live smoke-test-only api call %s %s", method, _redact_url(url))
+        request = Request(url, data=body, headers=headers, method=method)
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                raw_body = response.read().decode("utf-8")
+                payload = json.loads(raw_body) if raw_body else {}
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            self._write_raw(endpoint, {"url": _redact_url(url), "method": method, "status": exc.code, "error": detail}, error=True)
+            raise KalshiAPIError(f"Kalshi smoke-test {method} failed with HTTP {exc.code}: {detail[:200]}") from exc
+        except Exception as exc:
+            self._write_raw(endpoint, {"url": _redact_url(url), "method": method, "error": str(exc)}, error=True)
+            raise KalshiAPIError(f"Kalshi smoke-test {method} failed: {exc}") from exc
+        self._write_raw(endpoint, {"url": _redact_url(url), "method": method, "payload": payload})
         return payload if isinstance(payload, dict) else {"payload": payload}
 
     def _sign_request(self, timestamp: str, method: str, path: str) -> str:
@@ -362,3 +430,19 @@ def _load_env_file(path: str = ".env") -> dict[str, str]:
 def _redact_url(url: str) -> str:
     parsed = urlparse(url)
     return parsed._replace(query="<redacted>" if parsed.query else "").geturl()
+
+
+def _price_to_cents(value: Any) -> int:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("price must be numeric") from None
+    if numeric <= 0:
+        raise ValueError("price must be positive")
+    if numeric < 1:
+        cents = round(numeric * 100)
+    else:
+        cents = round(numeric)
+    if cents < 1 or cents > 99:
+        raise ValueError("price must be between 1 and 99 cents")
+    return int(cents)

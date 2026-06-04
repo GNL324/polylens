@@ -222,3 +222,28 @@ data/reports/kalshi_backtest.csv
 ```
 
 This is read-only analysis and does not place or cancel orders.
+
+## Live Smoke Test
+
+Polylens includes one tightly gated live-order lifecycle smoke test. This is not strategy trading and does not enable general live trading.
+
+The command refuses to run unless all gates pass:
+
+- `LIVE_TRADING=true`
+- `DRY_RUN=false`
+- `KALSHI_LIVE_SMOKE_TEST=true`
+- explicit `--ticker`
+- explicit `--side yes|no`
+- explicit `--price`
+- explicit `--count`
+- notional is less than or equal to `--max-notional` (default `$1.00`)
+
+Manual command:
+
+```bash
+LIVE_TRADING=true DRY_RUN=false KALSHI_LIVE_SMOKE_TEST=true python -m src.cli kalshi-live-smoke-test   --ticker TICKER   --side yes   --price 1   --count 1   --max-notional 1
+```
+
+`--price 1` is interpreted as one cent (`0.01`). The smoke test creates a post-only resting order with a `polylens-smoke-...` client order id, verifies it exists, cancels it, and verifies cancellation. If any fill is detected, the command reports `partial_fill_detected` loudly.
+
+Normal `place_order` and `cancel_order` methods remain blocked and return `write_blocked`.
