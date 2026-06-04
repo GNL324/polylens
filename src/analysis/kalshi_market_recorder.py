@@ -7,10 +7,23 @@ from typing import Any
 
 from src.storage.kalshi_market_data import DEFAULT_KALSHI_DATA_DB, KalshiMarketDataStore
 
-CRYPTO_ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "LTC", "ADA", "AVAX")
+CRYPTO_ASSETS = ("BTC", "ETH", "SOL", "SOLANA", "XRP", "DOGE", "LTC", "ADA", "AVAX")
 
 
-def record_kalshi_markets(client: Any, *, assets: set[str] | None = None, market_types: set[str] | None = None, interval: int = 60, duration_minutes: float | None = None, limit: int = 100, db_path: str = DEFAULT_KALSHI_DATA_DB, include_orderbooks: bool = True) -> dict[str, Any]:
+def record_kalshi_markets(
+    client: Any,
+    *,
+    assets: set[str] | None = None,
+    market_types: set[str] | None = None,
+    interval: int = 60,
+    duration_minutes: float | None = None,
+    limit: int = 100,
+    discovery_limit: int = 1000,
+    event_ticker_prefix: str | None = None,
+    ticker_prefix: str | None = None,
+    db_path: str = DEFAULT_KALSHI_DATA_DB,
+    include_orderbooks: bool = True,
+) -> dict[str, Any]:
     store = KalshiMarketDataStore(db_path)
     started = time.time()
     deadline = started + (duration_minutes * 60 if duration_minutes else 0)
@@ -20,9 +33,9 @@ def record_kalshi_markets(client: Any, *, assets: set[str] | None = None, market
     while True:
         iterations += 1
         timestamp = datetime.now(timezone.utc).isoformat()
-        raw_markets = client.get_markets(status="open", limit=limit, max_pages=1)
+        raw_markets = _discover_markets(client, discovery_limit=discovery_limit, assets=assets)
         markets = [_normalize_market(market, timestamp) for market in raw_markets]
-        markets = [market for market in markets if _passes_filters(market, assets, market_types)]
+        markets = [market for market in markets if _passes_filters(market, assets, market_types, event_ticker_prefix, ticker_prefix)]
         for market in markets[:limit]:
             store.save_market_snapshot(market)
             store.save_price_point(_price_point(market))
@@ -39,7 +52,16 @@ def record_kalshi_markets(client: Any, *, assets: set[str] | None = None, market
         sleep_for = max(0, min(interval, deadline - time.time()))
         if sleep_for:
             time.sleep(sleep_for)
-    return {"db_path": str(store.db_path), "iterations": iterations, "market_snapshots_saved": markets_seen, "orderbook_snapshots_saved": orderbooks_saved, "summary": store.summary()}
+    summary = store.summary()
+    summary["last_recorded_tickers"] = store.recent_tickers(limit=limit)
+    return {
+        "db_path": str(store.db_path),
+        "iterations": iterations,
+        "raw_markets_inspected_per_iteration": min(max(int(discovery_limit), 1), max(int(discovery_limit), 1)),
+        "market_snapshots_saved": markets_seen,
+        "orderbook_snapshots_saved": orderbooks_saved,
+        "summary": summary,
+    }
 
 
 def summarize_kalshi_market_data(db_path: str = DEFAULT_KALSHI_DATA_DB) -> dict[str, Any]:
@@ -59,6 +81,7 @@ def _normalize_market(market: dict[str, Any], timestamp: str) -> dict[str, Any]:
     row = {
         "timestamp": timestamp,
         "ticker": ticker,
+        "event_ticker": market.get("event_ticker") or identity.get("event_ticker"),
         "asset": _asset({**market, "title": title}),
         "market_type": _market_type({**market, "title": title}),
         "title": title,
@@ -93,19 +116,77 @@ def _price_point(market: dict[str, Any]) -> dict[str, Any]:
     return {"timestamp": market.get("timestamp"), "ticker": market.get("ticker"), "asset": market.get("asset"), "market_type": market.get("market_type"), "yes_bid": yes_bid, "yes_ask": yes_ask, "no_bid": market.get("no_bid"), "no_ask": market.get("no_ask"), "mid_price": mid, "spread": market.get("spread"), "liquidity": market.get("liquidity")}
 
 
-def _passes_filters(row: dict[str, Any], assets: set[str] | None, market_types: set[str] | None) -> bool:
-    if assets and str(row.get("asset", "")).upper() not in assets:
+def _discover_markets(client: Any, discovery_limit: int, assets: set[str] | None = None) -> list[dict[str, Any]]:
+    discovery_limit = max(int(discovery_limit), 1)
+    page_size = min(discovery_limit, 1000)
+    max_pages = max(1, (discovery_limit + page_size - 1) // page_size)
+    markets: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_rows(rows: list[dict[str, Any]]) -> None:
+        for row in rows:
+            ticker = str(row.get("ticker") or "")
+            if ticker and ticker not in seen:
+                seen.add(ticker)
+                markets.append(row)
+
+    for series in _series_tickers_for_assets(assets):
+        try:
+            add_rows(client.get_markets(status="open", limit=page_size, max_pages=max_pages, series_ticker=series))
+        except TypeError:
+            break
+    if len(markets) < discovery_limit:
+        add_rows(client.get_markets(status="open", limit=page_size, max_pages=max_pages))
+    return markets[:discovery_limit]
+
+
+def _series_tickers_for_assets(assets: set[str] | None) -> list[str]:
+    if not assets:
+        return []
+    mapping = {"BTC": ["KXBTC"], "ETH": ["KXETH"], "SOL": ["KXSOL", "KXSOLANA"]}
+    series: list[str] = []
+    for asset in sorted({item.upper() for item in assets}):
+        series.extend(mapping.get(asset, []))
+    return series
+
+
+def _passes_filters(row: dict[str, Any], assets: set[str] | None, market_types: set[str] | None, event_ticker_prefix: str | None = None, ticker_prefix: str | None = None) -> bool:
+    ticker = str(row.get("ticker") or "").upper()
+    event_ticker = str(row.get("event_ticker") or "").upper()
+    if ticker_prefix and not ticker.startswith(ticker_prefix.upper()):
         return False
+    if event_ticker_prefix and not event_ticker.startswith(event_ticker_prefix.upper()):
+        return False
+    if assets:
+        if ticker.startswith("KXMVE") or event_ticker.startswith("KXMVE"):
+            return False
+        if str(row.get("asset", "")).upper() not in assets:
+            return False
+        if not _has_asset_prefix(ticker, event_ticker, str(row.get("asset", "")).upper()):
+            return False
     if market_types and str(row.get("market_type", "")).lower() not in {item.lower() for item in market_types}:
         return False
     return True
 
 
+def _has_asset_prefix(ticker: str, event_ticker: str, asset: str) -> bool:
+    prefixes = {
+        "BTC": ("KXBTC",),
+        "ETH": ("KXETH",),
+        "SOL": ("KXSOL", "KXSOLANA"),
+    }.get(asset, ())
+    return bool(prefixes and (ticker.startswith(prefixes) or event_ticker.startswith(prefixes)))
+
+
 def _asset(row: dict[str, Any]) -> str:
     text = " ".join(str(row.get(key) or "") for key in ("asset", "ticker", "event_ticker", "title", "subtitle")).upper()
+    prefix_map = {"KXBTC": "BTC", "KXETH": "ETH", "KXSOL": "SOL", "KXSOLANA": "SOL"}
+    for prefix, asset in prefix_map.items():
+        if prefix in text:
+            return asset
     for symbol in CRYPTO_ASSETS:
         if symbol in text or f"KX{symbol}" in text:
-            return symbol
+            return "SOL" if symbol == "SOLANA" else symbol
     if "BITCOIN" in text:
         return "BTC"
     if "ETHEREUM" in text:

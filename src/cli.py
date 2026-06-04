@@ -462,9 +462,9 @@ def kalshi_simulate(assets: str | None = None, market_types: str | None = None, 
     return result
 
 
-def kalshi_record_markets(assets: str | None = None, market_types: str | None = None, interval: int = 60, duration_minutes: float | None = None, limit: int = 100, db_path: str = DEFAULT_KALSHI_DATA_DB, as_json: bool = False) -> dict[str, Any]:
+def kalshi_record_markets(assets: str | None = None, market_types: str | None = None, interval: int = 60, duration_minutes: float | None = None, limit: int = 100, discovery_limit: int = 1000, event_ticker_prefix: str | None = None, ticker_prefix: str | None = None, db_path: str = DEFAULT_KALSHI_DATA_DB, as_json: bool = False) -> dict[str, Any]:
     try:
-        result = record_kalshi_markets(KalshiClient(raw_dir="data/raw"), assets=parse_csv_filter(assets), market_types=parse_csv_filter(market_types), interval=interval, duration_minutes=duration_minutes, limit=limit, db_path=db_path)
+        result = record_kalshi_markets(KalshiClient(raw_dir="data/raw"), assets=parse_csv_filter(assets), market_types=parse_csv_filter(market_types), interval=interval, duration_minutes=duration_minutes, limit=limit, discovery_limit=discovery_limit, event_ticker_prefix=event_ticker_prefix, ticker_prefix=ticker_prefix, db_path=db_path)
     except Exception as exc:
         result = {"accepted": False, "mode": "record_error", "reason": str(exc)}
     if as_json:
@@ -1222,7 +1222,10 @@ def main() -> None:
     kalshi_record_parser.add_argument("--market-types")
     kalshi_record_parser.add_argument("--interval", type=int, default=60)
     kalshi_record_parser.add_argument("--duration-minutes", type=float)
-    kalshi_record_parser.add_argument("--limit", type=int, default=100)
+    kalshi_record_parser.add_argument("--limit", type=int, default=100, help="save up to this many matching markets per poll")
+    kalshi_record_parser.add_argument("--discovery-limit", type=int, default=1000, help="inspect up to this many raw markets before local filtering")
+    kalshi_record_parser.add_argument("--event-ticker-prefix")
+    kalshi_record_parser.add_argument("--ticker-prefix")
     kalshi_record_parser.add_argument("--db-path", default=DEFAULT_KALSHI_DATA_DB)
     kalshi_record_parser.add_argument("--json", action="store_true")
 
@@ -1433,7 +1436,7 @@ def main() -> None:
     elif args.command == "kalshi-simulate":
         kalshi_simulate(assets=args.assets, market_types=args.market_types, price_bands=args.price_bands, max_contracts=args.max_contracts, bankroll=args.bankroll, fee_assumption=args.fee_assumption, strategy_mode=args.strategy_mode, export=args.export, as_json=args.json)
     elif args.command == "kalshi-record-markets":
-        kalshi_record_markets(assets=args.assets, market_types=args.market_types, interval=args.interval, duration_minutes=args.duration_minutes, limit=args.limit, db_path=args.db_path, as_json=args.json)
+        kalshi_record_markets(assets=args.assets, market_types=args.market_types, interval=args.interval, duration_minutes=args.duration_minutes, limit=args.limit, discovery_limit=args.discovery_limit, event_ticker_prefix=args.event_ticker_prefix, ticker_prefix=args.ticker_prefix, db_path=args.db_path, as_json=args.json)
     elif args.command == "kalshi-data-summary":
         kalshi_data_summary(db_path=args.db_path, as_json=args.json)
     elif args.command == "list-sportsbooks":

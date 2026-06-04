@@ -108,6 +108,14 @@ class KalshiMarketDataStore:
                 [row.get(key) for key in keys],
             )
 
+    def recent_tickers(self, limit: int = 20) -> list[str]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT ticker FROM kalshi_market_snapshots ORDER BY id DESC LIMIT ?",
+                (max(int(limit), 1),),
+            ).fetchall()
+        return [row[0] for row in rows]
+
     def summary(self) -> dict[str, Any]:
         with self.connect() as conn:
             market_count = conn.execute("SELECT COUNT(*) FROM kalshi_market_snapshots").fetchone()[0]

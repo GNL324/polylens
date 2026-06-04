@@ -70,7 +70,7 @@ class KalshiClient:
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         self.cache_path = self.raw_dir / "kalshi_markets_cache.json"
 
-    def get_markets(self, status: str = "open", limit: int = 1000, max_pages: int = 5, use_cache: bool = True, include_closed: bool = False) -> list[dict[str, Any]]:
+    def get_markets(self, status: str = "open", limit: int = 1000, max_pages: int = 5, use_cache: bool = True, include_closed: bool = False, series_ticker: str | None = None) -> list[dict[str, Any]]:
         statuses = [status]
         if include_closed and status == "open":
             statuses = ["open", "closed", "settled"]
@@ -78,7 +78,7 @@ class KalshiClient:
         try:
             for status_value in statuses:
                 try:
-                    markets.extend(self._get_markets_for_status(status_value, limit=limit, max_pages=max_pages))
+                    markets.extend(self._get_markets_for_status(status_value, limit=limit, max_pages=max_pages, series_ticker=series_ticker))
                 except KalshiAPIError:
                     if include_closed and status_value != status:
                         LOGGER.warning("Kalshi status=%s unavailable; continuing with fetched markets", status_value)
@@ -94,11 +94,13 @@ class KalshiClient:
                     return cached
             raise
 
-    def _get_markets_for_status(self, status: str, limit: int, max_pages: int) -> list[dict[str, Any]]:
+    def _get_markets_for_status(self, status: str, limit: int, max_pages: int, series_ticker: str | None = None) -> list[dict[str, Any]]:
         markets: list[dict[str, Any]] = []
         cursor: str | None = None
         for page in range(max_pages):
             params: dict[str, Any] = {"status": status, "limit": limit}
+            if series_ticker:
+                params["series_ticker"] = series_ticker
             if cursor:
                 params["cursor"] = cursor
             payload = self._get_json("markets", params, page=page)

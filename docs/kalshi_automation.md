@@ -189,3 +189,11 @@ python -m src.cli kalshi-data-summary
 ```
 
 The recorder stores timestamps, tickers, asset and market type classifications, yes/no bid/ask values, spreads, liquidity or volume when available, close/expiration times, and compact raw snapshots. It does not place or cancel orders.
+
+Recorder discovery notes:
+
+- `--limit` saves up to N matching markets after filtering.
+- `--discovery-limit` controls how many raw Kalshi markets are inspected before filtering.
+- `--ticker-prefix` and `--event-ticker-prefix` can target families such as `KXBTC`, `KXETH`, `KXSOL`, or `KXSOLANA`.
+
+When asset filters include BTC, ETH, or SOL, discovery probes Kalshi `series_ticker` families such as `KXBTC`, `KXETH`, `KXSOL`, and `KXSOLANA` before falling back to broad pagination. Asset-filtered runs reject `KXMVE` multi-event bundle products.
