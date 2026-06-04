@@ -71,7 +71,7 @@ Kalshi authenticated reads require an API key ID and a local private key file. D
 
 ```text
 KALSHI_API_KEY_ID=00000000-0000-0000-0000-000000000000
-KALSHI_PRIVATE_KEY_PATH=/home/noel/.secrets/kalshi-demo.key
+KALSHI_PRIVATE_KEY_PATH=/home/noel/polylens/secrets/kalshi.key
 KALSHI_ENV=demo
 # Optional advanced override:
 KALSHI_BASE_URL=https://external-api.demo.kalshi.co/trade-api/v2
@@ -102,3 +102,21 @@ python -m src.cli kalshi-orders --limit 100 --json
 ```
 
 These commands only use GET endpoints. Live order placement and order cancellation remain disabled. Any attempted write helper returns `write_blocked` and does not call Kalshi.
+
+## Local Secret Files
+
+Keep Kalshi private keys in a local, untracked directory:
+
+```bash
+mkdir -p /home/noel/polylens/secrets
+chmod 700 /home/noel/polylens/secrets
+```
+
+The `secrets/` directory and `.env` file are ignored by git. Expected `.env` values are:
+
+```text
+KALSHI_API_KEY_ID=
+KALSHI_PRIVATE_KEY_PATH=/home/noel/polylens/secrets/kalshi.key
+KALSHI_ENV=demo
+# or: KALSHI_ENV=production
+```

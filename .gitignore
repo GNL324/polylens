@@ -6,3 +6,5 @@ data/raw/*.json
 data/reports/*.json
 data/*.db
 data/*.db-*
+.env
+secrets/
