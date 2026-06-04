@@ -120,3 +120,22 @@ KALSHI_PRIVATE_KEY_PATH=/home/noel/polylens/secrets/kalshi.key
 KALSHI_ENV=demo
 # or: KALSHI_ENV=production
 ```
+
+## Account Analytics
+
+```bash
+python -m src.cli kalshi-report --json
+python -m src.cli kalshi-export --json
+python -m src.cli kalshi-patterns --json
+```
+
+`kalshi-report` fetches balance, positions, orders, and fills, then summarizes account balance, open positions, realized PnL, fees paid, trades by market type, trades by crypto asset, win rate, average entry price, and average contract size.
+
+`kalshi-export` writes:
+
+```text
+data/reports/kalshi_report.json
+data/reports/kalshi_report.csv
+```
+
+`kalshi-patterns` highlights repeated trading behavior, frequently traded markets, high ROI trades, worst trades, scalp-like behavior, and possible arbitrage behavior. These are read-only analytics and should be treated as heuristics.

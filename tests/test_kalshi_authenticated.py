@@ -59,18 +59,18 @@ def test_authenticated_orders_and_fills_use_read_only_get(tmp_path):
         assert client.get_fills()["fills"] == []
 
 
-def test_missing_key_path(monkeypatch):
+def test_missing_key_path(monkeypatch, tmp_path):
     monkeypatch.setenv("KALSHI_API_KEY_ID", "abc")
     monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
     with pytest.raises(KalshiAuthConfigError, match="KALSHI_PRIVATE_KEY_PATH"):
-        KalshiAuthConfig.from_env()
+        KalshiAuthConfig.from_env(env_path=str(tmp_path / "missing.env"))
 
 
 def test_bad_key_path(monkeypatch, tmp_path):
     monkeypatch.setenv("KALSHI_API_KEY_ID", "abc")
     monkeypatch.setenv("KALSHI_PRIVATE_KEY_PATH", str(tmp_path / "missing.key"))
     with pytest.raises(KalshiAuthConfigError, match="not found"):
-        KalshiAuthConfig.from_env()
+        KalshiAuthConfig.from_env(env_path=str(tmp_path / "missing.env"))
 
 
 def test_bad_api_key_id(monkeypatch, tmp_path):
@@ -79,7 +79,7 @@ def test_bad_api_key_id(monkeypatch, tmp_path):
     monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
     monkeypatch.setenv("KALSHI_PRIVATE_KEY_PATH", str(key_path))
     with pytest.raises(KalshiAuthConfigError, match="KALSHI_API_KEY_ID"):
-        KalshiAuthConfig.from_env()
+        KalshiAuthConfig.from_env(env_path=str(tmp_path / "missing.env"))
 
 
 def test_write_endpoint_blocked_without_network(tmp_path):

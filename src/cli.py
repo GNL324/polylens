@@ -19,6 +19,7 @@ from src.analysis.cross_market import compare_wallet_markets_to_kalshi
 from src.analysis.futures_inventory import summarize_futures_inventory
 from src.analysis.hedge_leg_discovery import explain_hedge_search
 from src.analysis.hedged_arbitrage import classify_arbitrage_candidates
+from src.analysis.kalshi_account_analytics import build_kalshi_account_report, detect_kalshi_patterns, export_kalshi_report
 from src.analysis.kalshi_inventory_filter import filter_kalshi_inventory
 from src.analysis.live_arbitrage import scan_live_arbitrage
 from src.analysis.live_match_diagnostics import explain_live_matches as explain_live_market_matches
@@ -351,6 +352,72 @@ def kalshi_positions(limit: int = 100, as_json: bool = False) -> dict[str, Any]:
 
 def kalshi_orders(limit: int = 100, as_json: bool = False) -> dict[str, Any]:
     return _print_kalshi_auth_result("get_orders", as_json, limit=limit)
+
+
+def build_kalshi_read_only_report() -> dict[str, Any]:
+    client = KalshiAuthenticatedClient(raw_dir="data/raw")
+    balance = client.get_balance()
+    positions = client.get_positions()
+    orders = client.get_orders()
+    try:
+        fills = client.get_fills()
+    except Exception as exc:
+        fills = {"fills": [], "error": str(exc)}
+    return build_kalshi_account_report(balance, positions, orders, fills)
+
+
+def kalshi_report(as_json: bool = False) -> dict[str, Any]:
+    try:
+        report = build_kalshi_read_only_report()
+    except (KalshiAuthConfigError, Exception) as exc:
+        report = {"accepted": False, "mode": "auth_error", "reason": str(exc)}
+    if as_json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        summary = report.get("summary") if isinstance(report, dict) else None
+        if not summary:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            print("Kalshi Account Report")
+            print("=====================")
+            print(f"Balance: {summary.get('account_balance')}")
+            print(f"Open positions: {summary.get('open_position_count')}")
+            print(f"Realized PnL: {summary.get('realized_pnl')}")
+            print(f"Fees paid: {summary.get('fees_paid')}")
+            print(f"Trade count: {summary.get('trade_count')}")
+            print(f"Win rate: {summary.get('win_rate')}")
+            print(f"Average entry price: {summary.get('average_entry_price')}")
+            print(f"Average contract size: {summary.get('average_contract_size')}")
+            print(f"Top market types: {report.get('trades_by_market_type')}")
+            print(f"Top assets: {report.get('trades_by_asset')}")
+            print(f"Behavior: {(report.get('patterns') or {}).get('behavior_classification')}")
+    return report
+
+
+def kalshi_export(as_json: bool = False) -> dict[str, Any]:
+    try:
+        report = build_kalshi_read_only_report()
+        result = {"accepted": True, "files": export_kalshi_report(report)}
+    except (KalshiAuthConfigError, Exception) as exc:
+        result = {"accepted": False, "mode": "auth_error", "reason": str(exc)}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def kalshi_patterns(as_json: bool = False) -> dict[str, Any]:
+    try:
+        report = build_kalshi_read_only_report()
+        patterns = detect_kalshi_patterns(report)
+    except (KalshiAuthConfigError, Exception) as exc:
+        patterns = {"accepted": False, "mode": "auth_error", "reason": str(exc)}
+    if as_json:
+        print(json.dumps(patterns, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(patterns, indent=2, sort_keys=True))
+    return patterns
 
 
 def list_sportsbooks(as_json: bool = False) -> list[dict[str, Any]]:
@@ -1067,6 +1134,15 @@ def main() -> None:
     kalshi_orders_parser.add_argument("--limit", type=int, default=100)
     kalshi_orders_parser.add_argument("--json", action="store_true")
 
+    kalshi_report_parser = sub.add_parser("kalshi-report")
+    kalshi_report_parser.add_argument("--json", action="store_true")
+
+    kalshi_export_parser = sub.add_parser("kalshi-export")
+    kalshi_export_parser.add_argument("--json", action="store_true")
+
+    kalshi_patterns_parser = sub.add_parser("kalshi-patterns")
+    kalshi_patterns_parser.add_argument("--json", action="store_true")
+
     sports_parser = sub.add_parser("list-sportsbooks")
     sports_parser.add_argument("--json", action="store_true", help="emit sports list as JSON")
 
@@ -1261,6 +1337,12 @@ def main() -> None:
         kalshi_positions(limit=args.limit, as_json=args.json)
     elif args.command == "kalshi-orders":
         kalshi_orders(limit=args.limit, as_json=args.json)
+    elif args.command == "kalshi-report":
+        kalshi_report(as_json=args.json)
+    elif args.command == "kalshi-export":
+        kalshi_export(as_json=args.json)
+    elif args.command == "kalshi-patterns":
+        kalshi_patterns(as_json=args.json)
     elif args.command == "list-sportsbooks":
         list_sportsbooks(as_json=args.json)
     elif args.command == "fetch-odds":
