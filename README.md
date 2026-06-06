@@ -67,6 +67,22 @@ python -m src.cli scan-prop-arb --sport basketball_nba --markets player_points -
 python -m src.cli watch-prop-arb --sport basketball_nba --markets player_points --interval 30 --bankroll 1000 --min-roi 0.01
 ```
 
+## Local Dashboard And Risk
+
+Start the local dashboard:
+
+```bash
+python -m src.cli dashboard
+```
+
+Check risk state:
+
+```bash
+python -m src.cli risk-status
+```
+
+Polylens defaults to `DRY_RUN=true` and `LIVE_TRADING=false`; live execution remains blocked. See [docs/dashboard.md](docs/dashboard.md) and [docs/risk_engine.md](docs/risk_engine.md).
+
 ## Testing
 
 ```bash

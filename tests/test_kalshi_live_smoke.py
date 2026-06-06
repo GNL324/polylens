@@ -1,6 +1,7 @@
 from unittest.mock import Mock, patch
 
 from src.adapters.kalshi import KalshiAuthConfig, KalshiAuthenticatedClient
+from src.risk import RiskConfig, RiskEngine
 from src.trading.kalshi_live_smoke import live_smoke_test_gates, run_kalshi_live_smoke_test
 
 
@@ -122,6 +123,79 @@ def test_normal_order_methods_remain_write_blocked(tmp_path):
     client = KalshiAuthenticatedClient(KalshiAuthConfig(api_key_id="id", private_key_path=key_path, env="production"), raw_dir=tmp_path)
     assert client.place_order()["mode"] == "write_blocked"
     assert client.cancel_order("order")["mode"] == "write_blocked"
+
+
+def test_smoke_global_halt_blocks_order_creation(monkeypatch, tmp_path):
+    _enable(monkeypatch)
+    engine = RiskEngine(tmp_path / "risk.db")
+    engine.halt("manual global halt")
+    client = Mock()
+    result = run_kalshi_live_smoke_test(ticker="KXTEST", side="yes", price=1, count=1, client=client, risk_engine=engine)
+    assert result["accepted"] is False
+    assert "global trading halt" in result["reason"]
+    client.create_order_v2_smoke_test_only.assert_not_called()
+    event_types = [(row.get("metadata") or {}).get("event_type") for row in engine.recent_events(limit=10)]
+    assert "smoke_test_requested" in event_types
+    assert "smoke_test_blocked" in event_types
+
+
+def test_smoke_kalshi_halt_blocks_order_creation(monkeypatch, tmp_path):
+    _enable(monkeypatch)
+    engine = RiskEngine(tmp_path / "risk.db")
+    engine.halt("kalshi paused", venue="kalshi")
+    client = Mock()
+    result = run_kalshi_live_smoke_test(ticker="KXTEST", side="yes", price=1, count=1, client=client, risk_engine=engine)
+    assert result["accepted"] is False
+    assert "venue trading halt for kalshi" in result["reason"]
+    client.create_order_v2_smoke_test_only.assert_not_called()
+
+
+def test_smoke_requires_risk_approval(monkeypatch, tmp_path):
+    _enable(monkeypatch)
+    engine = RiskEngine(tmp_path / "risk.db", RiskConfig(max_daily_loss=1))
+    engine.set_pnl(daily_pnl=-1)
+    client = Mock()
+    result = run_kalshi_live_smoke_test(ticker="KXTEST", side="yes", price=1, count=1, client=client, risk_engine=engine)
+    assert result["accepted"] is False
+    assert "max daily loss exceeded" in result["reason"]
+    client.create_order_v2_smoke_test_only.assert_not_called()
+
+
+def test_smoke_created_and_cancelled_events_are_recorded(monkeypatch, tmp_path):
+    _enable(monkeypatch)
+    engine = RiskEngine(tmp_path / "risk.db")
+    client = Mock()
+    client.create_order_v2_smoke_test_only.return_value = {"order": {"order_id": "ord-10", "status": "resting", "filled_count": 0}}
+    client.get_order_v2_smoke_test_only.side_effect = [
+        {"order": {"order_id": "ord-10", "status": "resting", "filled_count": 0}},
+        {"order": {"order_id": "ord-10", "status": "canceled", "filled_count": 0}},
+    ]
+    client.cancel_order_v2_smoke_test_only.return_value = {"order": {"order_id": "ord-10", "status": "canceled"}}
+    result = run_kalshi_live_smoke_test(ticker="KXTEST", side="yes", price=1, count=1, client=client, risk_engine=engine)
+    assert result["accepted"] is True
+    event_types = [(row.get("metadata") or {}).get("event_type") for row in engine.recent_events(limit=20)]
+    assert "smoke_test_order_created" in event_types
+    assert "smoke_test_order_cancelled" in event_types
+
+
+def test_smoke_partial_fill_records_high_severity_event(monkeypatch, tmp_path):
+    _enable(monkeypatch)
+    engine = RiskEngine(tmp_path / "risk.db")
+    client = Mock()
+    client.create_order_v2_smoke_test_only.return_value = {"order": {"order_id": "ord-11", "status": "resting", "filled_count": 0}}
+    client.get_order_v2_smoke_test_only.side_effect = [
+        {"order": {"order_id": "ord-11", "status": "partially_filled", "filled_count": 1}},
+        {"order": {"order_id": "ord-11", "status": "canceled", "filled_count": 1}},
+    ]
+    client.cancel_order_v2_smoke_test_only.return_value = {"order": {"order_id": "ord-11", "status": "canceled"}}
+    result = run_kalshi_live_smoke_test(ticker="KXTEST", side="yes", price=1, count=1, client=client, risk_engine=engine)
+    assert result["mode"] == "partial_fill_detected"
+    partial_events = [
+        row for row in engine.recent_events(limit=20)
+        if (row.get("metadata") or {}).get("event_type") == "smoke_test_partial_fill_detected"
+    ]
+    assert partial_events
+    assert partial_events[0]["metadata"]["severity"] == "high"
 
 
 @patch("src.cli.run_kalshi_live_smoke_test")

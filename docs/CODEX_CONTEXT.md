@@ -5,7 +5,7 @@ Polylens is a research and paper-trading system for finding cross-market and spo
 Major architecture:
 - CLI entrypoint: `src/cli.py`
 - Analysis/scanners: `src/analysis/`
-- Storage: `src/storage/opportunity_store.py` for live/cross-market data and `src/storage/opportunities.py` for prop-arb, paper trades, lifecycle, and alert events
+- Storage: `src/storage/opportunity_store.py` for live/cross-market data and `src/storage/opportunities.py` for prop-arb, paper trades, lifecycle, alert events, and scanner profiles
 - Web dashboard: FastAPI + NiceGUI in `src/web/`
 - Risk controls: `src/risk/`
 - Notifications: `src/notifications/`
@@ -20,6 +20,7 @@ Major architecture:
 - Lifecycle: prop opportunities track `discovered`, `viewed`, `paper_traded`, `settled`, and `archived`.
 - Operations: scanner health, scan metrics, service status, health badges, bookmaker analytics, and opportunity funnels.
 - Alerts: `alert_events` records sent/skipped/duplicate/failed alert outcomes with secret redaction.
+- Scanner profiles: dashboard and CLI can select sport, prop markets, sportsbook filters, bankroll, interval, and minimum ROI instead of relying on hardcoded prop-scan defaults.
 - Safety: live trading remains disabled; dashboard controls are strict allowlists and use `shell=False`.
 
 # Database Schema
@@ -33,6 +34,7 @@ Key tables:
 - `prop_arbitrage_opportunities`: persisted prop-arb opportunities. Linked to scan runs by `scan_run_id`; linked to paper trades by `paper_trade_id`.
 - `paper_trades`: paper execution and settlement records linked by `opportunity_id`.
 - `alert_events`: alert history with `alert_type`, `channel`, `opportunity_id`, `player`, `market_title`, `roi`, `profit`, `status`, `reason`, and redacted `raw_json`.
+- `scanner_profiles`: named prop-scan configurations with `sport`, JSON `markets`, JSON `sportsbooks`, `bankroll`, `interval_seconds`, `min_roi`, and active-profile state.
 - `trades`: dashboard results/P&L table for paper/live result separation.
 - `scan_runs`, `opportunities`, `alerts`, `rejected_candidates`: live/cross-market operational history in `data/polylens.db`.
 
@@ -40,8 +42,9 @@ Key tables:
 
 - `polylens-dashboard.service`: runs `python -m src.cli web-dashboard`; serves the local Command Center on port `8787`.
 - `polylens-live-arb.service`: runs the live arbitrage scanner service.
-- Future/Phase 5 prop watcher: `deploy/systemd/polylens-prop-watch.service`, intended to run:
-  `/home/noel/.venv/bin/python -m src.cli watch-prop-arb --sport basketball_nba --markets player_points --bankroll 1000 --interval 60 --json`
+- Prop watcher: `deploy/systemd/polylens-prop-watch.service`, intended to run:
+  `/home/noel/.venv/bin/python -m src.cli watch-prop-arb --profile __ACTIVE__ --json`
+  The active profile is stored in `scanner_profiles`; the default profile is `NBA Player Points`.
 
 # Environment Variables
 
@@ -64,6 +67,7 @@ Risk/Kalshi/notification settings are read from environment where applicable. Do
 - Results / P&L
 - Operations
 - Opportunity Explorer
+- Scanner Config
 - Alerts
 - Risk Engine
 - Bot Control
@@ -74,22 +78,24 @@ Risk/Kalshi/notification settings are read from environment where applicable. Do
 
 - Installing or restarting system services may require interactive `sudo`; non-interactive SSH commands can be blocked.
 - The prop-watch service file exists but may not be installed in `/etc/systemd/system/` until manual deployment.
+- If `/etc/systemd/system/polylens-prop-watch.service` was installed before Phase 6, redeploy the service file and run `systemctl daemon-reload` so it uses `--profile __ACTIVE__`.
 - In-app browser automation from Codex has intermittently failed with a Windows sandbox startup error; HTTP checks against `127.0.0.1:8787` have still validated dashboard availability.
 - Several files are currently dirty or untracked from prior feature work; avoid committing unrelated changes.
 
 # Next Priorities
 
-- Install and enable `polylens-prop-watch.service` on the host.
+- Install or redeploy and enable `polylens-prop-watch.service` on the host.
 - Verify dashboard Bot Control can start/stop/restart/show logs for prop watch after service installation.
+- Add production-friendly presets for more sports, markets, and sportsbook combinations.
 - Monitor alert delivery quality, duplicate suppression, and stale scan/alert health.
 - Keep paper-trade settlement analytics aligned with real-world result ingestion.
 - Continue avoiding live execution until an explicit, separately reviewed live-trading design exists.
 
 # Test Status
 
-Latest known full suite after Phase 5:
+Latest known full suite after Phase 6:
 - `PYTHONPATH=. /home/noel/.venv/bin/pytest -q`
-- Result: `340 passed`
+- Result: `347 passed`
 
 # Important Paths
 

@@ -53,15 +53,17 @@ def test_scan_live_arb_includes_live_match_summary():
     assert result["live_match_summary"]["top_rejection_reasons"]["team mismatch"] == 1
 
 
+@patch("src.cli.fetch_futures")
 @patch("src.cli.fetch_odds")
 @patch("src.cli.KalshiClient")
 @patch("src.cli.PolymarketClient")
-def test_explain_live_matches_cli_smoke(mock_poly, mock_kalshi, mock_fetch, capsys):
+def test_explain_live_matches_cli_smoke(mock_poly, mock_kalshi, mock_fetch, mock_fetch_futures, capsys):
     from src.cli import explain_live_matches_cli
 
     mock_poly.return_value.get_active_markets.return_value = [PM_LAKERS]
     mock_kalshi.return_value.get_markets.return_value = []
     mock_fetch.return_value = [line(team="Denver Nuggets", opponent="Boston Celtics")]
+    mock_fetch_futures.return_value = {"supported": False, "futures": []}
     result = explain_live_matches_cli(sport_key="basketball_nba", as_json=True, rejected_only=True)
     assert result["matches_rejected"] == 1
     assert "team mismatch" in capsys.readouterr().out
