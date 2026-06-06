@@ -4,7 +4,15 @@ __pycache__/
 logs/*.log
 data/raw/*.json
 data/reports/*.json
+data/reports/*.csv
 data/*.db
 data/*.db-*
 .env
+*.env
+deploy/systemd/*.env
 secrets/
+src/cli.py.bak*
+src/cli.py.rollback.*
+src/cli.py.broken_local_backup
+_review_patches.txt
+_scp_test
