@@ -114,3 +114,171 @@ def test_watch_live_arb_cli_smoke(mock_watch, capsys):
     out = capsys.readouterr().out
     assert "Polylens Live Arbitrage Watch" in out
     assert result["iterations"] == 1
+
+
+from src.notifications.dedupe import fingerprint, should_alert
+
+
+def _prop_opportunity(**overrides):
+    opportunity = {
+        "sport": "basketball_nba",
+        "event_id": "evt-123",
+        "market_type": "player_points",
+        "player": "Mitchell Robinson",
+        "line": 2.5,
+        "over_book": "BetA",
+        "under_book": "BetB",
+        "over_odds": -110,
+        "under_odds": -115,
+        "guaranteed_roi": 0.019056,
+        "guaranteed_profit_amount": 1.5,
+    }
+    opportunity.update(overrides)
+    return opportunity
+
+
+def test_prop_alert_cooldown():
+    opportunity = _prop_opportunity()
+    allowed, reason = should_alert(opportunity)
+    assert allowed is True
+
+    allowed, reason = should_alert(opportunity)
+    assert allowed is False
+    assert reason == "cooldown"
+
+
+def test_prop_alert_realert_roi():
+    opportunity = _prop_opportunity(guaranteed_roi=0.019056)
+    allowed, reason = should_alert(opportunity)
+    assert allowed is True
+
+    improved = _prop_opportunity(guaranteed_roi=0.025056)
+    allowed, reason = should_alert(improved)
+    assert allowed is True
+
+
+def test_prop_alert_realert_profit():
+    base = _prop_opportunity(guaranteed_profit_amount=4.0)
+    allowed, reason = should_alert(base)
+    assert allowed is True
+
+    improved = _prop_opportunity(guaranteed_profit_amount=10.5)
+    allowed, reason = should_alert(improved)
+    assert allowed is True
+
+
+def test_prop_alert_timestamp_noop():
+    base = _prop_opportunity()
+    base["timestamp"] = "2026-01-01T00:00:00Z"
+    allowed, reason = should_alert(base, now=datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc))
+    assert allowed is True
+
+    changed_timestamp = dict(base)
+    changed_timestamp["timestamp"] = "2026-01-01T00:01:00Z"
+    allowed, reason = should_alert(changed_timestamp, now=datetime(2026, 1, 1, 0, 2, tzinfo=timezone.utc))
+    assert allowed is False
+    assert reason == "cooldown"
+
+
+def test_prop_alert_different_book_pair():
+    opportunity_a = _prop_opportunity(over_book="BookA", under_book="BookB")
+    allowed_a, _ = should_alert(opportunity_a)
+    assert allowed_a is True
+
+    opportunity_b = _prop_opportunity(over_book="BookC", under_book="BookB")
+    allowed_b, _ = should_alert(opportunity_b)
+    assert allowed_b is True
+
+
+def test_prop_alert_different_line():
+    opportunity = _prop_opportunity(line=2.5)
+    allowed, _ = should_alert(opportunity)
+    assert allowed is True
+
+    changed_line = _prop_opportunity(line=3.5)
+    allowed, _ = should_alert(changed_line)
+    assert allowed is True
+
+
+from src.notifications.dedupe import fingerprint, should_alert
+
+
+def _prop_opportunity(**overrides):
+    opportunity = {
+        "sport": "basketball_nba",
+        "event_id": "evt-123",
+        "market_type": "player_points",
+        "player": "Mitchell Robinson",
+        "line": 2.5,
+        "over_book": "BetA",
+        "under_book": "BetB",
+        "over_odds": -110,
+        "under_odds": -115,
+        "guaranteed_roi": 0.019056,
+        "guaranteed_profit_amount": 1.5,
+    }
+    opportunity.update(overrides)
+    return opportunity
+
+
+def test_prop_alert_cooldown():
+    opportunity = _prop_opportunity()
+    allowed, reason = should_alert(opportunity)
+    assert allowed is True
+
+    allowed, reason = should_alert(opportunity)
+    assert allowed is False
+    assert reason == "cooldown"
+
+
+def test_prop_alert_realert_roi():
+    opportunity = _prop_opportunity(guaranteed_roi=0.019056)
+    allowed, reason = should_alert(opportunity)
+    assert allowed is True
+
+    improved = _prop_opportunity(guaranteed_roi=0.025056)
+    allowed, reason = should_alert(improved)
+    assert allowed is True
+
+
+def test_prop_alert_realert_profit():
+    base = _prop_opportunity(guaranteed_profit_amount=4.0)
+    allowed, reason = should_alert(base)
+    assert allowed is True
+
+    improved = _prop_opportunity(guaranteed_profit_amount=10.5)
+    allowed, reason = should_alert(improved)
+    assert allowed is True
+
+
+def test_prop_alert_timestamp_noop():
+    base = _prop_opportunity()
+    base["timestamp"] = "2026-01-01T00:00:00Z"
+    allowed, reason = should_alert(base, now=datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc))
+    assert allowed is True
+
+    changed_timestamp = dict(base)
+    changed_timestamp["timestamp"] = "2026-01-01T00:01:00Z"
+    allowed, reason = should_alert(changed_timestamp, now=datetime(2026, 1, 1, 0, 2, tzinfo=timezone.utc))
+    assert allowed is False
+    assert reason == "cooldown"
+
+
+def test_prop_alert_different_book_pair():
+    opportunity_a = _prop_opportunity(over_book="BookA", under_book="BookB")
+    allowed_a, _ = should_alert(opportunity_a)
+    assert allowed_a is True
+
+    opportunity_b = _prop_opportunity(over_book="BookC", under_book="BookB")
+    allowed_b, _ = should_alert(opportunity_b)
+    assert allowed_b is True
+
+
+def test_prop_alert_different_line():
+    opportunity = _prop_opportunity(line=2.5)
+    allowed, _ = should_alert(opportunity)
+    assert allowed is True
+
+    changed_line = _prop_opportunity(line=3.5)
+    allowed, _ = should_alert(changed_line)
+    assert allowed is True

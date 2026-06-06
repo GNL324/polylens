@@ -1,0 +1,14 @@
+[Unit]
+Description=Polylens Prop Arbitrage Watcher
+After=network.target tailscaled.service
+
+[Service]
+User=noel
+WorkingDirectory=/home/noel/polylens
+EnvironmentFile=/home/noel/polylens/deploy/systemd/polylens-live-arb.env
+ExecStart=/home/noel/.venv/bin/python -m src.cli watch-prop-arb --profile __ACTIVE__ --json
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

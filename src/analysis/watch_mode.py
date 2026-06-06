@@ -12,7 +12,10 @@ from src.adapters.polymarket import PolymarketClient
 from src.alerts.notifier import build_alert_payload
 from src.analysis.live_arbitrage import scan_live_arbitrage
 from src.analysis.odds_normalization import normalize_odds_events
+from src.risk import RiskEngine, RiskRequest
+from src.risk.models import RiskConfig as PersistentRiskConfig, RiskDecisionType
 from src.storage.opportunity_store import OpportunityStore
+from src.storage.opportunities import record_alert_event
 
 
 @dataclass
@@ -110,19 +113,40 @@ def watch_live_arbitrage(
     total_alerts = 0
     last_result: dict[str, Any] = {}
     store = OpportunityStore(db_path) if save else None
+    risk_config = PersistentRiskConfig.from_env()
+    risk_engine = RiskEngine(db_path, PersistentRiskConfig(**{**risk_config.__dict__, "duplicate_opportunity_cooldown_seconds": 0}))
     while True:
         iterations += 1
         timestamp = datetime.now(timezone.utc)
         result = run_live_scan(**scan_kwargs)
         sent_payloads = []
         suppressed = 0
+        risk_rejections = 0
         scan_run_id = None
         opportunity_ids: list[int] = []
         if store:
             scan_run_id, opportunity_ids = store.save_scan_result(result, scan_mode="watch-live-arb", filters=scan_kwargs, alert_count=0)
-        for candidate in result.get("top_candidates", []):
+        for candidate_index, candidate in enumerate(result.get("top_candidates", [])):
             if suppressor.should_alert(candidate, timestamp=timestamp):
+                opportunity_id = opportunity_ids[candidate_index] if candidate_index < len(opportunity_ids) else None
+                risk_decision = risk_engine.evaluate(_risk_request_from_candidate(candidate, opportunity_id=opportunity_id))
+                if risk_decision.decision not in {RiskDecisionType.APPROVE, RiskDecisionType.PAPER_ONLY}:
+                    risk_rejections += 1
+                    record_alert_event(
+                        db_path=db_path,
+                        alert_type="live_arbitrage",
+                        channel="webhook" if notifier.__class__.__name__ == "WebhookNotifier" else "console",
+                        opportunity_id=opportunity_id,
+                        market_title=_candidate_title(candidate),
+                        roi=candidate.get("estimated_edge") if candidate.get("estimated_edge") is not None else candidate.get("raw_edge"),
+                        profit=candidate.get("expected_profit") or candidate.get("guaranteed_profit_amount"),
+                        status="skipped",
+                        reason=risk_decision.reason,
+                        raw={"candidate": candidate, "risk_decision": risk_decision.to_dict()},
+                    )
+                    continue
                 payload = build_alert_payload(candidate, timestamp=timestamp)
+                payload["risk_decision"] = risk_decision.to_dict()
                 destination = "webhook" if notifier.__class__.__name__ == "WebhookNotifier" else "console"
                 status = "sent"
                 error = None
@@ -133,13 +157,34 @@ def watch_live_arbitrage(
                     except Exception as exc:
                         status = "error"
                         error = str(exc)
+                record_alert_event(
+                    db_path=db_path,
+                    alert_type="live_arbitrage",
+                    channel=destination,
+                    opportunity_id=opportunity_id,
+                    market_title=_candidate_title(candidate),
+                    roi=candidate.get("estimated_edge") if candidate.get("estimated_edge") is not None else candidate.get("raw_edge"),
+                    profit=candidate.get("expected_profit") or candidate.get("guaranteed_profit_amount"),
+                    status="failed" if status == "error" else "sent",
+                    reason="webhook failed" if status == "error" else "send success",
+                    raw={"candidate": candidate, "payload": payload, "status": status, "error": error},
+                )
                 sent_payloads.append(payload)
                 if store:
-                    index = len(sent_payloads) - 1
-                    opportunity_id = opportunity_ids[index] if index < len(opportunity_ids) else None
                     store.save_alert(opportunity_id=opportunity_id, scan_run_id=scan_run_id, destination=destination, status=status, error=error, payload=payload)
             else:
                 suppressed += 1
+                record_alert_event(
+                    db_path=db_path,
+                    alert_type="live_arbitrage",
+                    channel="webhook" if notifier.__class__.__name__ == "WebhookNotifier" else "console",
+                    market_title=_candidate_title(candidate),
+                    roi=candidate.get("estimated_edge") if candidate.get("estimated_edge") is not None else candidate.get("raw_edge"),
+                    profit=candidate.get("expected_profit") or candidate.get("guaranteed_profit_amount"),
+                    status="duplicate",
+                    reason="duplicate suppression",
+                    raw={"candidate": candidate},
+                )
         total_alerts += len(sent_payloads)
         if store and scan_run_id is not None and sent_payloads:
             store.save_scan_run(scan_mode="watch-live-arb-alert-summary", filters=scan_kwargs, venues_scanned={}, candidate_count=0, alert_count=len(sent_payloads), raw_result={"scan_run_id": scan_run_id})
@@ -148,6 +193,7 @@ def watch_live_arbitrage(
             "alerts_sent": len(sent_payloads),
             "total_alerts_sent": total_alerts,
             "duplicates_suppressed": suppressed,
+            "risk_rejections": risk_rejections,
             "scan": result,
             "alerts": sent_payloads,
         }
@@ -156,3 +202,43 @@ def watch_live_arbitrage(
         if once:
             return last_result
         time.sleep(max(1, int(interval_seconds)))
+
+
+def _risk_request_from_candidate(candidate: dict[str, Any], opportunity_id: int | None = None) -> RiskRequest:
+    venue_pair = str(candidate.get("venue_pair") or "unknown")
+    venue = venue_pair.split("_", 1)[0] if "_" in venue_pair else venue_pair
+    market = (
+        candidate.get("kalshi_ticker")
+        or candidate.get("polymarket_id")
+        or candidate.get("sportsbook_event_id")
+        or candidate.get("sportsbook_team")
+        or "unknown"
+    )
+    key = str(opportunity_id or candidate.get("opportunity_id") or _candidate_key(candidate))
+    return RiskRequest(
+        venue=venue,
+        market=str(market),
+        opportunity_id=key,
+        proposed_stake=float(candidate.get("proposed_stake") or candidate.get("recommended_stake") or 0.0),
+        score=candidate.get("execution_score"),
+        edge=candidate.get("estimated_edge") if candidate.get("estimated_edge") is not None else candidate.get("raw_edge"),
+        metadata={"source": "watch_live_arbitrage", "venue_pair": venue_pair},
+    )
+
+
+def _candidate_key(candidate: dict[str, Any]) -> str:
+    return "|".join(
+        str(candidate.get(field) or "")
+        for field in ("venue_pair", "polymarket_id", "kalshi_ticker", "sportsbook_event_id", "sportsbook_team")
+    )
+
+
+def _candidate_title(candidate: dict[str, Any]) -> str:
+    return str(
+        candidate.get("market_title")
+        or candidate.get("polymarket_title")
+        or candidate.get("kalshi_title")
+        or candidate.get("sportsbook_event_name")
+        or candidate.get("venue_pair")
+        or "live arbitrage"
+    )
