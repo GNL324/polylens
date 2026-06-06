@@ -20,6 +20,7 @@ from src.analysis.futures_inventory import summarize_futures_inventory
 from src.analysis.hedge_leg_discovery import explain_hedge_search
 from src.analysis.hedged_arbitrage import classify_arbitrage_candidates
 from src.analysis.kalshi_account_analytics import build_kalshi_account_report, detect_kalshi_patterns, export_kalshi_report
+from src.analysis.kalshi_account_history_export import DEFAULT_ACCOUNT_HISTORY_PATH, export_kalshi_account_history
 from src.analysis.kalshi_backtest import run_kalshi_backtest, summarize_kalshi_backtests
 from src.analysis.kalshi_strategy_simulator import SimulationConfig, compare_kalshi_strategies, export_kalshi_simulation, parse_csv_filter, parse_price_bands, simulate_kalshi_strategy
 from src.analysis.kalshi_market_recorder import record_kalshi_markets, summarize_kalshi_market_data
@@ -43,7 +44,8 @@ from src.analysis.watch_mode import watch_live_arbitrage
 from src.reports.wallet_report import WalletReport
 from src.storage.kalshi_market_data import DEFAULT_KALSHI_DATA_DB
 from src.storage.opportunity_store import OpportunityStore
-from src.storage.opportunities import load_recent_alerts as load_prop_recent_alerts, load_recent_opportunities as load_prop_recent_opportunities, opportunity_key as prop_opportunity_key, opportunity_stats as prop_opportunity_stats, save_alert as save_prop_alert, save_opportunity as save_prop_opportunity
+from src.storage.opportunities import load_recent_alerts as load_prop_recent_alerts, load_recent_opportunities as load_prop_recent_opportunities, opportunity_key as prop_opportunity_key, opportunity_stats as prop_opportunity_stats, record_alert_event, resolve_scanner_profile, save_alert as save_prop_alert, save_opportunity as save_prop_opportunity
+from src.risk import RiskEngine
 from src.trading.executor import KalshiExecutor
 from src.trading.kalshi_strategy import scan_markets_for_signals
 from src.trading.kalshi_live_smoke import run_kalshi_live_smoke_test
@@ -422,6 +424,18 @@ def kalshi_export(as_json: bool = False) -> dict[str, Any]:
     return result
 
 
+def kalshi_export_account_history(output: str = DEFAULT_ACCOUNT_HISTORY_PATH, as_json: bool = False) -> dict[str, Any]:
+    try:
+        result = export_kalshi_account_history(KalshiAuthenticatedClient(), output)
+    except KalshiAuthConfigError as exc:
+        result = {"accepted": False, "mode": "auth_error", "reason": str(exc)}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(result.get("output") or result.get("reason"))
+    return result
+
+
 def kalshi_patterns(as_json: bool = False) -> dict[str, Any]:
     try:
         report = build_kalshi_read_only_report()
@@ -657,11 +671,49 @@ def _player_prop_diagnostics(payload: Any, normalized: list[dict[str, Any]]) -> 
     return {"events_discovered": payload.get("events_discovered", 0), "events_scanned": payload.get("events_scanned", 0), "events_failed": payload.get("events_failed", 0), "prop_markets_supported": payload.get("prop_markets_supported", []), "prop_markets_rejected": payload.get("prop_markets_rejected", []), "props_normalized": len(normalized)}
 
 
-def scan_prop_arb(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, bankroll: float | None = None, min_guaranteed_roi: float | None = None, min_profit: float | None = None, as_json: bool = False) -> dict[str, Any]:
+def scan_prop_arb(
+    sport_key: str | None,
+    event_id: str | None = None,
+    bookmaker: str | None = None,
+    region: str = "us",
+    markets: str | None = None,
+    bankroll: float | None = None,
+    min_guaranteed_roi: float | None = None,
+    min_profit: float | None = None,
+    as_json: bool = False,
+    profile: str | None = None,
+    sportsbooks: str | None = None,
+    db_path: str = "data/opportunities.db",
+) -> dict[str, Any]:
+    profile_row = resolve_scanner_profile(profile, db_path=db_path) if profile else None
+    if profile and profile_row is None:
+        raise ValueError("scanner profile not found")
+    profile_sportsbooks = profile_row.get("sportsbooks") if profile_row else []
+    sportsbook_filter = [item.strip().lower() for item in (sportsbooks.split(",") if sportsbooks else profile_sportsbooks or []) if str(item).strip()]
+    if sportsbook_filter and any(item in {"all", "__all__", "*"} for item in sportsbook_filter):
+        sportsbook_filter = []
+    effective_sport = sport_key or (profile_row.get("sport") if profile_row else None)
+    if not effective_sport:
+        raise ValueError("--sport is required when no scanner profile supplies one")
+    effective_markets = markets or (",".join(profile_row.get("markets") or []) if profile_row else None)
+    effective_bookmaker = bookmaker or sportsbooks or (",".join(sportbook for sportbook in sportsbook_filter) if sportsbook_filter else None)
+    effective_bankroll = bankroll if bankroll is not None else (profile_row.get("bankroll") if profile_row else None)
+    effective_min_roi = min_guaranteed_roi if min_guaranteed_roi is not None else (profile_row.get("min_roi") if profile_row else None)
     started = time.time()
-    props = fetch_player_props(sport_key, event_id=event_id, bookmaker=bookmaker, region=region, markets=markets, quiet=True)
+    props = fetch_player_props(effective_sport, event_id=event_id, bookmaker=effective_bookmaker, region=region, markets=effective_markets, quiet=True)
+    if sportsbook_filter:
+        allowed = set(sportsbook_filter)
+        props = [
+            row for row in props
+            if str(row.get("bookmaker_key") or row.get("bookmaker") or row.get("bookmaker_name") or "").strip().lower() in allowed
+        ]
     duration = round(time.time() - started, 4)
-    result = scan_prop_arbitrage(props, bankroll=bankroll, min_guaranteed_roi=min_guaranteed_roi, min_profit=min_profit, scan_duration_seconds=duration, api_calls=None)
+    result = scan_prop_arbitrage(props, bankroll=effective_bankroll, min_guaranteed_roi=effective_min_roi, min_profit=min_profit, scan_duration_seconds=duration, api_calls=None)
+    if profile_row:
+        result["scanner_profile"] = profile_row.get("name")
+        result["scanner_profile_id"] = profile_row.get("id")
+    if sportsbook_filter:
+        result["sportsbooks_filter"] = sportsbook_filter
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -1224,6 +1276,200 @@ def opportunity_stats(db_path: str = "data/polylens.db", as_json: bool = False) 
     return stats
 
 
+def telegram_test_alert(as_json: bool = False, db_path: str = "data/opportunities.db") -> dict[str, Any]:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        result = {"sent": False, "status": "skipped", "reason": "missing Telegram config"}
+    else:
+        result = send_telegram_alert(
+            {
+                "player": "Polylens Test",
+                "prop_type": "telegram_test",
+                "line": 0,
+                "over_book": "test",
+                "over_odds": 100,
+                "under_book": "test",
+                "under_odds": 100,
+                "guaranteed_roi": 0,
+                "guaranteed_profit_amount": 0,
+            },
+            "telegram_test",
+        )
+        result["reason"] = result.get("error") or result.get("status")
+    record_alert_event(
+        db_path=db_path,
+        alert_type="telegram_test",
+        channel="telegram",
+        status=result.get("status", "unknown"),
+        reason=result.get("reason"),
+        raw={"TELEGRAM_BOT_TOKEN": token, "TELEGRAM_CHAT_ID": chat_id, "result": result},
+    )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Telegram test alert: {result.get('status')} ({result.get('reason')})")
+    return result
+
+
+def risk_status(db_path: str = "data/polylens.db", as_json: bool = False) -> dict[str, Any]:
+    status = RiskEngine(db_path).status()
+    if as_json:
+        print(json.dumps(status, indent=2, sort_keys=True))
+    else:
+        print("Polylens Risk Status")
+        print("=" * 20)
+        print(f"Mode: {status['mode']}")
+        print(f"DRY_RUN: {status['dry_run']}")
+        print(f"LIVE_TRADING: {status['live_trading']}")
+        print(f"Live execution enabled: {status['live_execution_enabled']}")
+        print(f"Global halt: {status['global_halt']}")
+        print(f"Active halts: {len(status['active_halts'])}")
+        print(f"Exposure by venue: {status['exposure_by_venue']}")
+    return status
+
+
+def risk_events(limit: int = 20, db_path: str = "data/polylens.db", as_json: bool = False) -> list[dict[str, Any]]:
+    rows = RiskEngine(db_path).recent_events(limit=limit)
+    if as_json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+    else:
+        for row in rows:
+            print(f"{row.get('timestamp')} {row.get('decision')} {row.get('venue')} {row.get('market')} {row.get('reason')}")
+    return rows
+
+
+def risk_halt(reason: str = "manual halt", venue: str | None = None, db_path: str = "data/polylens.db", as_json: bool = False) -> dict[str, Any]:
+    engine = RiskEngine(db_path)
+    halt_id = engine.halt(reason=reason, venue=venue)
+    result = {"id": halt_id, "active": True, "scope": "venue" if venue else "global", "venue": venue, "reason": reason}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Risk halt active: {reason}")
+    return result
+
+
+def risk_resume(venue: str | None = None, db_path: str = "data/polylens.db", as_json: bool = False) -> dict[str, Any]:
+    resumed = RiskEngine(db_path).resume(venue=venue)
+    result = {"resumed_halts": resumed, "scope": "venue" if venue else "global", "venue": venue}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Risk resume: resumed_halts={resumed}")
+    return result
+
+
+def _scan_short_crypto(assets: list[str], windows: list[int], as_json: bool = True) -> dict[str, Any]:
+    from src.analysis.short_crypto_markets import normalize_short_crypto_markets
+    from src.analysis.short_crypto_executor import ShortCryptoSignalEngine
+
+    engine = ShortCryptoSignalEngine(assets=assets, windows=windows, min_edge=0.0)
+    kalshi = []
+    polymarket = []
+    try:
+        kalshi = KalshiClient(raw_dir="data/raw").get_markets(status="open", limit=200, max_pages=1) or []
+    except Exception as exc:  # pragma: no cover - CLI fallback path
+        logging.getLogger(__name__).warning("kalshi market load failed for scan-short-crypto: %s", exc)
+    try:
+        polymarket = PolymarketClient(raw_dir="data/raw").get_markets(limit=200) or []
+    except Exception as exc:  # pragma: no cover - CLI fallback path
+        logging.getLogger(__name__).warning("polymarket market load failed for scan-short-crypto: %s", exc)
+    normalized = normalize_short_crypto_markets(kalshi, polymarket)
+    signals = engine.generate_signals(normalized, {})
+    rows = [
+        {
+            "asset": signal.asset,
+            "direction": signal.direction,
+            "venue": signal.venue,
+            "ticker": signal.ticker,
+            "window_minutes": signal.window_minutes,
+            "spot_price": signal.spot_price,
+            "edge": signal.edge,
+            "roi": signal.roi,
+            "timestamp": signal.timestamp,
+        }
+        for signal in signals
+    ]
+    payload = {"assets": assets, "windows": windows, "signal_count": len(rows), "signals": rows, "status": "ok"}
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Short crypto signals: {len(rows)}")
+    return payload
+
+
+def _watch_short_crypto(paper: bool = True, interval: int | None = None, max_loops: int | None = None, as_json: bool = True) -> dict[str, Any]:
+    from src.analysis.short_crypto_markets import normalize_short_crypto_markets
+    from src.analysis.short_crypto_executor import ShortCryptoSignalEngine, ShortCryptoExecutor, ShortCryptoRiskConfig
+
+    engine = ShortCryptoSignalEngine(assets=["BTC", "ETH", "SOL"], windows=[5], min_edge=0.0)
+    executor = ShortCryptoExecutor(config=ShortCryptoRiskConfig())
+    loop = 0
+    executed_last: list[dict[str, Any]] = []
+    while max_loops is None or loop < max_loops:
+        kalshi = []
+        polymarket = []
+        try:
+            kalshi = KalshiClient(raw_dir="data/raw").get_markets(status="open", limit=200, max_pages=1) or []
+        except Exception as exc:  # pragma: no cover - CLI fallback path
+            logging.getLogger(__name__).warning("watch kalshi load failed: %s", exc)
+        try:
+            polymarket = PolymarketClient(raw_dir="data/raw").get_markets(limit=200) or []
+        except Exception as exc:  # pragma: no cover - CLI fallback path
+            logging.getLogger(__name__).warning("watch polymarket load failed: %s", exc)
+        markets = normalize_short_crypto_markets(kalshi, polymarket)
+        signals = engine.generate_signals(markets, {})
+        executed_last = []
+        for signal in signals:
+            result = executor.execute(signal, mode="paper")
+            executed_last.append({
+                "asset": signal.asset,
+                "direction": signal.direction,
+                "venue": signal.venue,
+                "ticker": signal.ticker,
+                "accepted": result.get("accepted"),
+                "reason": result.get("reason"),
+                "stake": result.get("stake"),
+            })
+        payload = {"loop": loop, "paper": paper, "market_count": len(markets), "signal_count": len(signals), "executed": executed_last}
+        if as_json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"Loop {loop}: signals={len(signals)} executed={len(executed_last)} paper={paper}")
+        loop += 1
+        if interval and (max_loops is None or loop < max_loops):
+            time.sleep(int(interval))
+    return {"loop": max(0, loop - 1), "paper": paper, "executed": executed_last}
+
+
+def _trade_short_crypto(as_json: bool = True, paper: bool = True) -> dict[str, Any]:
+    from src.analysis.short_crypto_executor import ShortCryptoExecutor, ShortCryptoRiskConfig, CryptoSignal
+
+    executor = ShortCryptoExecutor(config=ShortCryptoRiskConfig())
+    signal = CryptoSignal(
+        asset="BTC",
+        window_minutes=5,
+        direction="up",
+        venue="kalshi",
+        ticker="BTC-UP-5",
+        spot_price=100.0,
+        implied_prob=0.5,
+        model_prob=0.6,
+        edge=0.1,
+        roi=0.1,
+        timestamp=time.time(),
+        meta={},
+    )
+    result = executor.execute(signal, mode="paper")
+    payload = {"accepted": result.get("accepted"), "mode": "paper", "reason": result.get("reason"), "stake": result.get("stake")}
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Short crypto paper trade: accepted={payload['accepted']} reason={payload['reason']}")
+    return payload
+
+
 def main() -> None:
     setup_logging()
     parser = argparse.ArgumentParser(prog="polylens")
@@ -1304,6 +1550,10 @@ def main() -> None:
 
     kalshi_export_parser = sub.add_parser("kalshi-export")
     kalshi_export_parser.add_argument("--json", action="store_true")
+
+    kalshi_export_history_parser = sub.add_parser("kalshi-export-account-history")
+    kalshi_export_history_parser.add_argument("--output", default=DEFAULT_ACCOUNT_HISTORY_PATH)
+    kalshi_export_history_parser.add_argument("--json", action="store_true")
 
     kalshi_patterns_parser = sub.add_parser("kalshi-patterns")
     kalshi_patterns_parser.add_argument("--json", action="store_true")
@@ -1396,6 +1646,9 @@ def main() -> None:
     prop_arb_parser.add_argument("--min-guaranteed-roi", type=float)
     prop_arb_parser.add_argument("--min-roi", type=float, dest="min_roi")
     prop_arb_parser.add_argument("--min-profit", type=float)
+    prop_arb_parser.add_argument("--profile")
+    prop_arb_parser.add_argument("--sportsbooks")
+    prop_arb_parser.add_argument("--db-path", default="data/opportunities.db")
     prop_arb_parser.add_argument("--json", action="store_true")
 
     watch_prop_parser = sub.add_parser("watch-prop-arb")
@@ -1522,6 +1775,45 @@ def main() -> None:
     stats_parser.add_argument("--db-path", default="data/polylens.db")
     stats_parser.add_argument("--json", action="store_true")
 
+    telegram_test_parser = sub.add_parser("telegram-test-alert")
+    telegram_test_parser.add_argument("--db-path", default="data/opportunities.db")
+    telegram_test_parser.add_argument("--json", action="store_true")
+
+    risk_status_parser = sub.add_parser("risk-status")
+    risk_status_parser.add_argument("--db-path", default="data/polylens.db")
+    risk_status_parser.add_argument("--json", action="store_true")
+
+    risk_events_parser = sub.add_parser("risk-events")
+    risk_events_parser.add_argument("--limit", type=int, default=20)
+    risk_events_parser.add_argument("--db-path", default="data/polylens.db")
+    risk_events_parser.add_argument("--json", action="store_true")
+
+    risk_halt_parser = sub.add_parser("risk-halt")
+    risk_halt_parser.add_argument("--reason", default="manual halt")
+    risk_halt_parser.add_argument("--venue")
+    risk_halt_parser.add_argument("--db-path", default="data/polylens.db")
+    risk_halt_parser.add_argument("--json", action="store_true")
+
+    risk_resume_parser = sub.add_parser("risk-resume")
+    risk_resume_parser.add_argument("--venue")
+    risk_resume_parser.add_argument("--db-path", default="data/polylens.db")
+    risk_resume_parser.add_argument("--json", action="store_true")
+
+    scan_short_crypto_parser = sub.add_parser("scan-short-crypto")
+    scan_short_crypto_parser.add_argument("--assets", required=True, help="comma-separated assets, e.g. BTC,ETH,SOL")
+    scan_short_crypto_parser.add_argument("--windows", required=True, help="comma-separated window minutes, e.g. 5,10,15")
+    scan_short_crypto_parser.add_argument("--json", action="store_true")
+
+    watch_short_crypto_parser = sub.add_parser("watch-short-crypto")
+    watch_short_crypto_parser.add_argument("--paper", action="store_true", default=True, help="force paper execution (default)")
+    watch_short_crypto_parser.add_argument("--interval", type=int, default=None, help="seconds between loops")
+    watch_short_crypto_parser.add_argument("--max-loops", type=int, default=None, help="stop after N loops")
+    watch_short_crypto_parser.add_argument("--json", action="store_true")
+
+    trade_short_crypto_parser = sub.add_parser("trade-short-crypto")
+    trade_short_crypto_parser.add_argument("--paper", action="store_true", default=True, help="paper trading only")
+    trade_short_crypto_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -1560,6 +1852,8 @@ def main() -> None:
         kalshi_report(as_json=args.json)
     elif args.command == "kalshi-export":
         kalshi_export(as_json=args.json)
+    elif args.command == "kalshi-export-account-history":
+        kalshi_export_account_history(output=args.output, as_json=args.json)
     elif args.command == "kalshi-patterns":
         kalshi_patterns(as_json=args.json)
     elif args.command == "kalshi-simulate":
@@ -1583,7 +1877,7 @@ def main() -> None:
     elif args.command == "debug-player-props":
         debug_player_props(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
     elif args.command == "scan-prop-arb":
-        scan_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, bankroll=args.bankroll, min_guaranteed_roi=args.min_roi if args.min_roi is not None else args.min_guaranteed_roi, min_profit=args.min_profit, as_json=args.json)
+        scan_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, bankroll=args.bankroll, min_guaranteed_roi=args.min_roi if args.min_roi is not None else args.min_guaranteed_roi, min_profit=args.min_profit, as_json=args.json, profile=args.profile, sportsbooks=args.sportsbooks, db_path=args.db_path)
     elif args.command == "watch-prop-arb":
         watch_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, interval=args.interval, bankroll=args.bankroll, min_roi=args.min_roi, min_profit=args.min_profit, once=args.once, as_json=args.json, db_path=args.db_path)
     elif args.command == "fetch-futures":
@@ -1616,6 +1910,24 @@ def main() -> None:
         recent_prop_alerts(limit=args.limit, db_path=args.db_path if args.db_path != "data/polylens.db" else "data/opportunities.db", as_json=args.json)
     elif args.command == "opportunity-stats":
         prop_stats(db_path=args.db_path if args.db_path != "data/polylens.db" else "data/opportunities.db", as_json=args.json)
+    elif args.command == "telegram-test-alert":
+        telegram_test_alert(as_json=args.json, db_path=args.db_path)
+    elif args.command == "risk-status":
+        risk_status(db_path=args.db_path, as_json=args.json)
+    elif args.command == "risk-events":
+        risk_events(limit=args.limit, db_path=args.db_path, as_json=args.json)
+    elif args.command == "risk-halt":
+        risk_halt(reason=args.reason, venue=args.venue, db_path=args.db_path, as_json=args.json)
+    elif args.command == "risk-resume":
+        risk_resume(venue=args.venue, db_path=args.db_path, as_json=args.json)
+    elif args.command == "scan-short-crypto":
+        assets = [item.strip().upper() for item in args.assets.split(",") if item.strip()]
+        windows = [int(item.strip()) for item in args.windows.split(",") if item.strip()]
+        _scan_short_crypto(assets=assets, windows=windows, as_json=args.json)
+    elif args.command == "watch-short-crypto":
+        _watch_short_crypto(paper=args.paper, interval=args.interval, max_loops=args.max_loops, as_json=args.json)
+    elif args.command == "trade-short-crypto":
+        _trade_short_crypto(as_json=args.json, paper=args.paper)
 
 
 if __name__ == "__main__":
