@@ -88,19 +88,75 @@ class PolymarketLiveAdapter:
         return client
 
     def get_balance_allowance(self) -> dict[str, Any]:
+        empty = {
+            "auth_valid": False,
+            "balance_allowance_attempts": [],
+            "first_successful_asset_type": None,
+            "balance_summary": None,
+        }
         try:
             client = self.build_client()
         except PolymarketLiveError as exc:
-            return {"ok": False, "status": "not_ready", "reason": str(exc)}
-        for method_name in ("get_balance_allowance", "get_balance_and_allowance"):
-            method = getattr(client, method_name, None)
-            if callable(method):
-                try:
-                    raw = method()
-                    return {"ok": True, "status": "ok", "raw": _redact(raw)}
-                except Exception as exc:
-                    return {"ok": False, "status": "not_ready", "reason": "balance_allowance_check_failed", "detail": str(exc)}
-        return {"ok": False, "status": "not_ready", "reason": "balance_allowance_method_not_available"}
+            return {"ok": False, "status": "not_ready", "reason": str(exc), **empty}
+        sdk = _load_sdk()
+        method = getattr(client, "get_balance_allowance", None)
+        if not callable(method):
+            method = getattr(client, "get_balance_and_allowance", None)
+        if not callable(method):
+            return {
+                "ok": False,
+                "status": "not_ready",
+                "reason": "balance_allowance_method_not_available",
+                **empty,
+            }
+
+        attempts: list[dict[str, Any]] = []
+        first_successful_asset_type: str | None = None
+        balance_summary: dict[str, Any] | None = None
+
+        for label, asset_type_value in _balance_allowance_asset_type_candidates(sdk):
+            try:
+                params = _build_balance_allowance_params(sdk, asset_type_value)
+                raw = method(params) if params is not None else method()
+                attempts.append(
+                    {
+                        "asset_type": label,
+                        "ok": True,
+                        "status": "ok",
+                        "status_code": 200,
+                    }
+                )
+                if first_successful_asset_type is None:
+                    first_successful_asset_type = label
+                    balance_summary = _summarize_balance_response(raw)
+                break
+            except Exception as exc:
+                status_code, error_msg = _parse_poly_api_error(exc)
+                attempts.append(
+                    {
+                        "asset_type": label,
+                        "ok": False,
+                        "status": "error",
+                        "status_code": status_code,
+                        "error": _safe_balance_error_message(error_msg),
+                    }
+                )
+                if status_code == 401:
+                    break
+
+        auth_valid = derive_auth_valid_from_attempts(attempts)
+        ok = first_successful_asset_type is not None
+        result: dict[str, Any] = {
+            "ok": ok,
+            "status": "ok" if ok else "not_ready",
+            "auth_valid": auth_valid,
+            "balance_allowance_attempts": attempts,
+            "first_successful_asset_type": first_successful_asset_type,
+            "balance_summary": balance_summary,
+        }
+        if not ok:
+            result["reason"] = _balance_allowance_failure_reason(attempts, auth_valid)
+        return result
 
     def create_signed_order(self, *, token_id: str, price: float, size: float, side: str = BUY, tick_size: str | None = None, neg_risk: bool | None = None) -> dict[str, Any]:
         order_args = self.order_args(token_id=token_id, price=price, size=size, side=side)
@@ -146,6 +202,15 @@ class PolymarketLiveAdapter:
         response = client.post_order(signed_order, sdk_order_type)
         return {"ok": True, "status": "submitted", "response": _redact(response), "sent": True, "order_endpoint_called": True}
 
+    def try_init_client(self) -> dict[str, Any]:
+        try:
+            client = self.build_client()
+            return {"ok": True, "client_type": type(client).__name__}
+        except PolymarketLiveError as exc:
+            return {"ok": False, "reason": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "reason": "clob_client_init_failed", "detail": str(exc)}
+
     @staticmethod
     def order_args(*, token_id: str, price: float, size: float, side: str = BUY) -> dict[str, Any]:
         return {"token_id": str(token_id), "price": round(float(price), 4), "size": round(float(size), 8), "side": side}
@@ -175,37 +240,60 @@ def discover_short_crypto_market(
             for market in markets:
                 parsed = _parse_market_tokens(market)
                 slug = str(market.get("slug") or market.get("marketSlug") or market.get("id") or "")
+                condition_id = _market_condition_id(market)
+                clob_token_ids = _market_clob_token_ids(market)
                 if not parsed:
-                    rejected.append({"market_slug": slug, "reason": "token_ids_missing", "asset": asset, "window_minutes": window_minutes})
+                    rejected.append(
+                        {
+                            "slug": slug,
+                            "condition_id": condition_id,
+                            "clobTokenIds": clob_token_ids,
+                            "reason": "token_ids_missing",
+                            "asset": asset,
+                            "window_minutes": window_minutes,
+                        }
+                    )
                     continue
                 for outcome in parsed["outcomes"]:
                     if outcome["name"].upper() not in {"YES", "UP"}:
                         continue
                     token_id = outcome["token_id"]
-                    probe = _probe_orderbook(token_id)
-                    candidates_checked.append(
-                        {
-                            "asset": asset,
-                            "window_minutes": window_minutes,
-                            "market_slug": slug,
-                            "token_id": token_id,
-                            "outcome": outcome["name"],
-                            "book_status": probe.get("status_code"),
-                            "book_reason": probe.get("reason"),
-                        }
-                    )
+                    probe = _probe_orderbook_with_variants(token_id)
+                    candidate = {
+                        "asset": asset,
+                        "window_minutes": window_minutes,
+                        "slug": slug,
+                        "market_slug": slug,
+                        "condition_id": condition_id,
+                        "clobTokenIds": clob_token_ids,
+                        "token_id": token_id,
+                        "token_id_tried": [item["token_id_tried"] for item in probe.get("attempts", [])],
+                        "outcome": outcome["name"],
+                        "book_status": probe.get("status_code"),
+                        "book_reason": probe.get("reason"),
+                        "error": probe.get("error") or probe.get("detail"),
+                        "probe_attempts": probe.get("attempts", []),
+                    }
+                    candidates_checked.append(candidate)
                     if probe.get("status_code") == 404 and token_id not in seen_404:
                         seen_404.add(token_id)
                         clob_book_404_token_ids.append(token_id)
                     if not probe.get("ok"):
                         rejected.append(
                             {
+                                "slug": slug,
                                 "market_slug": slug,
+                                "condition_id": condition_id,
+                                "clobTokenIds": clob_token_ids,
                                 "token_id": token_id,
+                                "outcome": outcome["name"],
                                 "reason": probe.get("reason", "orderbook_fetch_failed"),
                                 "detail": probe.get("detail"),
+                                "error": probe.get("error"),
                                 "asset": asset,
                                 "window_minutes": window_minutes,
+                                "book_status": probe.get("status_code"),
+                                "token_id_tried": candidate["token_id_tried"],
                             }
                         )
                         continue
@@ -214,8 +302,11 @@ def discover_short_crypto_market(
                     if not ask:
                         rejected.append(
                             {
+                                "slug": slug,
                                 "market_slug": slug,
+                                "condition_id": condition_id,
                                 "token_id": token_id,
+                                "outcome": outcome["name"],
                                 "reason": "no_executable_ask",
                                 "asset": asset,
                                 "window_minutes": window_minutes,
@@ -235,7 +326,7 @@ def discover_short_crypto_market(
                         "not_short_crypto": False,
                     }
 
-    return {
+    failure: dict[str, Any] = {
         "ok": False,
         "mode": "short_crypto",
         "reason": "no_short_crypto_clob_book_available",
@@ -244,6 +335,10 @@ def discover_short_crypto_market(
         "clob_book_404_token_ids": clob_book_404_token_ids,
         "not_short_crypto": False,
     }
+    diagnostics = _short_crypto_clob_diagnostics(candidates_checked)
+    if diagnostics:
+        failure["diagnostics"] = diagnostics
+    return failure
 
 
 def discover_clob_connectivity_market(asset: str = "BTC", window_minutes: int = 5, limit: int = 500) -> dict[str, Any]:
@@ -303,6 +398,24 @@ def _discover_from_markets(markets: list[dict[str, Any]], rejected: list[dict[st
     return {"ok": False, "reason": "no_executable_polymarket_crypto_candidate_found", "rejected": rejected}
 
 
+def _token_id_probe_variants(token_id: Any) -> list[str]:
+    variants: list[str] = []
+    for value in (token_id, str(token_id)):
+        candidate = str(value).strip()
+        if candidate and candidate not in variants:
+            variants.append(candidate)
+    return variants
+
+
+def _market_condition_id(market: dict[str, Any]) -> str | None:
+    value = market.get("conditionId") or market.get("condition_id")
+    return str(value) if value not in {None, ""} else None
+
+
+def _market_clob_token_ids(market: dict[str, Any]) -> list[Any]:
+    return _json_list(market.get("clobTokenIds") or market.get("clob_token_ids"))
+
+
 def _probe_orderbook(token_id: str, host: str | None = None) -> dict[str, Any]:
     host = (host or os.environ.get("POLYMARKET_CLOB_HOST") or DEFAULT_CLOB_HOST).rstrip("/")
     url = f"{host}/book?{urlencode({'token_id': token_id})}"
@@ -316,6 +429,59 @@ def _probe_orderbook(token_id: str, host: str | None = None) -> dict[str, Any]:
         return {"ok": False, "book": None, "status_code": exc.code, "reason": reason, "detail": str(exc)}
     except Exception as exc:
         return {"ok": False, "book": None, "status_code": None, "reason": "orderbook_fetch_failed", "detail": str(exc)}
+
+
+def _probe_orderbook_with_variants(token_id: Any, host: str | None = None) -> dict[str, Any]:
+    attempts: list[dict[str, Any]] = []
+    for variant in _token_id_probe_variants(token_id):
+        probe = _probe_orderbook(variant, host=host)
+        attempt = {
+            "token_id_tried": variant,
+            "book_status": probe.get("status_code"),
+            "ok": probe.get("ok"),
+            "reason": probe.get("reason"),
+            "error": probe.get("detail"),
+        }
+        attempts.append(attempt)
+        if probe.get("ok"):
+            return {
+                "ok": True,
+                "book": probe["book"],
+                "status_code": probe.get("status_code") or 200,
+                "token_id_used": variant,
+                "attempts": attempts,
+                "reason": None,
+                "detail": None,
+                "error": None,
+            }
+    last = attempts[-1] if attempts else {}
+    return {
+        "ok": False,
+        "book": None,
+        "status_code": last.get("book_status"),
+        "token_id_used": None,
+        "attempts": attempts,
+        "reason": last.get("reason") or "orderbook_fetch_failed",
+        "detail": last.get("error"),
+        "error": last.get("error"),
+    }
+
+
+def _short_crypto_clob_diagnostics(candidates_checked: list[dict[str, Any]]) -> dict[str, Any]:
+    five_m = [item for item in candidates_checked if item.get("window_minutes") == 5]
+    if not five_m:
+        return {}
+    if not all(item.get("book_status") == 404 for item in five_m):
+        return {}
+    return {
+        "all_5m_books_404": True,
+        "five_m_candidate_count": len(five_m),
+        "unique_slugs": sorted({str(item.get("slug") or "") for item in five_m if item.get("slug")}),
+        "unique_condition_ids": sorted({str(item.get("condition_id") or "") for item in five_m if item.get("condition_id")}),
+        "clob_book_404_token_ids": sorted({str(item.get("token_id") or "") for item in five_m if item.get("token_id")}),
+        "outcomes": sorted({str(item.get("outcome") or "") for item in five_m if item.get("outcome")}),
+        "probe_samples": five_m[:5],
+    }
 
 
 def get_orderbook(token_id: str, host: str | None = None) -> dict[str, Any]:
@@ -462,6 +628,26 @@ def _get_json(url: str) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
+def probe_sdk() -> dict[str, Any]:
+    imports: dict[str, dict[str, Any]] = {}
+    for package in ("py_clob_client_v2", "py_clob_client"):
+        try:
+            if package == "py_clob_client_v2":
+                from py_clob_client_v2 import ApiCreds, ClobClient, OrderArgs, OrderType, PartialCreateOrderOptions  # noqa: F401
+            else:
+                from py_clob_client.client import ClobClient  # noqa: F401
+                from py_clob_client.clob_types import ApiCreds, OrderArgs, OrderType  # noqa: F401
+            imports[package] = {"ok": True, "error": None}
+        except Exception as exc:
+            imports[package] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    loaded = _load_sdk()
+    return {
+        "sdk_available": loaded is not None,
+        "sdk_package": loaded[0] if loaded else None,
+        "imports": imports,
+    }
+
+
 def _load_sdk() -> tuple[str, Any, Any, Any, Any, Any] | None:
     try:
         from py_clob_client_v2 import ApiCreds, ClobClient, OrderArgs, OrderType, PartialCreateOrderOptions
@@ -477,6 +663,93 @@ def _load_sdk() -> tuple[str, Any, Any, Any, Any, Any] | None:
     except Exception:
         return None
 
+
+
+def _balance_allowance_asset_type_candidates(sdk: tuple[str, Any, Any, Any, Any, Any] | None) -> list[tuple[str, Any]]:
+    candidates: list[tuple[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(label: str, value: Any) -> None:
+        if label in seen:
+            return
+        seen.add(label)
+        candidates.append((label, value))
+
+    if sdk and sdk[0] == "py_clob_client_v2":
+        try:
+            from py_clob_client_v2.clob_types import AssetType
+
+            add("COLLATERAL", AssetType.COLLATERAL)
+            add("CONDITIONAL", AssetType.CONDITIONAL)
+        except Exception:
+            pass
+
+    for label in ("COLLATERAL", "CONDITIONAL", "collateral", "conditional", "usdc", "token"):
+        add(label, label)
+    add("none", None)
+    return candidates
+
+
+def _build_balance_allowance_params(sdk: tuple[str, Any, Any, Any, Any, Any] | None, asset_type_value: Any) -> Any | None:
+    if asset_type_value is None:
+        return None
+    if sdk and sdk[0] == "py_clob_client_v2":
+        from py_clob_client_v2.clob_types import BalanceAllowanceParams
+
+        return BalanceAllowanceParams(asset_type=asset_type_value)
+    if sdk and sdk[0] == "py_clob_client":
+        try:
+            from py_clob_client.clob_types import BalanceAllowanceParams
+
+            return BalanceAllowanceParams(asset_type=asset_type_value)
+        except Exception:
+            pass
+    return {"asset_type": asset_type_value}
+
+
+def _parse_poly_api_error(exc: Exception) -> tuple[int | None, Any]:
+    status_code = getattr(exc, "status_code", None)
+    error_msg = getattr(exc, "error_msg", None)
+    if error_msg is None:
+        error_msg = str(exc)
+    return status_code, error_msg
+
+
+def derive_auth_valid_from_attempts(attempts: list[dict[str, Any]]) -> bool:
+    if not attempts:
+        return False
+    if any(attempt.get("status_code") == 401 for attempt in attempts):
+        return False
+    return any(attempt.get("status_code") in {200, 400} for attempt in attempts)
+
+
+def _balance_allowance_failure_reason(attempts: list[dict[str, Any]], auth_valid: bool) -> str:
+    if auth_valid:
+        return "balance_allowance_request_malformed"
+    if any(attempt.get("status_code") == 401 for attempt in attempts):
+        return "balance_allowance_unauthorized"
+    return "balance_allowance_check_failed"
+
+
+def _safe_balance_error_message(error_msg: Any) -> Any:
+    if isinstance(error_msg, dict):
+        return {
+            key: value
+            for key, value in error_msg.items()
+            if str(key).lower() not in {"token_id", "asset_id"}
+        }
+    return _redact(error_msg)
+
+
+def _summarize_balance_response(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {"present": bool(raw)}
+    summary: dict[str, Any] = {}
+    for key in ("balance", "allowance", "available", "allowances", "amount", "asset_type"):
+        if key in raw:
+            summary[key] = raw[key]
+    redacted = _redact(summary)
+    return redacted if isinstance(redacted, dict) else {"present": True}
 
 def _redact(value: Any) -> Any:
     if isinstance(value, dict):

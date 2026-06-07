@@ -57,9 +57,71 @@ All gates below must be understood before enabling live trading. Venue-specific 
 
 **Kalshi:** `KALSHI_API_KEY_ID`, `KALSHI_PRIVATE_KEY_PATH` (or inline key per adapter config)
 
-**Polymarket:** `POLYMARKET_PRIVATE_KEY`, `POLYMARKET_API_KEY`, `POLYMARKET_API_SECRET`, `POLYMARKET_API_PASSPHRASE`, optional `POLYMARKET_FUNDER`, `POLYMARKET_SIGNATURE_TYPE`
+### Polymarket auth configuration
 
-Never commit credentials. Use `secrets/` or systemd env files outside git.
+Install the SDK in `.venv`:
+
+```bash
+pip install -r requirements.txt
+```
+
+Polylens uses **`py-clob-client-v2`** (import name `py_clob_client_v2`). The legacy `py-clob-client` package is not required.
+
+Verify SDK and credentials without sending orders:
+
+```bash
+PYTHONPATH=. .venv/bin/python polymarket_auth_audit.py
+PYTHONPATH=. .venv/bin/python -m src.cli polymarket-auth-audit --json
+```
+
+#### Required environment variables
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `POLYMARKET_PRIVATE_KEY` | Yes | EOA private key used to sign orders |
+| `POLYMARKET_API_KEY` | Yes | Polymarket CLOB L2 API key |
+| `POLYMARKET_API_SECRET` | Yes | Polymarket CLOB L2 API secret |
+| `POLYMARKET_API_PASSPHRASE` | Yes | Polymarket CLOB L2 API passphrase |
+| `POLYMARKET_FUNDER` | Yes (live) | Proxy/funder wallet address holding USDC |
+| `POLYMARKET_SIGNATURE_TYPE` | Yes (live) | `1` Magic/email, `2` browser wallet, `3` Gnosis Safe |
+| `POLYMARKET_CHAIN_ID` | No | Default `137` (Polygon mainnet) |
+| `POLYMARKET_CLOB_HOST` | No | Default `https://clob.polymarket.com` |
+
+Store values in `secrets/` or a systemd env file. **Never commit secrets.**
+
+Auth audits report only `*_present` booleans — secret values are never printed.
+
+#### Deriving L2 API credentials
+
+L2 credentials (`POLYMARKET_API_KEY`, `POLYMARKET_API_SECRET`, `POLYMARKET_API_PASSPHRASE`) are created once from your private key using the Polymarket CLOB client:
+
+```python
+from py_clob_client_v2 import ClobClient
+
+host = "https://clob.polymarket.com"
+chain_id = 137
+private_key = "<your-private-key>"  # do not commit
+
+client = ClobClient(host, key=private_key, chain_id=chain_id)
+creds = client.create_or_derive_api_creds()
+# Export creds.api_key, creds.api_secret, creds.api_passphrase to env vars
+```
+
+Alternatively use Polymarket's documented `derive_api_key` / `create_api_key` flow from their CLOB docs. Re-use the same derived credentials across restarts; do not regenerate unless rotating keys.
+
+#### Live send remains blocked until readiness passes
+
+Even with valid credentials and a working SDK:
+
+- `post_order` is **never** called by `polymarket_auth_audit.py` (`post_order_called: false`, `sent: false`)
+- `POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED` defaults off
+- All first-live gates (`POLYLENS_FIRST_LIVE_TEST`, run ID, risk acks) must pass
+- Short-crypto CLOB book must exist (`polymarket_short_crypto_clob_book` check)
+- Non-short-crypto fallback markets are blocked (`not_short_crypto_market`)
+
+Run `live-readiness-polymarket --json` before considering any live send.
+
+
 
 ## First-Live-Test Procedure (Kalshi)
 
@@ -237,7 +299,7 @@ Tables: `data/polylens.db` (executor dedupe), `polymarket_first_live_keys` (Poly
 2. **No Polymarket live send on fallback** — long-dated connectivity markets cannot be used for live short-crypto orders.
 3. **Kalshi ladder semantics** — executable YES ask is often derived from best NO bid (`sell no` into NO bid ladder); use `kalshi_order_semantics_audit.py` to inspect payloads.
 4. **First-live-test only** — production-sized loops require all live flags without first-live caps; not validated in this milestone.
-5. **Polymarket signing** — requires `py_clob_client` / `py_clob_client_v2` SDK installed in `.venv`.
+5. **Polymarket signing** — requires `py-clob-client-v2` (`py_clob_client_v2`) installed in `.venv`.
 6. **10m/15m windows** — discovery iterates 5/10/15m; active gamma listings may only include 5m at a given time.
 7. **README disclaimer** — general Polylens prop/arb tooling remains research-oriented; short-crypto live is opt-in and gate-heavy.
 

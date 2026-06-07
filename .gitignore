@@ -16,3 +16,4 @@ src/cli.py.rollback.*
 src/cli.py.broken_local_backup
 _review_patches.txt
 _scp_test
+.polymarket.env.generated

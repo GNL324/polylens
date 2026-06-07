@@ -1550,6 +1550,28 @@ def _live_readiness_polymarket(as_json: bool = True) -> dict[str, Any]:
     return payload
 
 
+
+def _polymarket_auth_audit(as_json: bool = True) -> dict[str, Any]:
+    from polymarket_auth_audit import build_auth_audit
+
+    payload = build_auth_audit()
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Polymarket auth audit: {payload['status']}")
+    return payload
+
+
+def _polymarket_credentials_setup(as_json: bool = True, write_env: bool = True) -> dict[str, Any]:
+    from polymarket_credentials_setup import build_credentials_setup
+
+    payload = build_credentials_setup(write_env_file=write_env)
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Polymarket credentials setup: {payload['status']}")
+    return payload
+
 def _short_crypto_spot_map(assets: list[str]) -> dict[str, float]:
     from src.adapters.crypto_price_feed import CryptoPriceFeedManager
 
@@ -2085,6 +2107,13 @@ def main() -> None:
     live_ready_polymarket_parser = sub.add_parser("live-readiness-polymarket")
     live_ready_polymarket_parser.add_argument("--json", action="store_true")
 
+    polymarket_auth_audit_parser = sub.add_parser("polymarket-auth-audit")
+    polymarket_auth_audit_parser.add_argument("--json", action="store_true")
+
+    polymarket_credentials_setup_parser = sub.add_parser("polymarket-credentials-setup")
+    polymarket_credentials_setup_parser.add_argument("--json", action="store_true")
+    polymarket_credentials_setup_parser.add_argument("--no-write-env", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -2214,6 +2243,10 @@ def main() -> None:
         _live_readiness_short_crypto(as_json=args.json)
     elif args.command == "live-readiness-polymarket":
         _live_readiness_polymarket(as_json=args.json)
+    elif args.command == "polymarket-auth-audit":
+        _polymarket_auth_audit(as_json=args.json)
+    elif args.command == "polymarket-credentials-setup":
+        _polymarket_credentials_setup(as_json=args.json, write_env=not args.no_write_env)
 
 
 if __name__ == "__main__":
