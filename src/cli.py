@@ -2124,6 +2124,27 @@ def main() -> None:
     trade_short_crypto_parser.add_argument("--max-loops", type=int, default=None, help="stop after N trade loops")
     trade_short_crypto_parser.add_argument("--json", action="store_true")
 
+    short_crypto_paper_run_parser = sub.add_parser("short-crypto-paper-run")
+    short_crypto_paper_run_parser.add_argument("--venues", default="kalshi,polymarket")
+    short_crypto_paper_run_parser.add_argument("--assets", default="BTC,ETH,SOL")
+    short_crypto_paper_run_parser.add_argument("--windows", default="5,10,15")
+    short_crypto_paper_run_parser.add_argument("--max-trades", type=int, default=10)
+    short_crypto_paper_run_parser.add_argument("--max-paper-exposure", type=float, default=100.0)
+    short_crypto_paper_run_parser.add_argument("--min-edge", type=float, default=0.01)
+    short_crypto_paper_run_parser.add_argument("--min-liquidity", type=float, default=1.0)
+    short_crypto_paper_run_parser.add_argument("--freshness-seconds", type=float, default=30.0)
+    short_crypto_paper_run_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
+    short_crypto_paper_run_parser.add_argument("--discover-only", action="store_true")
+    short_crypto_paper_run_parser.add_argument("--json", action="store_true")
+
+    short_crypto_paper_settle_parser = sub.add_parser("short-crypto-paper-settle")
+    short_crypto_paper_settle_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
+    short_crypto_paper_settle_parser.add_argument("--json", action="store_true")
+
+    short_crypto_paper_report_parser = sub.add_parser("short-crypto-paper-report")
+    short_crypto_paper_report_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
+    short_crypto_paper_report_parser.add_argument("--json", action="store_true")
+
     live_ready_short_crypto_parser = sub.add_parser("live-readiness-short-crypto")
     live_ready_short_crypto_parser.add_argument("--json", action="store_true")
 
@@ -2269,6 +2290,42 @@ def main() -> None:
             windows=windows,
             dry_run_live=args.dry_run_live,
         )
+    elif args.command == "short-crypto-paper-run":
+        from src.analysis.short_crypto_paper import PaperConfig, run_paper
+
+        config = PaperConfig(
+            venues=[item.strip().lower() for item in args.venues.split(",") if item.strip()],
+            assets=[item.strip().upper() for item in args.assets.split(",") if item.strip()],
+            windows=[int(item.strip()) for item in args.windows.split(",") if item.strip()],
+            max_trades=args.max_trades,
+            max_paper_exposure=args.max_paper_exposure,
+            min_edge=args.min_edge,
+            min_liquidity=args.min_liquidity,
+            freshness_seconds=args.freshness_seconds,
+            db_path=args.db_path,
+            discover_only=args.discover_only,
+        )
+        result = run_paper(config)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(result)
+    elif args.command == "short-crypto-paper-settle":
+        from src.analysis.short_crypto_paper import settle_due
+
+        result = settle_due(args.db_path)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(result)
+    elif args.command == "short-crypto-paper-report":
+        from src.analysis.short_crypto_paper import performance_report
+
+        result = performance_report(args.db_path)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(result)
     elif args.command == "live-readiness-short-crypto":
         _live_readiness_short_crypto(as_json=args.json)
     elif args.command == "live-readiness-polymarket":
