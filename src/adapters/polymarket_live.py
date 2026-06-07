@@ -556,7 +556,7 @@ def first_live_duplicate_key(*, market_slug: str, token_id: str, run_id: str) ->
 def validate_first_live_send_gates(context: dict[str, Any]) -> dict[str, Any]:
     failed: list[str] = []
     checks = {
-        "POLYLENS_FIRST_LIVE_TEST": _env_true("POLYLENS_FIRST_LIVE_TEST"),
+        "POLYLENS_POLYMARKET_FIRST_LIVE_TEST": _env_true("POLYLENS_POLYMARKET_FIRST_LIVE_TEST"),
         "POLYLENS_LIVE_TRADING": _env_true("POLYLENS_LIVE_TRADING"),
         "POLYLENS_AUTONOMOUS_CRYPTO": _env_true("POLYLENS_AUTONOMOUS_CRYPTO"),
         "POLYLENS_CONFIRM_RISK_ACK": _env_true("POLYLENS_CONFIRM_RISK_ACK"),

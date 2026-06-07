@@ -97,6 +97,7 @@ def test_polymarket_live_send_blocked_by_default(monkeypatch):
 def test_polymarket_first_live_run_id_required(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "PolymarketLiveAdapter", lambda: FakeAdapter())
     monkeypatch.setattr(audit, "discover_short_crypto_market", lambda *_args, **_kwargs: _discovery())
+    monkeypatch.setenv("POLYLENS_POLYMARKET_FIRST_LIVE_TEST", "true")
     res = audit.build_audit(db_path=str(tmp_path / "p.db"))
     assert "missing_first_live_test_run_id" in res["failed_gates"]
 
@@ -106,6 +107,7 @@ def test_polymarket_duplicate_run_id_blocked(monkeypatch, tmp_path):
 
     monkeypatch.setattr(audit, "PolymarketLiveAdapter", lambda: FakeAdapter())
     monkeypatch.setattr(audit, "discover_short_crypto_market", lambda *_args, **_kwargs: _discovery())
+    monkeypatch.setenv("POLYLENS_POLYMARKET_FIRST_LIVE_TEST", "true")
     monkeypatch.setenv("POLYLENS_FIRST_LIVE_TEST_RUN_ID", "test-001")
     db_path = tmp_path / "p.db"
     key = poly.first_live_duplicate_key(market_slug="btc-up-or-down-test", token_id="123", run_id="test-001")
@@ -120,9 +122,11 @@ def test_polymarket_duplicate_run_id_blocked(monkeypatch, tmp_path):
 def test_polymarket_first_live_max_exposure_lte_one(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "PolymarketLiveAdapter", lambda: FakeAdapter())
     monkeypatch.setattr(audit, "discover_short_crypto_market", lambda *_args, **_kwargs: _discovery(price=0.99, size=1.0))
+    monkeypatch.setenv("POLYLENS_POLYMARKET_FIRST_LIVE_TEST", "true")
     monkeypatch.setenv("POLYLENS_FIRST_LIVE_TEST_RUN_ID", "test-001")
     res = audit.build_audit(db_path=str(tmp_path / "p.db"))
     assert res["max_exposure"] == 0.99
+    assert res["intended_size"] == 1.0
     assert "first_live_test_max_exposure_gt_1" not in res["failed_gates"]
 
 
@@ -142,9 +146,11 @@ def test_polymarket_dry_run_does_not_call_post_order(monkeypatch, tmp_path):
     FakeAdapter.post_called = False
     monkeypatch.setattr(audit, "PolymarketLiveAdapter", lambda: FakeAdapter())
     monkeypatch.setattr(audit, "discover_short_crypto_market", lambda *_args, **_kwargs: _discovery())
+    monkeypatch.setenv("POLYLENS_POLYMARKET_FIRST_LIVE_TEST", "true")
     monkeypatch.setenv("POLYLENS_FIRST_LIVE_TEST_RUN_ID", "test-001")
     res = audit.build_audit(db_path=str(tmp_path / "p.db"))
     assert FakeAdapter.post_called is False
+    assert res["post_order_called"] is False
     assert res["order_endpoint_called"] is False
 
 
@@ -160,7 +166,7 @@ def test_polymarket_post_order_only_when_enabled(monkeypatch):
     adapter = poly.PolymarketLiveAdapter()
     monkeypatch.setattr(adapter, "build_client", lambda: FakeClient())
     monkeypatch.setattr(poly, "_load_sdk", lambda: ("fake", None, None, None, FakeOrderType, None))
-    for name in ("POLYLENS_FIRST_LIVE_TEST", "POLYLENS_LIVE_TRADING", "POLYLENS_AUTONOMOUS_CRYPTO", "POLYLENS_CONFIRM_RISK_ACK"):
+    for name in ("POLYLENS_POLYMARKET_FIRST_LIVE_TEST", "POLYLENS_LIVE_TRADING", "POLYLENS_AUTONOMOUS_CRYPTO", "POLYLENS_CONFIRM_RISK_ACK"):
         monkeypatch.setenv(name, "true")
     gate_context = {
         "run_id": "test-001",
@@ -195,7 +201,7 @@ def test_polymarket_post_order_enabled_but_missing_gates_does_not_call(monkeypat
 
 def test_polymarket_post_order_blocked_for_non_short_crypto_fallback(monkeypatch):
     monkeypatch.setenv("POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED", "true")
-    for name in ("POLYLENS_FIRST_LIVE_TEST", "POLYLENS_LIVE_TRADING", "POLYLENS_AUTONOMOUS_CRYPTO", "POLYLENS_CONFIRM_RISK_ACK"):
+    for name in ("POLYLENS_POLYMARKET_FIRST_LIVE_TEST", "POLYLENS_LIVE_TRADING", "POLYLENS_AUTONOMOUS_CRYPTO", "POLYLENS_CONFIRM_RISK_ACK"):
         monkeypatch.setenv(name, "true")
     gate_context = {
         "run_id": "test-001",
@@ -303,7 +309,7 @@ def test_no_live_send_from_non_short_crypto_fallback(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "discover_clob_connectivity_market", lambda *_args, **_kwargs: fallback)
     monkeypatch.setenv("POLYLENS_FIRST_LIVE_TEST_RUN_ID", "test-001")
     for name in (
-        "POLYLENS_FIRST_LIVE_TEST",
+        "POLYLENS_POLYMARKET_FIRST_LIVE_TEST",
         "POLYLENS_LIVE_TRADING",
         "POLYLENS_AUTONOMOUS_CRYPTO",
         "POLYLENS_CONFIRM_RISK_ACK",

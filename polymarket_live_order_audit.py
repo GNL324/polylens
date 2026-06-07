@@ -16,13 +16,16 @@ from src.adapters.polymarket_live import (
     discover_clob_connectivity_market,
     discover_short_crypto_market,
     first_live_duplicate_key,
+    validate_first_live_send_gates,
 )
+from src.analysis.short_crypto_executor import first_live_test_run_id
 
 AUDIT_MODES = ("short_crypto", "clob_connectivity")
 
 
 def main() -> None:
     logging.disable(logging.CRITICAL)
+    os.environ.setdefault("POLYLENS_POLYMARKET_FIRST_LIVE_TEST", "true")
     os.environ.setdefault("POLYLENS_FIRST_LIVE_TEST", "true")
     parser = argparse.ArgumentParser(description="Polymarket live order audit")
     parser.add_argument("--mode", choices=AUDIT_MODES, default="short_crypto")
@@ -55,16 +58,18 @@ def build_audit(db_path: str = "data/polylens.db", mode: str = "short_crypto") -
         failed_gates.append("no_executable_ask")
         return _base_not_ready(adapter, creds, failed_gates, discovery, mode=mode)
 
+    first_live = _polymarket_first_live_test_enabled()
     not_short_crypto = bool(discovery.get("not_short_crypto"))
     market_slug = str(market.get("slug") or market.get("marketSlug") or market.get("id") or "")
     condition_id = str(market.get("conditionId") or market.get("condition_id") or book.get("market") or "")
     token_id = outcome["token_id"]
     price = float(ask["price"])
     ask_size = float(ask["size"])
-    intended_size = min(ask_size, 1.0)
+    count = 1 if first_live else min(int(ask_size), 1) or 1
+    intended_size = 1.0 if first_live else min(ask_size, 1.0)
     max_exposure = round(price * intended_size, 4)
     order_args = adapter.order_args(token_id=token_id, price=price, size=intended_size, side=BUY)
-    run_id = os.environ.get("POLYLENS_FIRST_LIVE_TEST_RUN_ID")
+    run_id = first_live_test_run_id() if first_live else os.environ.get("POLYLENS_FIRST_LIVE_TEST_RUN_ID")
     dedupe_key = first_live_duplicate_key(market_slug=market_slug, token_id=token_id, run_id=run_id or "")
     duplicate = _duplicate_exists(db_path, dedupe_key)
     balance = adapter.get_balance_allowance() if creds["ok"] else {"ok": False, "status": "not_ready", "reason": "credentials_missing"}
@@ -76,33 +81,66 @@ def build_audit(db_path: str = "data/polylens.db", mode: str = "short_crypto") -
         tick_size=str(book.get("tick_size") or market.get("minimum_tick_size") or "0.01"),
         neg_risk=bool(book.get("neg_risk") or market.get("negRisk") or market.get("neg_risk") or False),
     )
+    signing = _signing_config_status(creds, signed)
+    payload_validation = _validate_order_payload(
+        order_args,
+        first_live_test=first_live,
+        price=price,
+        size=intended_size,
+        max_exposure=max_exposure,
+        ask_size=ask_size,
+    )
+    gate_context = {
+        "run_id": run_id,
+        "max_exposure": max_exposure,
+        "orders_count": count,
+        "duplicate": duplicate,
+        "fresh_orderbook": _book_fresh(book),
+        "executable_ask": ask_size >= intended_size and 0 < price < 1,
+        "balance_allowance_ok": bool(balance.get("ok")),
+        "not_short_crypto": not_short_crypto,
+    }
+    live_gates = validate_first_live_send_gates(gate_context)
+    failed_gates.extend(live_gates["failed_gates"])
+    if not signing["ok"]:
+        _add_gate(failed_gates, signing["reason"] or "polymarket_live_signing_not_ready", False)
+    if not payload_validation["ok"]:
+        for problem in payload_validation["problems"]:
+            _add_gate(failed_gates, problem, False)
 
-    _add_gate(failed_gates, "credentials_missing", creds["ok"])
-    _add_gate(failed_gates, "missing_first_live_test_run_id", bool(run_id))
-    _add_gate(failed_gates, "first_live_test_not_enabled", _env_true("POLYLENS_FIRST_LIVE_TEST"))
-    _add_gate(failed_gates, "missing_live_gate_polylens_live_trading", _env_true("POLYLENS_LIVE_TRADING"))
-    _add_gate(failed_gates, "missing_live_gate_polylens_autonomous_crypto", _env_true("POLYLENS_AUTONOMOUS_CRYPTO"))
-    _add_gate(failed_gates, "missing_live_gate_polylens_confirm_risk_ack", _env_true("POLYLENS_CONFIRM_RISK_ACK"))
-    _add_gate(failed_gates, "polymarket_live_sends_disabled", _env_true("POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED"))
-    _add_gate(failed_gates, "first_live_test_max_exposure_gt_1", max_exposure <= 1.0)
-    _add_gate(failed_gates, "duplicate_trade_key", not duplicate)
-    _add_gate(failed_gates, "stale_clob_orderbook", _book_fresh(book))
-    _add_gate(failed_gates, "no_executable_ask", ask_size > 0 and 0 < price < 1)
-    _add_gate(failed_gates, "balance_allowance_not_ready", bool(balance.get("ok")))
-    _add_gate(failed_gates, signed.get("reason", "polymarket_live_signing_not_ready"), bool(signed.get("ok")))
-    if not_short_crypto:
-        _add_gate(failed_gates, "not_short_crypto_market", False)
-
-    live_send_allowed = not not_short_crypto and not failed_gates
+    live_send_allowed = not not_short_crypto and live_gates["ok"] and signing["ok"] and payload_validation["ok"]
+    selected = _selected_candidate(
+        market_slug=market_slug,
+        condition_id=condition_id,
+        token_id=token_id,
+        outcome_name=outcome["name"],
+        price=price,
+        ask_size=ask_size,
+        ask=ask,
+        discovery=discovery,
+    )
+    economic_exposure = _build_economic_exposure(price=price, size=intended_size, count=count, max_exposure=max_exposure)
 
     return {
-        "status": "ready" if not failed_gates else "not_ready",
+        "status": "ready" if live_send_allowed and not failed_gates else "not_ready",
         "mode": mode,
-        "reason": None if not failed_gates else failed_gates[0],
+        "reason": None if live_send_allowed and not failed_gates else (failed_gates[0] if failed_gates else "not_ready"),
         "failed_gates": failed_gates,
+        "sent": False,
+        "order_endpoint_called": False,
+        "post_order_called": bool(getattr(adapter, "_post_order_called", False)),
+        "dedupe_key": dedupe_key,
+        "first_live_test_run_id": run_id,
+        "duplicate_status": {
+            "duplicate": duplicate,
+            "first_live_test_run_id_required": first_live,
+            "run_id_included_in_dedupe_key": bool(run_id),
+            "reason": "duplicate_trade_key" if duplicate else None,
+        },
         "rejected_candidates": discovery.get("rejected", []),
         "candidates_checked": discovery.get("candidates_checked", []),
         "clob_book_404_token_ids": discovery.get("clob_book_404_token_ids", []),
+        "selected_candidate": selected,
         "not_short_crypto": not_short_crypto,
         "purpose": discovery.get("purpose"),
         "live_send_allowed": live_send_allowed,
@@ -113,21 +151,32 @@ def build_audit(db_path: str = "data/polylens.db", mode: str = "short_crypto") -
         "best_bid": _best_bid(book),
         "best_ask": price,
         "ask_size": ask_size,
+        "selected_ask_price": price,
+        "selected_ask_size": ask_size,
+        "selected_ask_raw": ask.get("raw"),
         "intended_side": BUY,
         "intended_price": price,
         "intended_size": intended_size,
+        "count": count,
         "max_exposure": max_exposure,
+        "economic_exposure": economic_exposure,
         "credentials_detected_not_printed": creds["credentials_detected_not_printed"],
         "funder_detected_not_printed": creds["funder_detected_not_printed"],
         "signature_type": creds["signature_type"],
         "balance_allowance_status": balance,
         "signed_order_status": {key: val for key, val in signed.items() if key not in {"signed_order"}},
+        "exact_order_payload": order_args,
         "exact_order_args": order_args,
-        "dedupe_key": dedupe_key,
-        "first_live_test_run_id": run_id,
-        "duplicate_status": {"duplicate": duplicate, "reason": "duplicate_trade_key" if duplicate else None},
-        "order_endpoint_called": False,
-        "sent": False,
+        "validations": {
+            "polymarket_first_live_test_mode": {
+                "ok": first_live,
+                "env": "POLYLENS_POLYMARKET_FIRST_LIVE_TEST",
+                "value": os.environ.get("POLYLENS_POLYMARKET_FIRST_LIVE_TEST"),
+            },
+            "signing_configuration_present": signing,
+            "payload_valid": payload_validation,
+            "would_pass_live_gates": {"ok": live_gates["ok"], "reason": live_gates["failed_gates"][0] if live_gates["failed_gates"] else None, "failed_gates": live_gates["failed_gates"]},
+        },
     }
 
 
@@ -183,6 +232,99 @@ def live_readiness_report() -> dict[str, Any]:
     }
 
 
+def _polymarket_first_live_test_enabled() -> bool:
+    return _env_true("POLYLENS_POLYMARKET_FIRST_LIVE_TEST")
+
+
+def _signing_config_status(creds: dict[str, Any], signed: dict[str, Any]) -> dict[str, Any]:
+    if not creds.get("ok"):
+        return {
+            "ok": False,
+            "reason": "credentials_missing",
+            "credentials_detected_not_printed": creds.get("credentials_detected_not_printed", False),
+        }
+    if not signed.get("ok"):
+        return {
+            "ok": False,
+            "reason": signed.get("reason", "polymarket_live_signing_not_ready"),
+            "credentials_detected_not_printed": creds.get("credentials_detected_not_printed", False),
+        }
+    return {"ok": True, "reason": None, "credentials_detected_not_printed": creds.get("credentials_detected_not_printed", False)}
+
+
+def _validate_order_payload(
+    payload: dict[str, Any],
+    *,
+    first_live_test: bool,
+    price: float,
+    size: float,
+    max_exposure: float,
+    ask_size: float,
+) -> dict[str, Any]:
+    required = {"token_id", "price", "size", "side"}
+    missing = sorted(required - set(payload))
+    problems: list[str] = []
+    if missing:
+        problems.append(f"missing_required_fields:{','.join(missing)}")
+    if payload.get("side") not in {BUY, "SELL"}:
+        problems.append("side_must_be_buy_or_sell")
+    if float(payload.get("price") or 0) <= 0 or float(payload.get("price") or 0) >= 1:
+        problems.append("price_must_be_between_0_and_1")
+    if float(payload.get("size") or 0) <= 0:
+        problems.append("size_must_be_positive")
+    if first_live_test and float(payload.get("size") or 0) != 1.0:
+        problems.append("first_live_test_reject_size_not_one")
+    if first_live_test and ask_size < 1.0:
+        problems.append("selected_ask_size_lt_1")
+    if first_live_test and max_exposure > 1.0:
+        problems.append("first_live_test_max_exposure_gt_1_dollar")
+    if first_live_test and round(float(payload.get("price") or 0) * float(payload.get("size") or 0), 4) != max_exposure:
+        problems.append("max_exposure_must_equal_price_times_size")
+    return {
+        "ok": not problems,
+        "problems": problems,
+        "max_exposure_dollars": max_exposure,
+        "first_live_test": first_live_test,
+        "count": 1 if first_live_test else size,
+    }
+
+
+def _build_economic_exposure(*, price: float, size: float, count: int, max_exposure: float) -> dict[str, Any]:
+    return {
+        "type": "clob_buy",
+        "price": price,
+        "size": size,
+        "count": count,
+        "max_exposure_dollars": max_exposure,
+    }
+
+
+def _selected_candidate(
+    *,
+    market_slug: str,
+    condition_id: str,
+    token_id: str,
+    outcome_name: str,
+    price: float,
+    ask_size: float,
+    ask: dict[str, Any],
+    discovery: dict[str, Any],
+) -> dict[str, Any]:
+    candidate_meta = (discovery.get("candidates_checked") or [{}])[0]
+    return {
+        "market_slug": market_slug,
+        "condition_id": condition_id,
+        "token_id": token_id,
+        "outcome": outcome_name,
+        "reason": "selected",
+        "selected_ask_price": price,
+        "selected_ask_size": ask_size,
+        "selected_ask_raw": ask.get("raw"),
+        "asset": candidate_meta.get("asset", "BTC"),
+        "window_minutes": candidate_meta.get("window_minutes", 5),
+    }
+
+
 def _discovery_market_slug(discovery: dict[str, Any]) -> str | None:
     market = discovery.get("market") or {}
     slug = market.get("slug") or market.get("marketSlug") or market.get("id")
@@ -195,16 +337,6 @@ def _short_crypto_block_reason(audit: dict[str, Any]) -> str | None:
     failed = audit.get("failed_gates") or []
     if "no_short_crypto_clob_book_available" in failed:
         return "no_short_crypto_clob_book_available"
-    return failed[0] if failed else "not_ready"
-
-
-def _clob_connectivity_block_reason(audit: dict[str, Any]) -> str | None:
-    if audit.get("reason"):
-        return str(audit["reason"])
-    discovery = audit.get("discovery") or {}
-    if discovery.get("reason"):
-        return str(discovery["reason"])
-    failed = audit.get("failed_gates") or []
     return failed[0] if failed else "not_ready"
 
 
@@ -226,12 +358,14 @@ def _base_not_ready(
         "not_short_crypto": discovery.get("not_short_crypto", False),
         "purpose": discovery.get("purpose"),
         "live_send_allowed": False,
+        "selected_candidate": None,
         "credentials_detected_not_printed": creds["credentials_detected_not_printed"],
         "funder_detected_not_printed": creds["funder_detected_not_printed"],
         "signature_type": creds["signature_type"],
         "balance_allowance_status": {"ok": False, "status": "not_ready", "reason": "not_checked"},
         "discovery": discovery,
         "order_endpoint_called": False,
+        "post_order_called": bool(getattr(adapter, "_post_order_called", False)),
         "sent": False,
     }
 
