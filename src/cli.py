@@ -2133,6 +2133,7 @@ def main() -> None:
     short_crypto_paper_run_parser.add_argument("--min-edge", type=float, default=0.01)
     short_crypto_paper_run_parser.add_argument("--min-liquidity", type=float, default=1.0)
     short_crypto_paper_run_parser.add_argument("--freshness-seconds", type=float, default=30.0)
+    short_crypto_paper_run_parser.add_argument("--max-market-lead-time-minutes", type=float)
     short_crypto_paper_run_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
     short_crypto_paper_run_parser.add_argument("--discover-only", action="store_true")
     short_crypto_paper_run_parser.add_argument("--json", action="store_true")
@@ -2302,6 +2303,7 @@ def main() -> None:
             min_edge=args.min_edge,
             min_liquidity=args.min_liquidity,
             freshness_seconds=args.freshness_seconds,
+            **({"max_market_lead_time_minutes": args.max_market_lead_time_minutes} if args.max_market_lead_time_minutes is not None else {}),
             db_path=args.db_path,
             discover_only=args.discover_only,
         )

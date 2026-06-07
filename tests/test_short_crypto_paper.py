@@ -211,18 +211,38 @@ def test_market_starting_in_9_minutes_is_accepted_by_lead_time_gate():
     assert 8.9 <= timing["lead_time_minutes"] <= 9.1
 
 
-def test_market_starting_in_11_minutes_is_rejected_as_future_market():
+def test_market_starting_in_45_minutes_with_60_minute_limit_is_accepted():
     now = time.time()
-    timing = market_lead_time(_poly_row(now + 11 * 60, now + 16 * 60), now_ts=now)
+    timing = market_lead_time(_poly_row(now + 45 * 60, now + 50 * 60), now_ts=now, max_lead_time_minutes=60)
+    assert timing["reason"] is None
+    assert 44.9 <= timing["lead_time_minutes"] <= 45.1
+
+
+def test_market_starting_in_61_minutes_with_60_minute_limit_is_rejected():
+    now = time.time()
+    timing = market_lead_time(_poly_row(now + 61 * 60, now + 66 * 60), now_ts=now, max_lead_time_minutes=60)
+    assert timing["reason"] == "future_market"
+    assert timing["lead_time_minutes"] > 60
+
+
+def test_market_starting_in_11_minutes_with_10_minute_limit_is_rejected_as_future_market():
+    now = time.time()
+    timing = market_lead_time(_poly_row(now + 11 * 60, now + 16 * 60), now_ts=now, max_lead_time_minutes=10)
     assert timing["reason"] == "future_market"
     assert timing["lead_time_minutes"] > 10
 
 
-def test_market_starting_in_2_hours_is_rejected_as_future_market():
+def test_market_starting_in_2_hours_with_60_minute_limit_is_rejected_as_future_market():
     now = time.time()
-    timing = market_lead_time(_poly_row(now + 120 * 60, now + 125 * 60), now_ts=now)
+    timing = market_lead_time(_poly_row(now + 120 * 60, now + 125 * 60), now_ts=now, max_lead_time_minutes=60)
     assert timing["reason"] == "future_market"
     assert timing["lead_time_minutes"] > 100
+
+
+def test_paper_config_reads_max_market_lead_time_from_env(monkeypatch):
+    monkeypatch.setenv("POLYLENS_MAX_MARKET_LEAD_TIME_MINUTES", "45")
+    cfg = PaperConfig(venues=["polymarket"], assets=["BTC"], windows=[5])
+    assert cfg.max_market_lead_time_minutes == 45.0
 
 
 def _iso(ts):

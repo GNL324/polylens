@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ from src.analysis.short_crypto_markets import ShortCryptoMarket, normalize_short
 DEFAULT_DB_PATH = "data/short_crypto_paper.db"
 DEFAULT_SIZE = 1.0
 FEE_PLACEHOLDER = 0.0
-MAX_MARKET_LEAD_TIME_MINUTES = 10.0
+DEFAULT_MAX_MARKET_LEAD_TIME_MINUTES = 60.0
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class PaperConfig:
     freshness_seconds: float = 30.0
     db_path: str = DEFAULT_DB_PATH
     discover_only: bool = False
+    max_market_lead_time_minutes: float = field(default_factory=lambda: _float_env("POLYLENS_MAX_MARKET_LEAD_TIME_MINUTES", DEFAULT_MAX_MARKET_LEAD_TIME_MINUTES))
 
 
 class ShortCryptoPaperStore:
@@ -322,6 +324,7 @@ def run_paper(config: PaperConfig) -> dict[str, Any]:
     rejected = 0
     errors: list[dict[str, Any]] = []
     counters = _debug_counters()
+    counters["max_market_lead_time_minutes"] = float(config.max_market_lead_time_minutes)
     markets = discover_markets(config, errors, counters)
     _finalize_lead_time_stats(counters)
     counters["executable_books_seen"] = sum(1 for market in markets if simulate_fill(build_intent(market, None), build_intent(market, None)["book"])["filled"])
@@ -435,7 +438,7 @@ def discover_polymarket_series_markets(config: PaperConfig, counters: dict[str, 
             for row in series_rows:
                 parsed = live._parse_market_tokens(row)
                 slug = str(row.get("slug") or row.get("marketSlug") or row.get("id") or "")
-                timing = market_lead_time(row)
+                timing = market_lead_time(row, max_lead_time_minutes=config.max_market_lead_time_minutes)
                 if timing["reason"]:
                     _count_rejection(counters, timing["reason"])
                     _record_market_log(counters, row, timing, accepted=False)
@@ -667,7 +670,7 @@ def _count_rejection(counters: dict[str, Any], reason: str | None) -> None:
         counters["future_market_blocks"] = int(counters.get("future_market_blocks", 0)) + 1
 
 
-def market_lead_time(row: dict[str, Any], *, now_ts: float | None = None) -> dict[str, Any]:
+def market_lead_time(row: dict[str, Any], *, now_ts: float | None = None, max_lead_time_minutes: float = DEFAULT_MAX_MARKET_LEAD_TIME_MINUTES) -> dict[str, Any]:
     now_ts = now_ts if now_ts is not None else time.time()
     start_ts = _market_start_ts(row)
     end_ts = _ts(row.get("endDate") or row.get("end_date") or row.get("endDateIso"))
@@ -677,7 +680,7 @@ def market_lead_time(row: dict[str, Any], *, now_ts: float | None = None) -> dic
         reason = "market_expired"
     elif start_ts is not None and start_ts < now_ts:
         reason = "market_already_started"
-    elif lead_time is not None and lead_time > MAX_MARKET_LEAD_TIME_MINUTES:
+    elif lead_time is not None and lead_time > float(max_lead_time_minutes):
         reason = "future_market"
     return {
         "market_start_time": _iso(start_ts) if start_ts is not None else None,
@@ -1044,6 +1047,13 @@ def _float_or_none(value: Any) -> float | None:
         return None if value is None or value == "" else float(value)
     except Exception:
         return None
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
 
 
 def _load_json(value: Any) -> dict[str, Any]:
