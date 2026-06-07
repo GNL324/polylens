@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
@@ -251,6 +252,23 @@ def discover_short_crypto_market(
                             "reason": "token_ids_missing",
                             "asset": asset,
                             "window_minutes": window_minutes,
+                        }
+                    )
+                    continue
+                eligible, skip_reason = _short_crypto_market_eligible(market)
+                if not eligible:
+                    rejected.append(
+                        {
+                            "slug": slug,
+                            "market_slug": slug,
+                            "condition_id": condition_id,
+                            "clobTokenIds": clob_token_ids,
+                            "reason": skip_reason,
+                            "asset": asset,
+                            "window_minutes": window_minutes,
+                            "enable_order_book": _market_enable_order_book(market),
+                            "accepting_orders": _market_accepting_orders(market),
+                            "seconds_to_close": _market_seconds_to_close(market),
                         }
                     )
                     continue
@@ -750,6 +768,252 @@ def _summarize_balance_response(raw: Any) -> dict[str, Any]:
             summary[key] = raw[key]
     redacted = _redact(summary)
     return redacted if isinstance(redacted, dict) else {"present": True}
+
+
+KNOWN_GOOD_CLOB_MARKET_SLUG = "will-bitcoin-hit-150k-by-june-30-2026"
+
+
+def _market_enable_order_book(market: dict[str, Any]) -> bool | None:
+    for key in ("enableOrderBook", "enable_order_book"):
+        if key in market and market[key] is not None:
+            return bool(market[key])
+    return None
+
+
+def _market_accepting_orders(market: dict[str, Any]) -> bool | None:
+    for key in ("acceptingOrders", "accepting_orders"):
+        if key in market and market[key] is not None:
+            return bool(market[key])
+    return None
+
+
+def _market_end_datetime(market: dict[str, Any]) -> datetime | None:
+    for key in ("endDate", "end_date", "endDateIso"):
+        raw = market.get(key)
+        if not raw:
+            continue
+        try:
+            return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except Exception:
+            continue
+    return None
+
+
+def _market_seconds_to_close(market: dict[str, Any], *, now: datetime | None = None) -> int | None:
+    end = _market_end_datetime(market)
+    if end is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    return int((end - now).total_seconds())
+
+
+def _short_crypto_market_eligible(market: dict[str, Any], *, now: datetime | None = None) -> tuple[bool, str | None]:
+    enabled = _market_enable_order_book(market)
+    if enabled is False:
+        return False, "gamma_market_not_clob_enabled"
+    seconds = _market_seconds_to_close(market, now=now)
+    if seconds is not None and seconds <= 0:
+        return False, "market_window_expired"
+    return True, None
+
+
+def collect_market_token_fields(market: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key, value in market.items():
+        lowered = key.lower()
+        if "token" in lowered or "clob" in lowered:
+            fields[key] = value
+    tokens = market.get("tokens")
+    if isinstance(tokens, list):
+        fields["tokens"] = [
+            {
+                "token_id": item.get("token_id") or item.get("tokenId"),
+                "outcome": item.get("outcome"),
+            }
+            for item in tokens
+            if isinstance(item, dict)
+        ]
+    return fields
+
+
+def discover_candidate_token_ids(market: dict[str, Any]) -> list[str]:
+    token_ids: list[str] = []
+    parsed = _parse_market_tokens(market)
+    if parsed:
+        for outcome in parsed["outcomes"]:
+            token_ids.extend(_token_id_probe_variants(outcome["token_id"]))
+    for key in ("clobTokenIds", "clob_token_ids"):
+        for value in _json_list(market.get(key)):
+            token_ids.extend(_token_id_probe_variants(value))
+    tokens = market.get("tokens")
+    if isinstance(tokens, list):
+        for item in tokens:
+            if isinstance(item, dict):
+                token_ids.extend(_token_id_probe_variants(item.get("token_id") or item.get("tokenId")))
+    deduped: list[str] = []
+    for token_id in token_ids:
+        if token_id and token_id not in deduped:
+            deduped.append(token_id)
+    return deduped
+
+
+def _probe_clob_endpoint(path: str, token_id: str, host: str | None = None) -> dict[str, Any]:
+    host = (host or os.environ.get("POLYMARKET_CLOB_HOST") or DEFAULT_CLOB_HOST).rstrip("/")
+    url = f"{host}/{path}?{urlencode({'token_id': token_id})}"
+    try:
+        payload = _get_json(url)
+        return {"ok": True, "status_code": 200, "data_present": payload is not None}
+    except HTTPError as exc:
+        detail = str(exc)
+        try:
+            body = exc.read().decode("utf-8")
+        except Exception:
+            body = detail
+        return {"ok": False, "status_code": exc.code, "error": body[:200]}
+    except Exception as exc:
+        return {"ok": False, "status_code": None, "error": str(exc)[:200]}
+
+
+def probe_clob_token_endpoints(token_id: str, host: str | None = None) -> dict[str, Any]:
+    book_probe = _probe_orderbook(token_id, host=host)
+    book = book_probe.get("book") if book_probe.get("ok") else None
+    return {
+        "token_id": str(token_id),
+        "book": {
+            "ok": bool(book_probe.get("ok")),
+            "status_code": book_probe.get("status_code"),
+            "reason": book_probe.get("reason"),
+            "executable_book": bool(book and best_ask(book)),
+        },
+        "price": _probe_clob_endpoint("price", token_id, host=host),
+        "midpoint": _probe_clob_endpoint("midpoint", token_id, host=host),
+        "tick_size": _probe_clob_endpoint("tick-size", token_id, host=host),
+    }
+
+
+def gamma_market_by_slug(slug: str) -> dict[str, Any] | None:
+    rows = _get_json(f"{DEFAULT_GAMMA_HOST}/markets?{urlencode({'slug': slug})}")
+    if isinstance(rows, list) and rows:
+        return rows[0]
+    return None
+
+
+def build_short_crypto_candidate_audit(market: dict[str, Any], *, asset: str, window_minutes: int) -> dict[str, Any]:
+    slug = str(market.get("slug") or market.get("marketSlug") or market.get("id") or "")
+    eligible, eligibility_reason = _short_crypto_market_eligible(market)
+    token_ids = discover_candidate_token_ids(market)
+    probes = [probe_clob_token_endpoints(token_id) for token_id in token_ids]
+    primary_probe = probes[0] if probes else None
+    return {
+        "asset": asset,
+        "window_minutes": window_minutes,
+        "slug": slug,
+        "id": market.get("id"),
+        "condition_id": _market_condition_id(market),
+        "question": market.get("question"),
+        "active": market.get("active"),
+        "closed": market.get("closed"),
+        "archived": market.get("archived"),
+        "accepting_orders": _market_accepting_orders(market),
+        "enable_order_book": _market_enable_order_book(market),
+        "clobTokenIds_raw": market.get("clobTokenIds") or market.get("clob_token_ids"),
+        "tokens": market.get("tokens"),
+        "outcomes": market.get("outcomes"),
+        "outcomePrices": market.get("outcomePrices") or market.get("outcome_prices"),
+        "market_maker_address": market.get("marketMakerAddress") or market.get("market_maker_address"),
+        "endDate": market.get("endDate") or market.get("end_date"),
+        "end_date": market.get("endDate") or market.get("end_date"),
+        "seconds_to_close": _market_seconds_to_close(market),
+        "token_id_fields": collect_market_token_fields(market),
+        "token_ids_discovered": token_ids,
+        "token_probes": probes,
+        "book_status": (primary_probe or {}).get("book", {}).get("status_code"),
+        "executable_book": any(item.get("book", {}).get("executable_book") for item in probes),
+        "eligible_for_probe": eligible,
+        "eligibility_reason": eligibility_reason,
+    }
+
+
+def compare_short_crypto_vs_known_good(short_candidate: dict[str, Any], known_good: dict[str, Any]) -> dict[str, Any]:
+    fields = (
+        "enable_order_book",
+        "accepting_orders",
+        "active",
+        "closed",
+        "archived",
+        "seconds_to_close",
+        "executable_book",
+        "book_status",
+    )
+    diffs: dict[str, Any] = {}
+    for field in fields:
+        short_val = short_candidate.get(field)
+        good_val = known_good.get(field)
+        if short_val != good_val:
+            diffs[field] = {"short_crypto": short_val, "known_good": good_val}
+    return {
+        "short_crypto_slug": short_candidate.get("slug"),
+        "known_good_slug": known_good.get("slug"),
+        "field_diffs": diffs,
+        "short_clobTokenIds_shape": type(short_candidate.get("clobTokenIds_raw")).__name__,
+        "known_good_clobTokenIds_shape": type(known_good.get("clobTokenIds_raw")).__name__,
+    }
+
+
+def diagnose_short_crypto_clob_issue(candidates: list[dict[str, Any]], known_good: dict[str, Any]) -> str:
+    if not candidates:
+        return "unknown"
+    if known_good.get("executable_book") and all(c.get("enable_order_book") is True for c in candidates):
+        alt_ids = []
+        for candidate in candidates:
+            fields = candidate.get("token_id_fields") or {}
+            tokens = fields.get("tokens") or []
+            alt_ids.extend(str(item.get("token_id")) for item in tokens if item.get("token_id"))
+        if alt_ids and all(not c.get("executable_book") for c in candidates):
+            return "token_field_bug"
+    if all(c.get("enable_order_book") is False for c in candidates):
+        return "gamma_market_not_clob_enabled"
+    if any(c.get("enable_order_book") is True for c in candidates) and all(not c.get("executable_book") for c in candidates):
+        return "clob_registration_delay"
+    if all(not c.get("executable_book") for c in candidates):
+        return "gamma_market_not_clob_enabled"
+    return "unknown"
+
+
+def enumerate_short_crypto_discovery_audit(
+    assets: tuple[str, ...] = SHORT_CRYPTO_ASSETS,
+    windows: tuple[int, ...] = SHORT_CRYPTO_WINDOWS,
+    limit: int = 500,
+    known_good_slug: str = KNOWN_GOOD_CLOB_MARKET_SLUG,
+) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+    for asset in assets:
+        for window_minutes in windows:
+            for market in _gamma_markets(asset=asset, window_minutes=window_minutes, limit=limit):
+                candidates.append(build_short_crypto_candidate_audit(market, asset=asset, window_minutes=window_minutes))
+    known_market = gamma_market_by_slug(known_good_slug)
+    known_good = (
+        build_short_crypto_candidate_audit(known_market, asset="BTC", window_minutes=0)
+        if known_market
+        else {"slug": known_good_slug, "executable_book": False, "error": "known_good_market_not_found"}
+    )
+    sample = candidates[0] if candidates else {}
+    comparison = compare_short_crypto_vs_known_good(sample, known_good) if sample else {}
+    diagnosis = diagnose_short_crypto_clob_issue(candidates, known_good)
+    return {
+        "status": "ok",
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+        "known_good_market": known_good,
+        "sample_comparison": comparison,
+        "diagnosis": diagnosis,
+        "notes": {
+            "price_midpoint_not_book": "price/midpoint success does not count as executable book",
+            "discovery_filters_added": ["gamma_market_not_clob_enabled", "market_window_expired"],
+        },
+    }
 
 def _redact(value: Any) -> Any:
     if isinstance(value, dict):
