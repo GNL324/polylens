@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Polylens short crypto paper trading every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=polylens-short-crypto-paper.service
+
+[Install]
+WantedBy=timers.target

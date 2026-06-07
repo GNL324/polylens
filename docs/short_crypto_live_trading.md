@@ -330,6 +330,46 @@ PYTHONPATH=. .venv/bin/python -m src.cli live-readiness-polymarket --json
 PYTHONPATH=. .venv/bin/python -m src.cli live-readiness-short-crypto --json
 ```
 
+## Short-Crypto Paper Timer
+
+The paper timer runs the Polymarket BTC 5m paper runner every 5 minutes. It does not enable live trading and uses `short-crypto-paper-run`, not `trade-short-crypto`.
+
+Install the service and timer files:
+
+```bash
+cd /home/noel/polylens
+sudo cp deploy/systemd/polylens-short-crypto-paper.service /etc/systemd/system/
+sudo cp deploy/systemd/polylens-short-crypto-paper.timer /etc/systemd/system/
+cp deploy/systemd/polylens-short-crypto-paper.env.example deploy/systemd/polylens-short-crypto-paper.env
+sudo systemctl daemon-reload
+```
+
+Enable and start the timer only after reviewing the env file:
+
+```bash
+sudo systemctl enable --now polylens-short-crypto-paper.timer
+```
+
+Check timer status and logs:
+
+```bash
+systemctl list-timers polylens-short-crypto-paper.timer
+journalctl -u polylens-short-crypto-paper.service -n 100 --no-pager
+```
+
+Stop the timer:
+
+```bash
+sudo systemctl disable --now polylens-short-crypto-paper.timer
+```
+
+Settle and report paper trades:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.cli short-crypto-paper-settle --json
+PYTHONPATH=. .venv/bin/python -m src.cli short-crypto-paper-report --json
+```
+
 ## Related Documentation
 
 - [risk_engine.md](risk_engine.md) — halt/resume and risk events
