@@ -1562,6 +1562,29 @@ def _polymarket_auth_audit(as_json: bool = True) -> dict[str, Any]:
     return payload
 
 
+
+
+def _polymarket_event_slug_audit(slug: str, as_json: bool = True) -> dict[str, Any]:
+    from src.adapters.polymarket_live import audit_polymarket_event_slug
+
+    payload = audit_polymarket_event_slug(slug)
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    else:
+        print(f"Polymarket event slug audit ({slug}): {payload['diagnosis']}")
+    return payload
+
+def _polymarket_tradable_crypto_discovery(as_json: bool = True) -> dict[str, Any]:
+    from src.adapters.polymarket_live import build_tradable_crypto_discovery
+
+    payload = build_tradable_crypto_discovery()
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    else:
+        summary = payload["summary"]
+        print(f"Polymarket tradable crypto discovery: {summary['diagnosis']}")
+    return payload
+
 def _polymarket_credentials_setup(as_json: bool = True, write_env: bool = True) -> dict[str, Any]:
     from polymarket_credentials_setup import build_credentials_setup
 
@@ -2114,6 +2137,13 @@ def main() -> None:
     polymarket_credentials_setup_parser.add_argument("--json", action="store_true")
     polymarket_credentials_setup_parser.add_argument("--no-write-env", action="store_true")
 
+    polymarket_tradable_crypto_discovery_parser = sub.add_parser("polymarket-tradable-crypto-discovery")
+    polymarket_tradable_crypto_discovery_parser.add_argument("--json", action="store_true")
+
+    polymarket_event_slug_audit_parser = sub.add_parser("polymarket-event-slug-audit")
+    polymarket_event_slug_audit_parser.add_argument("slug")
+    polymarket_event_slug_audit_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -2247,6 +2277,10 @@ def main() -> None:
         _polymarket_auth_audit(as_json=args.json)
     elif args.command == "polymarket-credentials-setup":
         _polymarket_credentials_setup(as_json=args.json, write_env=not args.no_write_env)
+    elif args.command == "polymarket-tradable-crypto-discovery":
+        _polymarket_tradable_crypto_discovery(as_json=args.json)
+    elif args.command == "polymarket-event-slug-audit":
+        _polymarket_event_slug_audit(slug=args.slug, as_json=args.json)
 
 
 if __name__ == "__main__":

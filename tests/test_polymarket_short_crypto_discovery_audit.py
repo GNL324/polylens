@@ -58,6 +58,7 @@ def test_discover_candidate_token_ids_includes_clob_and_tokens_fields():
 
 def test_discover_short_crypto_skips_non_clob_enabled(monkeypatch):
     market = _market(enableOrderBook=False, endDate="2099-01-01T00:05:00Z")
+    monkeypatch.setattr(poly, "series_live_event_markets", lambda *_a, **_k: [])
     monkeypatch.setattr(poly, "_gamma_markets", lambda **_kwargs: [market])
 
     def _fail_probe(*_args, **_kwargs):

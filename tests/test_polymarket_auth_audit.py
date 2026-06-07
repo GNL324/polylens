@@ -111,6 +111,7 @@ def test_short_crypto_clob_404_diagnostics_include_slug_token_outcome(monkeypatc
             "error": "HTTP Error 404: Not Found",
         }
 
+    monkeypatch.setattr(poly, "series_live_event_markets", lambda *_a, **_k: [])
     monkeypatch.setattr(poly, "_gamma_markets", fake_gamma)
     monkeypatch.setattr(poly, "_probe_orderbook_with_variants", fake_probe)
     res = poly.discover_short_crypto_market(assets=("BTC",), windows=(5,))
