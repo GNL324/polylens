@@ -1,3 +1,5 @@
 cryptography>=42.0.0
 fastapi>=0.111.0
 nicegui>=2.0.0
+websocket-client>=1.9.0
+py-clob-client-v2>=1.0.0

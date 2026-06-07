@@ -1365,18 +1365,15 @@ def _scan_short_crypto(assets: list[str], windows: list[int], as_json: bool = Tr
     from src.analysis.short_crypto_executor import ShortCryptoSignalEngine
 
     engine = ShortCryptoSignalEngine(assets=assets, windows=windows, min_edge=0.0)
-    kalshi = []
+    kalshi = _load_kalshi_short_crypto_markets(assets)
     polymarket = []
     try:
-        kalshi = KalshiClient(raw_dir="data/raw").get_markets(status="open", limit=200, max_pages=1) or []
-    except Exception as exc:  # pragma: no cover - CLI fallback path
-        logging.getLogger(__name__).warning("kalshi market load failed for scan-short-crypto: %s", exc)
-    try:
-        polymarket = PolymarketClient(raw_dir="data/raw").get_markets(limit=200) or []
+        polymarket = PolymarketClient(raw_dir="data/raw").get_active_markets(keyword="crypto", limit=200) or []
     except Exception as exc:  # pragma: no cover - CLI fallback path
         logging.getLogger(__name__).warning("polymarket market load failed for scan-short-crypto: %s", exc)
     normalized = normalize_short_crypto_markets(kalshi, polymarket)
-    signals = engine.generate_signals(normalized, {})
+    spot_map = _short_crypto_spot_map(assets)
+    signals = engine.generate_signals(normalized, spot_map)
     rows = [
         {
             "asset": signal.asset,
@@ -1403,26 +1400,25 @@ def _watch_short_crypto(paper: bool = True, interval: int | None = None, max_loo
     from src.analysis.short_crypto_markets import normalize_short_crypto_markets
     from src.analysis.short_crypto_executor import ShortCryptoSignalEngine, ShortCryptoExecutor, ShortCryptoRiskConfig
 
-    engine = ShortCryptoSignalEngine(assets=["BTC", "ETH", "SOL"], windows=[5], min_edge=0.0)
-    executor = ShortCryptoExecutor(config=ShortCryptoRiskConfig())
+    assets = ["BTC", "ETH", "SOL"]
+    engine = ShortCryptoSignalEngine(assets=assets, windows=[5, 10, 15], min_edge=0.0)
+    executor = ShortCryptoExecutor(config=ShortCryptoRiskConfig.from_env())
     loop = 0
     executed_last: list[dict[str, Any]] = []
     while max_loops is None or loop < max_loops:
         kalshi = []
         polymarket = []
+        kalshi = _load_kalshi_short_crypto_markets(assets)
         try:
-            kalshi = KalshiClient(raw_dir="data/raw").get_markets(status="open", limit=200, max_pages=1) or []
-        except Exception as exc:  # pragma: no cover - CLI fallback path
-            logging.getLogger(__name__).warning("watch kalshi load failed: %s", exc)
-        try:
-            polymarket = PolymarketClient(raw_dir="data/raw").get_markets(limit=200) or []
+            polymarket = PolymarketClient(raw_dir="data/raw").get_active_markets(keyword="crypto", limit=200) or []
         except Exception as exc:  # pragma: no cover - CLI fallback path
             logging.getLogger(__name__).warning("watch polymarket load failed: %s", exc)
         markets = normalize_short_crypto_markets(kalshi, polymarket)
-        signals = engine.generate_signals(markets, {})
+        spot_map = _short_crypto_spot_map(assets)
+        signals = engine.generate_signals(markets, spot_map)
         executed_last = []
         for signal in signals:
-            result = executor.execute(signal, mode="paper")
+            result = executor.execute(signal, mode="paper" if paper else "live", live=not paper, max_loops=max_loops)
             executed_last.append({
                 "asset": signal.asset,
                 "direction": signal.direction,
@@ -1443,31 +1439,294 @@ def _watch_short_crypto(paper: bool = True, interval: int | None = None, max_loo
     return {"loop": max(0, loop - 1), "paper": paper, "executed": executed_last}
 
 
-def _trade_short_crypto(as_json: bool = True, paper: bool = True) -> dict[str, Any]:
-    from src.analysis.short_crypto_executor import ShortCryptoExecutor, ShortCryptoRiskConfig, CryptoSignal
+def _trade_short_crypto(
+    as_json: bool = True,
+    paper: bool = True,
+    live: bool = False,
+    max_loops: int | None = None,
+    venue: str = "kalshi",
+    assets: list[str] | None = None,
+    windows: list[int] | None = None,
+    dry_run_live: bool = False,
+) -> dict[str, Any]:
+    from src.analysis.short_crypto_executor import ShortCryptoExecutor, ShortCryptoRiskConfig
 
-    executor = ShortCryptoExecutor(config=ShortCryptoRiskConfig())
-    signal = CryptoSignal(
-        asset="BTC",
-        window_minutes=5,
-        direction="up",
-        venue="kalshi",
-        ticker="BTC-UP-5",
-        spot_price=100.0,
-        implied_prob=0.5,
-        model_prob=0.6,
-        edge=0.1,
-        roi=0.1,
-        timestamp=time.time(),
-        meta={},
-    )
-    result = executor.execute(signal, mode="paper")
-    payload = {"accepted": result.get("accepted"), "mode": "paper", "reason": result.get("reason"), "stake": result.get("stake")}
+    if dry_run_live and venue == "polymarket":
+        from polymarket_live_order_audit import build_audit
+
+        payload = build_audit(mode="short_crypto")
+        result = {
+            "accepted": False,
+            "status": "dry_run_live",
+            "mode": "live",
+            "reason": "dry_run_live_no_order_sent" if payload.get("status") == "ready" else "polymarket_live_signing_not_ready",
+            "audit": payload,
+            "results": [payload],
+        }
+        if as_json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(result["reason"])
+        return result
+
+    assets = assets or ["BTC", "ETH", "SOL"]
+    windows = windows or [5, 10, 15]
+    executor = ShortCryptoExecutor(config=ShortCryptoRiskConfig.from_env())
+    loops = max(1, int(max_loops or 1))
+    results = []
+    signals = _discover_short_crypto_signals(assets=assets, windows=windows, venue=venue)
+    if (live or dry_run_live) and not signals:
+        payload = {
+            "accepted": False,
+            "mode": "live" if live else "dry_run_live",
+            "reason": "no_real_kalshi_short_crypto_market_discovered",
+            "results": [],
+        }
+        if as_json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(payload["reason"])
+        return payload
+    if not signals and paper:
+        signals = [_synthetic_short_crypto_signal(index=0)]
+    for index in range(loops):
+        signal = signals[index % len(signals)]
+        if dry_run_live:
+            selected = _signal_selected_yes_ask(signal)
+            if not selected.get("ok"):
+                results.append({"accepted": False, "status": "rejected", "mode": "live", "reason": "no_executable_resting_yes_ask", "ticker": signal.ticker})
+                continue
+            stake = executor._sized_stake(signal)
+            price = selected["price_cents"] / 100.0
+            if os.environ.get("POLYLENS_FIRST_LIVE_TEST", "").lower() in {"1", "true", "yes", "on"}:
+                stake = min(stake, 1.0)
+                count = 1
+            else:
+                count = min(max(1, int(stake / price)), int(selected["count"]))
+            order_intent = executor._order_intent(signal, stake=stake, count=count, mode="live")
+            order_intent["price"] = price
+            order_intent["selected_liquidity_source"] = selected.get("derived_from")
+            if selected.get("derived_from") == "no_bid":
+                order_intent["action"] = "sell"
+                order_intent["side"] = "no"
+                order_intent.pop("yes_price_cents", None)
+                order_intent["no_price_cents"] = int(selected["no_bid_cents"])
+            else:
+                order_intent["action"] = "buy"
+                order_intent["side"] = "yes"
+                order_intent["yes_price_cents"] = selected["price_cents"]
+            order_intent["kalshi_payload"] = __import__("src.analysis.short_crypto_executor", fromlist=["build_kalshi_order_payload"]).build_kalshi_order_payload(order_intent)
+            results.append({"accepted": False, "status": "dry_run_live", "mode": "live", "reason": "dry_run_live_no_order_sent", "selected_ask_price": price, "selected_ask_count": selected["count"], "selected_ask_raw": selected["raw"], "order": order_intent, "payload": order_intent.get("kalshi_payload")})
+        else:
+            results.append(executor.execute(signal, mode="live" if live and not paper else "paper", live=live and not paper, max_loops=loops))
+    last = results[-1] if results else {}
+    payload = {"accepted": last.get("accepted"), "mode": "live" if live and not paper else "paper", "reason": last.get("reason"), "stake": last.get("stake"), "results": results}
     if as_json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(f"Short crypto paper trade: accepted={payload['accepted']} reason={payload['reason']}")
     return payload
+
+
+def _live_readiness_short_crypto(as_json: bool = True) -> dict[str, Any]:
+    from src.analysis.short_crypto_executor import live_readiness_report
+
+    payload = live_readiness_report()
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Short crypto live readiness: {payload['status']}")
+    return payload
+
+
+def _live_readiness_polymarket(as_json: bool = True) -> dict[str, Any]:
+    from polymarket_live_order_audit import live_readiness_report
+
+    payload = live_readiness_report()
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Polymarket live readiness: {payload['status']}")
+    return payload
+
+
+def _short_crypto_spot_map(assets: list[str]) -> dict[str, float]:
+    from src.adapters.crypto_price_feed import CryptoPriceFeedManager
+
+    symbols = [f"{asset}-USD" for asset in assets]
+    manager = CryptoPriceFeedManager(symbols=symbols)
+    spot_map: dict[str, float] = {}
+    try:
+        manager.start()
+        time.sleep(float(os.environ.get("POLYLENS_SHORT_CRYPTO_FEED_WARMUP_SECS", "0.25")))
+        for asset, symbol in zip(assets, symbols):
+            tick = manager.get_latest(symbol)
+            if tick and (tick.mid or tick.last):
+                spot_map[asset] = float(tick.mid or tick.last or 0.0)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("short crypto price feed unavailable: %s", exc)
+    finally:
+        try:
+            manager.stop()
+        except Exception:
+            pass
+    if not spot_map:
+        spot_map.update(_coinbase_rest_spot_map(assets))
+    return spot_map
+
+
+def _coinbase_rest_spot_map(assets: list[str]) -> dict[str, float]:
+    from urllib.request import Request, urlopen
+
+    prices: dict[str, float] = {}
+    for asset in assets:
+        symbol = f"{asset}-USD"
+        try:
+            request = Request(f"https://api.exchange.coinbase.com/products/{symbol}/ticker", headers={"User-Agent": "polylens/0.1", "Accept": "application/json"})
+            with urlopen(request, timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            price = float(payload.get("price") or 0.0)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("coinbase rest price unavailable symbol=%s: %s", symbol, exc)
+            price = 0.0
+        if price > 0:
+            prices[asset] = price
+    return prices
+
+
+def _load_kalshi_short_crypto_markets(assets: list[str]) -> list[dict[str, Any]]:
+    series_by_asset = {"BTC": ["KXBTCD", "KXBTC"], "ETH": ["KXETHD", "KXETH"], "SOL": ["KXSOLD"]}
+    client = KalshiClient(raw_dir="data/raw")
+    markets: list[dict[str, Any]] = []
+    for asset in assets:
+        for series in series_by_asset.get(asset, []):
+            try:
+                markets.extend(client.get_markets(status="open", limit=100, max_pages=1, series_ticker=series) or [])
+            except Exception as exc:
+                logging.getLogger(__name__).warning("kalshi short crypto series load failed series=%s: %s", series, exc)
+    return markets
+
+
+def _discover_short_crypto_signals(assets: list[str], windows: list[int], venue: str = "kalshi") -> list[Any]:
+    from src.analysis.short_crypto_executor import ShortCryptoSignalEngine
+    from src.analysis.short_crypto_executor import select_executable_yes_ask
+    from src.analysis.short_crypto_markets import normalize_short_crypto_markets
+
+    if venue != "kalshi":
+        return []
+    markets = normalize_short_crypto_markets(_load_kalshi_short_crypto_markets(assets), [])
+    fresh_markets = []
+    client = KalshiClient(raw_dir="data/raw")
+    now = time.time()
+    for market in markets:
+        try:
+            book = client.get_orderbook(market.ticker)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("kalshi short crypto orderbook load failed ticker=%s: %s", market.ticker, exc)
+            continue
+        if not _kalshi_orderbook_has_depth(book):
+            continue
+        selected = select_executable_yes_ask(book)
+        if not selected.get("ok"):
+            continue
+        fresh_markets.append(type(market)(
+            asset=market.asset,
+            venue=market.venue,
+            ticker=market.ticker,
+            start_ts=market.start_ts,
+            end_ts=market.end_ts,
+            direction=market.direction,
+            yes_bid=market.yes_bid,
+            yes_ask=market.yes_ask,
+            no_bid=market.no_bid,
+            no_ask=market.no_ask,
+            liquidity=market.liquidity or 1.0,
+            window_minutes=None,
+            strike_price=market.strike_price,
+            reference_price=market.reference_price,
+            timestamp=now,
+            raw={**(market.raw or {}), "orderbook": book, "selected_yes_ask": selected},
+        ))
+        if len(fresh_markets) >= max(1, len(assets)):
+            break
+    spot_map = _short_crypto_spot_map(assets)
+    for market in fresh_markets:
+        if market.asset not in spot_map and market.strike_price:
+            spot_map[market.asset] = float(market.strike_price)
+    refreshed = [
+        type(market)(
+            asset=market.asset,
+            venue=market.venue,
+            ticker=market.ticker,
+            start_ts=market.start_ts,
+            end_ts=market.end_ts,
+            direction=market.direction,
+            yes_bid=market.yes_bid,
+            yes_ask=market.yes_ask,
+            no_bid=market.no_bid,
+            no_ask=market.no_ask,
+            liquidity=market.liquidity,
+            window_minutes=market.window_minutes,
+            strike_price=market.strike_price,
+            reference_price=market.reference_price,
+            timestamp=time.time(),
+            raw=market.raw,
+        )
+        for market in fresh_markets
+    ]
+    return ShortCryptoSignalEngine(assets=assets, windows=windows, min_edge=0.0).generate_signals(refreshed, spot_map)
+
+
+def _kalshi_orderbook_has_depth(book: dict[str, Any]) -> bool:
+    orderbook = (book or {}).get("orderbook") or (book or {}).get("orderbook_fp") or book or {}
+    for key in ("yes", "no", "yes_dollars", "no_dollars"):
+        levels = orderbook.get(key) if isinstance(orderbook, dict) else None
+        if isinstance(levels, list) and levels:
+            return True
+    return False
+
+
+def _signal_selected_yes_ask(signal: Any) -> dict[str, Any]:
+    market = signal.meta.get("market") if isinstance(signal.meta, dict) else None
+    raw = getattr(market, "raw", None) or {}
+    selected = raw.get("selected_yes_ask")
+    return selected if isinstance(selected, dict) else {"ok": False, "reason": "no_executable_resting_yes_ask"}
+
+
+def _synthetic_short_crypto_signal(index: int = 0) -> Any:
+    from src.analysis.short_crypto_executor import CryptoSignal
+    from src.analysis.short_crypto_markets import ShortCryptoMarket
+
+    now = time.time()
+    market = ShortCryptoMarket(
+        asset="BTC",
+        venue="kalshi",
+        ticker=f"BTC-UP-5-PAPER-{index}-{int(now)}",
+        start_ts=now,
+        end_ts=now + 300,
+        direction="up",
+        yes_bid=0.5,
+        yes_ask=0.55,
+        no_bid=0.45,
+        no_ask=0.5,
+        liquidity=100.0,
+        window_minutes=5,
+        timestamp=now,
+    )
+    return CryptoSignal(
+        asset="BTC",
+        window_minutes=5,
+        direction="up",
+        venue="kalshi",
+        ticker=market.ticker,
+        spot_price=100.0,
+        implied_prob=0.525,
+        model_prob=0.6,
+        edge=0.075,
+        roi=0.1,
+        timestamp=now,
+        meta={"market": market, "price_timestamp": now},
+    )
 
 
 def main() -> None:
@@ -1812,7 +2071,19 @@ def main() -> None:
 
     trade_short_crypto_parser = sub.add_parser("trade-short-crypto")
     trade_short_crypto_parser.add_argument("--paper", action="store_true", default=True, help="paper trading only")
+    trade_short_crypto_parser.add_argument("--live", action="store_true", default=False, help="request live execution; still requires env readiness gates")
+    trade_short_crypto_parser.add_argument("--dry-run-live", action="store_true", default=False, help="build live Kalshi payload for a real market without sending")
+    trade_short_crypto_parser.add_argument("--venue", default="kalshi", choices=["kalshi", "polymarket"])
+    trade_short_crypto_parser.add_argument("--assets", default="BTC,ETH,SOL", help="comma-separated assets, e.g. BTC,ETH,SOL")
+    trade_short_crypto_parser.add_argument("--windows", default="5,10,15", help="comma-separated window minutes, e.g. 5,10,15")
+    trade_short_crypto_parser.add_argument("--max-loops", type=int, default=None, help="stop after N trade loops")
     trade_short_crypto_parser.add_argument("--json", action="store_true")
+
+    live_ready_short_crypto_parser = sub.add_parser("live-readiness-short-crypto")
+    live_ready_short_crypto_parser.add_argument("--json", action="store_true")
+
+    live_ready_polymarket_parser = sub.add_parser("live-readiness-polymarket")
+    live_ready_polymarket_parser.add_argument("--json", action="store_true")
 
     args = parser.parse_args()
 
@@ -1927,7 +2198,22 @@ def main() -> None:
     elif args.command == "watch-short-crypto":
         _watch_short_crypto(paper=args.paper, interval=args.interval, max_loops=args.max_loops, as_json=args.json)
     elif args.command == "trade-short-crypto":
-        _trade_short_crypto(as_json=args.json, paper=args.paper)
+        assets = [item.strip().upper() for item in args.assets.split(",") if item.strip()]
+        windows = [int(item.strip()) for item in args.windows.split(",") if item.strip()]
+        _trade_short_crypto(
+            as_json=args.json,
+            paper=args.paper and not args.live and not args.dry_run_live,
+            live=args.live,
+            max_loops=args.max_loops,
+            venue=args.venue,
+            assets=assets,
+            windows=windows,
+            dry_run_live=args.dry_run_live,
+        )
+    elif args.command == "live-readiness-short-crypto":
+        _live_readiness_short_crypto(as_json=args.json)
+    elif args.command == "live-readiness-polymarket":
+        _live_readiness_polymarket(as_json=args.json)
 
 
 if __name__ == "__main__":

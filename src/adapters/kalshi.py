@@ -220,8 +220,12 @@ class KalshiAuthenticatedClient:
     def get_fills(self, limit: int = 100, max_pages: int = 5, **filters: Any) -> dict[str, Any]:
         return self._get_paginated("portfolio/fills", "fills", limit=limit, max_pages=max_pages, **filters)
 
-    def place_order(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        return self.write_blocked("place_order")
+    def place_order(self, payload: dict[str, Any] | None = None, **legacy_kwargs: Any) -> dict[str, Any]:
+        if payload is None or legacy_kwargs:
+            return self.write_blocked("place_order")
+        if not isinstance(payload, dict) or not payload.get("ticker"):
+            raise ValueError("Kalshi order payload with ticker is required")
+        return self._request_authenticated_json("POST", "portfolio/orders", json_body=payload)
 
     def cancel_order(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return self.write_blocked("cancel_order")
@@ -285,9 +289,16 @@ class KalshiAuthenticatedClient:
     def _get_authenticated_json(self, endpoint: str, params: dict[str, Any] | None = None, page: int | None = None) -> dict[str, Any]:
         return self._request_authenticated_json("GET", endpoint, params=params or {}, page=page)
 
-    def _request_authenticated_json(self, method: str, endpoint: str, params: dict[str, Any] | None = None, page: int | None = None) -> dict[str, Any]:
+    def _request_authenticated_json(
+        self,
+        method: str,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+        page: int | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         method = method.upper()
-        if method != "GET":
+        if method not in {"GET", "POST", "DELETE"}:
             return self.write_blocked(f"{method} {endpoint}")
         params = params or {}
         query = urlencode({key: value for key, value in params.items() if value is not None})
@@ -296,6 +307,7 @@ class KalshiAuthenticatedClient:
             url = f"{url}?{query}"
         timestamp = str(int(time.time() * 1000))
         sign_path = urlparse(url).path
+        body = json.dumps(json_body).encode("utf-8") if json_body is not None else None
         headers = {
             "User-Agent": "polylens/0.1",
             "Accept": "application/json",
@@ -303,8 +315,10 @@ class KalshiAuthenticatedClient:
             "KALSHI-ACCESS-TIMESTAMP": timestamp,
             "KALSHI-ACCESS-SIGNATURE": self._sign_request(timestamp, method, sign_path),
         }
-        LOGGER.info("authenticated Kalshi api call GET %s", _redact_url(url))
-        request = Request(url, headers=headers)
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        LOGGER.info("authenticated Kalshi api call %s %s", method, _redact_url(url))
+        request = Request(url, data=body, headers=headers, method=method)
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 body = response.read().decode("utf-8")
@@ -313,11 +327,11 @@ class KalshiAuthenticatedClient:
             detail = exc.read().decode("utf-8", errors="replace")
             self._write_raw(endpoint, {"url": _redact_url(url), "status": exc.code, "error": detail}, page=page, error=True)
             if exc.code == 401:
-                raise KalshiAPIError("authenticated Kalshi GET failed with HTTP 401: check KALSHI_API_KEY_ID, key file, environment, and clock skew") from exc
-            raise KalshiAPIError(f"authenticated Kalshi GET failed with HTTP {exc.code}: {detail[:200]}") from exc
+                raise KalshiAPIError(f"authenticated Kalshi {method} failed with HTTP 401: check KALSHI_API_KEY_ID, key file, environment, and clock skew") from exc
+            raise KalshiAPIError(f"authenticated Kalshi {method} failed with HTTP {exc.code}: {detail[:200]}") from exc
         except Exception as exc:
             self._write_raw(endpoint, {"url": _redact_url(url), "error": str(exc)}, page=page, error=True)
-            raise KalshiAPIError(f"authenticated Kalshi GET failed: {exc}") from exc
+            raise KalshiAPIError(f"authenticated Kalshi {method} failed: {exc}") from exc
         self._write_raw(endpoint, {"url": _redact_url(url), "payload": payload}, page=page)
         return payload if isinstance(payload, dict) else {"payload": payload}
 

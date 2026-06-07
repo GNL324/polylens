@@ -45,20 +45,31 @@ class KalshiExecutor:
         return {"accepted": False, "mode": "live_disabled", "reason": "live order placement is not implemented", "signal": signal}
 class ShortCryptoExecutor:
     def __init__(self, risk_db_path="data/polylens.db", max_trade_stake=50.0, max_daily_loss=250.0, max_consecutive_losses=5, kill_switch="/home/noel/polylens/.kill_switch"):
-        self.risk_db_path = risk_db_path
-        self.max_trade_stake = float(max_trade_stake)
-        self.max_daily_loss = float(max_daily_loss)
-        self.max_consecutive_losses = int(max_consecutive_losses)
-        self.kill_switch = Path(kill_switch)
-    def execute(self, signal, mode="paper"):
-        if mode != "paper":
-            raise RuntimeError("only paper mode supported in this release")
-        if self.kill_switch.exists():
-            return {"accepted": False, "mode": "rejected", "reason": "kill switch active"}
-        if signal.get("roi", 0) < 0.01:
-            return {"accepted": False, "mode": "rejected", "reason": "edge below threshold"}
-        stake = min(self.max_trade_stake, max(1.0, float(signal.get("spot_price", 0)) * 0.01))
-        return {"accepted": True, "mode": "paper", "order": {"asset": signal["asset"], "direction": signal["direction"], "venue": signal["venue"], "ticker": signal["ticker"], "stake": stake}, "stake": stake}
+        from src.analysis.short_crypto_executor import ShortCryptoExecutor as ProductionShortCryptoExecutor, ShortCryptoRiskConfig
+
+        config = ShortCryptoRiskConfig.from_env()
+        config = ShortCryptoRiskConfig(
+            max_trade_stake=float(max_trade_stake),
+            max_trade_stake_cap=config.max_trade_stake_cap,
+            max_daily_loss=float(max_daily_loss),
+            max_daily_notional=config.max_daily_notional,
+            max_open_notional=config.max_open_notional,
+            max_trades_per_day=config.max_trades_per_day,
+            max_per_venue_notional=config.max_per_venue_notional,
+            min_edge=config.min_edge,
+            min_liquidity=config.min_liquidity,
+            data_freshness_seconds=config.data_freshness_seconds,
+            book_freshness_seconds=config.book_freshness_seconds,
+            close_cutoff_seconds=config.close_cutoff_seconds,
+            duplicate_trade_protection=config.duplicate_trade_protection,
+            kill_switch=kill_switch,
+        )
+        self._executor = ProductionShortCryptoExecutor(config=config, db_path=risk_db_path)
+    def execute(self, signal, mode="paper", live=False):
+        result = self._executor.execute(signal, mode=mode, live=live)
+        if result.get("reason") == "kill_switch_active":
+            result["reason"] = "kill switch active"
+        return result
 def _telegram_notify(message: str) -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")

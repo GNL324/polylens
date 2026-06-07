@@ -83,6 +83,13 @@ python -m src.cli risk-status
 
 Polylens defaults to `DRY_RUN=true` and `LIVE_TRADING=false`; live execution remains blocked. See [docs/dashboard.md](docs/dashboard.md) and [docs/risk_engine.md](docs/risk_engine.md).
 
+
+## Short-Crypto Live Trading
+
+Short-window BTC/ETH/SOL trading on Kalshi and Polymarket is gated behind explicit environment flags, readiness audits, duplicate-trade protection, and a kill switch. Live sends default off.
+
+See [docs/short_crypto_live_trading.md](docs/short_crypto_live_trading.md) for current milestone status, safety gates, first-live-test procedures, and audit commands.
+
 ## Testing
 
 ```bash
