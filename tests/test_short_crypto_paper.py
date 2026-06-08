@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from src.analysis.short_crypto_paper import (
     PaperConfig,
@@ -81,8 +82,18 @@ def test_settlement_waits_until_end_time():
     future = time.time() + 120
     trade = {"end_time": _iso(future), "raw_json": "{}", "side": "YES", "direction": "down", "size": 1, "paper_cost": 0.5, "fee": 0}
     settlement = settle_trade(trade, now_ts=future - 1)
-    assert settlement["result"] == "unknown"
+    assert settlement["result"] == "open"
     assert settlement["settlement_source"] == "not_past_end_time"
+    assert settlement["reason"] == "end_time_not_passed"
+
+
+def test_settlement_marks_expired_unsettled_when_source_missing():
+    past = time.time() - 60
+    trade = {"end_time": _iso(past), "raw_json": "{}", "side": "YES", "direction": "down", "size": 1, "paper_cost": 0.5, "fee": 0}
+    settlement = settle_trade(trade, now_ts=time.time())
+    assert settlement["result"] == "expired_unsettled"
+    assert settlement["settlement_source"] == "unavailable"
+    assert settlement["reason"] == "settlement_source_not_found"
 
 
 def test_report_calculates_win_rate_and_roi(tmp_path):
@@ -102,6 +113,184 @@ def test_report_calculates_win_rate_and_roi(tmp_path):
     assert report["closed_trades"] == 2
     assert report["win_rate"] == 0.5
     assert report["roi"] is not None
+
+
+def test_report_status_accounting_sums_to_total(tmp_path):
+    store = ShortCryptoPaperStore(str(tmp_path / "paper.db"))
+    cfg = _config(tmp_path / "paper.db")
+    run_id = store.start_run(cfg)
+    now = time.time()
+
+    def _save_trade(ticker: str, *, end_offset: float, settle: dict[str, Any] | None = None):
+        intent = build_intent(_market(ticker=ticker, end_ts=now + end_offset), 100.0)
+        intent.update(simulate_fill(intent, intent["book"]))
+        intent["expected_value"] = 0.05
+        sid = store.save_signal(intent, run_id=run_id, status="accepted")
+        tid = store.save_trade(intent, signal_id=sid, run_id=run_id)
+        if settle is not None:
+            store.mark_settled({"id": tid, **intent, "paper_cost": intent["paper_cost"]}, settle)
+
+    _save_trade("OPEN", end_offset=300)
+    _save_trade("CLOSED-W", end_offset=-120, settle={"result": "won", "payout": 1.0, "pnl": 0.5, "roi": 1.0, "settlement_source": "test", "reason": "test"})
+    _save_trade("CLOSED-L", end_offset=-120, settle={"result": "lost", "payout": 0.0, "pnl": -0.5, "roi": -1.0, "settlement_source": "test", "reason": "test"})
+    _save_trade("EXPIRED", end_offset=-120, settle={"result": "expired_unsettled", "payout": None, "pnl": None, "roi": None, "settlement_source": "unavailable", "reason": "settlement_source_not_found"})
+    _save_trade("PAST-DUE", end_offset=-120)
+
+    report = performance_report(str(tmp_path / "paper.db"), now_ts=now)
+    assert report["total_trades"] == 5
+    assert report["open_trades"] == 1
+    assert report["closed_trades"] == 2
+    assert report["expired_unsettled_trades"] == 1
+    assert report["canceled_future_market_trades"] == 0
+    assert report["rejected_trades"] == 0
+    assert report["other_trades"] == 1
+    assert (
+        report["open_trades"]
+        + report["closed_trades"]
+        + report["expired_unsettled_trades"]
+        + report["canceled_future_market_trades"]
+        + report["rejected_trades"]
+        + report["other_trades"]
+    ) == report["total_trades"]
+    assert report["trades_by_status"]["open"] == 1
+    assert report["trades_by_status"]["won"] == 1
+    assert report["trades_by_status"]["lost"] == 1
+    assert report["trades_by_status"]["expired_unsettled"] == 1
+    assert report["trades_by_status"]["other"] == 1
+    assert "unknown" not in report["trades_by_status"]
+
+
+def test_legacy_unknown_reported_as_expired_unsettled(tmp_path):
+    store = ShortCryptoPaperStore(str(tmp_path / "paper.db"))
+    cfg = _config(tmp_path / "paper.db")
+    run_id = store.start_run(cfg)
+    now = time.time()
+    intent = build_intent(_market(ticker="UNKNOWN", end_ts=now - 120), 100.0)
+    intent.update(simulate_fill(intent, intent["book"]))
+    intent["expected_value"] = 0.05
+    sid = store.save_signal(intent, run_id=run_id, status="accepted")
+    tid = store.save_trade(intent, signal_id=sid, run_id=run_id)
+    store.mark_settled(
+        {"id": tid, **intent, "paper_cost": intent["paper_cost"]},
+        {"result": "unknown", "payout": None, "pnl": None, "roi": None, "settlement_source": "unavailable", "reason": "ambiguous_outcome"},
+    )
+
+    report = performance_report(str(tmp_path / "paper.db"), now_ts=now)
+    assert report["expired_unsettled_trades"] == 1
+    assert report["legacy_unknown_trades"] == 1
+    assert "unknown" not in report["trades_by_status"]
+    assert report["trades_by_status"]["expired_unsettled"] == 1
+    assert len(report["sample_unsettled_trades"]) == 1
+    sample = report["sample_unsettled_trades"][0]
+    assert sample["venue"] == "kalshi"
+    assert sample["status"] == "expired_unsettled"
+    assert sample["reason"] == "settlement_source_not_found"
+
+
+def test_live_db_status_shape_counts_legacy_unknown_and_canceled_future_market(tmp_path):
+    store = ShortCryptoPaperStore(str(tmp_path / "paper.db"))
+    cfg = _config(tmp_path / "paper.db")
+    run_id = store.start_run(cfg)
+    now = time.time()
+
+    def _seed_trade(idx: int, *, status: str, settle: dict[str, Any] | None = None):
+        intent = build_intent(
+            _market(ticker=f"btc-updown-5m-{idx}", venue="polymarket", raw={"slug": f"btc-updown-5m-{idx}"}, end_ts=now - 120),
+            100.0,
+        )
+        intent.update(simulate_fill(intent, intent["book"]))
+        intent["expected_value"] = 0.05
+        sid = store.save_signal(intent, run_id=run_id, status="accepted")
+        tid = store.save_trade(intent, signal_id=sid, run_id=run_id)
+        if settle is not None:
+            store.mark_settled({"id": tid, **intent, "paper_cost": intent["paper_cost"]}, settle)
+        with store.connect() as conn:
+            conn.execute("UPDATE paper_trades SET status=? WHERE id=?", (status, tid))
+
+    for idx in range(26):
+        _seed_trade(idx, status="canceled_future_market")
+    for idx in range(26, 44):
+        _seed_trade(
+            idx,
+            status="unknown",
+            settle={"result": "unknown", "payout": None, "pnl": None, "roi": None, "settlement_source": "unavailable", "reason": "settlement_source_not_found"},
+        )
+
+    report = performance_report(str(tmp_path / "paper.db"), now_ts=now)
+    assert report["total_trades"] == 44
+    assert report["closed_trades"] == 0
+    assert report["expired_unsettled_trades"] == 18
+    assert report["canceled_future_market_trades"] == 26
+    assert report["open_trades"] == 0
+    assert report["other_trades"] == 0
+    assert report["legacy_unknown_trades"] == 18
+    assert report["trades_by_status"] == {"expired_unsettled": 18, "canceled_future_market": 26}
+    assert "unknown" not in report["trades_by_status"]
+    assert sum(report["calibration_buckets"][bucket]["count"] for bucket in report["calibration_buckets"]) == 0
+    assert any(sample["status"] == "canceled_future_market" for sample in report["sample_unsettled_trades"])
+    assert any(sample["status"] == "expired_unsettled" for sample in report["sample_unsettled_trades"])
+    assert all(sample["reason"] == "settlement_source_not_found" for sample in report["sample_unsettled_trades"] if sample["status"] == "expired_unsettled")
+    assert all(sample["reason"] == "future_market_canceled" for sample in report["sample_unsettled_trades"] if sample["status"] == "canceled_future_market")
+    assert (
+        report["open_trades"]
+        + report["closed_trades"]
+        + report["expired_unsettled_trades"]
+        + report["canceled_future_market_trades"]
+        + report["rejected_trades"]
+        + report["other_trades"]
+    ) == report["total_trades"]
+
+
+def test_calibration_excludes_open_and_unknown_trades(tmp_path):
+    store = ShortCryptoPaperStore(str(tmp_path / "paper.db"))
+    cfg = _config(tmp_path / "paper.db")
+    run_id = store.start_run(cfg)
+    now = time.time()
+
+    def _seed(ticker: str, *, prob: float, settle: dict[str, Any] | None):
+        intent = build_intent(_market(ticker=ticker, end_ts=now + 300 if settle is None else now - 120), 100.0)
+        intent["model_probability"] = prob
+        intent.update(simulate_fill(intent, intent["book"]))
+        intent["expected_value"] = 0.05
+        sid = store.save_signal(intent, run_id=run_id, status="accepted")
+        tid = store.save_trade(intent, signal_id=sid, run_id=run_id)
+        if settle is not None:
+            store.mark_settled({"id": tid, **intent, "paper_cost": intent["paper_cost"]}, settle)
+
+    _seed("OPEN", prob=0.73, settle=None)
+    _seed("UNKNOWN", prob=0.73, settle={"result": "unknown", "payout": None, "pnl": None, "roi": None, "settlement_source": "unavailable", "reason": "ambiguous"})
+    _seed("CANCELED", prob=0.73, settle=None)
+    with store.connect() as conn:
+        conn.execute("UPDATE paper_trades SET status='canceled_future_market' WHERE ticker=?", ("CANCELED",))
+    _seed("CLOSED", prob=0.73, settle={"result": "won", "payout": 1.0, "pnl": 0.5, "roi": 1.0, "settlement_source": "test", "reason": "test"})
+
+    report = performance_report(str(tmp_path / "paper.db"), now_ts=now)
+    assert report["total_trades"] == 4
+    assert report["expired_unsettled_trades"] == 1
+    assert report["canceled_future_market_trades"] == 1
+    assert report["calibration_buckets"]["70-80%"]["count"] == 1
+    assert report["calibration_buckets"]["70-80%"]["observed_win_rate"] == 1.0
+
+
+def test_report_warns_when_many_expired_unsettled_exist(tmp_path):
+    store = ShortCryptoPaperStore(str(tmp_path / "paper.db"))
+    cfg = _config(tmp_path / "paper.db")
+    run_id = store.start_run(cfg)
+    now = time.time()
+    for idx in range(3):
+        intent = build_intent(_market(ticker=f"EXPIRED-{idx}", end_ts=now - 120), 100.0)
+        intent.update(simulate_fill(intent, intent["book"]))
+        intent["expected_value"] = 0.05
+        sid = store.save_signal(intent, run_id=run_id, status="accepted")
+        tid = store.save_trade(intent, signal_id=sid, run_id=run_id)
+        store.mark_settled(
+            {"id": tid, **intent, "paper_cost": intent["paper_cost"]},
+            {"result": "expired_unsettled", "payout": None, "pnl": None, "roi": None, "settlement_source": "unavailable", "reason": "settlement_source_not_found"},
+        )
+
+    report = performance_report(str(tmp_path / "paper.db"), now_ts=now)
+    assert report["expired_unsettled_trades"] == 3
+    assert any("expired_unsettled" in warning for warning in report["warnings"])
 
 
 def test_calibration_buckets(tmp_path):

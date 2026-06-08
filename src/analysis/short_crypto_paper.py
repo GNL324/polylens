@@ -733,20 +733,40 @@ def settle_due(db_path: str = DEFAULT_DB_PATH, *, now_ts: float | None = None) -
     due = store.due_open_trades(now_ts=now_ts)
     settled = 0
     unknown = 0
+    expired_unsettled = 0
+    skipped_open = 0
     for trade in due:
         settlement = settle_trade(trade, now_ts=now_ts)
+        if settlement["result"] == "open":
+            skipped_open += 1
+            continue
         store.mark_settled(trade, settlement)
-        if settlement["result"] == "unknown":
-            unknown += 1
-        else:
+        if settlement["result"] in {"won", "lost"}:
             settled += 1
-    return {"due_trades": len(due), "settled": settled, "unknown": unknown}
+        elif settlement["result"] == "expired_unsettled":
+            expired_unsettled += 1
+        else:
+            unknown += 1
+    return {
+        "due_trades": len(due),
+        "settled": settled,
+        "unknown": unknown,
+        "expired_unsettled": expired_unsettled,
+        "skipped_open": skipped_open,
+    }
 
 
 def settle_trade(trade: dict[str, Any], *, now_ts: float | None = None) -> dict[str, Any]:
     now_ts = now_ts if now_ts is not None else time.time()
     if now_ts < _parse_ts(trade["end_time"]):
-        return {"result": "unknown", "payout": None, "pnl": None, "roi": None, "settlement_source": "not_past_end_time"}
+        return {
+            "result": "open",
+            "payout": None,
+            "pnl": None,
+            "roi": None,
+            "settlement_source": "not_past_end_time",
+            "reason": "end_time_not_passed",
+        }
     raw = _load_json(trade.get("raw_json"))
     market_raw = raw.get("raw_market") if isinstance(raw, dict) else {}
     result = _explicit_result(market_raw, trade)
@@ -755,29 +775,44 @@ def settle_trade(trade: dict[str, Any], *, now_ts: float | None = None) -> dict[
         result = _reference_price_result(market_raw, trade)
         source = "clearly_labeled_reference_price" if result is not None else "unavailable"
     if result is None:
-        return {"result": "unknown", "payout": None, "pnl": None, "roi": None, "settlement_source": source}
+        return {
+            "result": "expired_unsettled",
+            "payout": None,
+            "pnl": None,
+            "roi": None,
+            "settlement_source": source,
+            "reason": "settlement_source_not_found",
+        }
     won = result == "won"
     payout = float(trade["size"]) if won else 0.0
     pnl = payout - float(trade["paper_cost"]) - float(trade.get("fee") or 0.0)
     roi = pnl / float(trade["paper_cost"]) if float(trade["paper_cost"]) else None
-    return {"result": result, "payout": payout, "pnl": pnl, "roi": roi, "settlement_source": source}
+    return {"result": result, "payout": payout, "pnl": pnl, "roi": roi, "settlement_source": source, "reason": source}
 
 
-def performance_report(db_path: str = DEFAULT_DB_PATH) -> dict[str, Any]:
+def performance_report(db_path: str = DEFAULT_DB_PATH, *, now_ts: float | None = None) -> dict[str, Any]:
     store = ShortCryptoPaperStore(db_path)
+    now_ts = now_ts if now_ts is not None else time.time()
     with store.connect() as conn:
         trades = [dict(row) for row in conn.execute("SELECT * FROM paper_trades").fetchall()]
         settlements = [dict(row) for row in conn.execute("SELECT * FROM paper_settlements").fetchall()]
+        rejected_signals = int(conn.execute("SELECT COUNT(*) FROM paper_signals WHERE status='rejected'").fetchone()[0])
     settlement_by_trade = {int(s["trade_id"]): s for s in settlements}
-    closed = [t for t in trades if int(t["id"]) in settlement_by_trade and settlement_by_trade[int(t["id"])]["result"] in {"won", "lost"}]
-    open_trades = [t for t in trades if t["status"] == "open"]
-    wins = sum(1 for t in closed if settlement_by_trade[int(t["id"])]["result"] == "won")
+    breakdown = _status_breakdown(trades, settlement_by_trade, now_ts=now_ts)
+    closed = breakdown["closed_trades_list"]
+    wins = sum(1 for t in closed if _normalized_result(t, settlement_by_trade.get(int(t["id"]))) == "won")
     pnl = sum(float(settlement_by_trade[int(t["id"])]["pnl"] or 0.0) for t in closed)
     cost = sum(float(t["paper_cost"] or 0.0) for t in closed)
     report = {
         "total_trades": len(trades),
-        "closed_trades": len(closed),
-        "open_trades": len(open_trades),
+        "open_trades": breakdown["open_trades"],
+        "closed_trades": breakdown["closed_trades"],
+        "expired_unsettled_trades": breakdown["expired_unsettled_trades"],
+        "canceled_future_market_trades": breakdown["canceled_future_market_trades"],
+        "rejected_trades": breakdown["rejected_trades"],
+        "other_trades": breakdown["other_trades"],
+        "rejected_signals": rejected_signals,
+        "trades_by_status": breakdown["trades_by_status"],
         "win_rate": wins / len(closed) if closed else None,
         "total_paper_pnl": pnl,
         "roi": pnl / cost if cost else None,
@@ -786,11 +821,37 @@ def performance_report(db_path: str = DEFAULT_DB_PATH) -> dict[str, Any]:
         "by_venue": _group_report(trades, settlement_by_trade, "venue"),
         "by_asset": _group_report(trades, settlement_by_trade, "asset"),
         "by_window": _group_report(trades, settlement_by_trade, "window_minutes"),
-        "calibration_buckets": _calibration_buckets(trades, settlement_by_trade),
+        "calibration_buckets": _calibration_buckets(closed, settlement_by_trade),
+        "sample_unsettled_trades": breakdown["sample_unsettled_trades"],
         "warnings": [],
     }
+    if breakdown["legacy_unknown_trades"]:
+        report["legacy_unknown_trades"] = breakdown["legacy_unknown_trades"]
+        report["legacy_unknown_note"] = (
+            f"{breakdown['legacy_unknown_trades']} legacy unknown trade statuses are reported as expired_unsettled"
+        )
     if len(closed) < 100:
         report["warnings"].append("sample size < 100 closed trades")
+    if breakdown["expired_unsettled_trades"] >= 3 or (
+        len(trades) and breakdown["expired_unsettled_trades"] / len(trades) >= 0.25
+    ):
+        report["warnings"].append(
+            f"{breakdown['expired_unsettled_trades']} expired_unsettled trades need settlement source resolution"
+        )
+    accounting_total = (
+        breakdown["open_trades"]
+        + breakdown["closed_trades"]
+        + breakdown["expired_unsettled_trades"]
+        + breakdown["canceled_future_market_trades"]
+        + breakdown["rejected_trades"]
+        + breakdown["other_trades"]
+    )
+    if accounting_total != len(trades):
+        report["warnings"].append(
+            "status accounting mismatch: "
+            f"open+closed+expired_unsettled+canceled_future_market+rejected+other={accounting_total} "
+            f"!= total_trades={len(trades)}"
+        )
     return report
 
 
@@ -999,17 +1060,172 @@ def _group_report(trades: list[dict[str, Any]], settlements: dict[int, dict[str,
     return out
 
 
+def _is_legacy_unknown_status(trade: dict[str, Any], settlement: dict[str, Any] | None) -> bool:
+    status = str(trade.get("status") or "")
+    result = str(settlement.get("result") or "") if settlement else ""
+    return status == "unknown" or result == "unknown"
+
+
+def _normalized_result(trade: dict[str, Any], settlement: dict[str, Any] | None) -> str:
+    status = str(trade.get("status") or "")
+    result = str(settlement.get("result") or "") if settlement else ""
+    if status in {"won", "lost"}:
+        return status
+    if result in {"won", "lost"}:
+        return result
+    return ""
+
+
+def _normalize_trade_status(
+    trade: dict[str, Any],
+    settlement: dict[str, Any] | None,
+    *,
+    now_ts: float,
+) -> str:
+    raw_status = str(trade.get("status") or "")
+    result = str(settlement.get("result") or "") if settlement else ""
+    end_passed = _parse_ts(trade["end_time"]) <= now_ts
+
+    if raw_status == "canceled_future_market":
+        return "canceled_future_market"
+    if raw_status == "rejected":
+        return "rejected"
+    if raw_status in {"won", "lost"} or result in {"won", "lost"}:
+        return _normalized_result(trade, settlement)
+    if raw_status == "unknown" or result == "unknown" or raw_status == "expired_unsettled" or result == "expired_unsettled":
+        return "expired_unsettled"
+    if not end_passed:
+        return "open"
+    if raw_status == "open":
+        return "other"
+    return "other"
+
+
+def _settlement_reason(
+    trade: dict[str, Any],
+    settlement: dict[str, Any] | None,
+    *,
+    normalized_status: str,
+    now_ts: float,
+) -> str:
+    if normalized_status == "expired_unsettled":
+        if _is_legacy_unknown_status(trade, settlement):
+            return "settlement_source_not_found"
+        if settlement:
+            raw = _load_json(settlement.get("raw_json"))
+            if raw.get("reason") == "settlement_source_not_found":
+                return "settlement_source_not_found"
+            source = str(settlement.get("settlement_source") or "")
+            if source == "unavailable":
+                return "settlement_source_not_found"
+            if raw.get("reason"):
+                return str(raw["reason"])
+        return "settlement_source_not_found"
+    if normalized_status == "canceled_future_market":
+        return "future_market_canceled"
+    if settlement:
+        raw = _load_json(settlement.get("raw_json"))
+        if raw.get("reason"):
+            return str(raw["reason"])
+        source = str(settlement.get("settlement_source") or "")
+        if source == "not_past_end_time":
+            return "end_time_not_passed"
+        return source or "unknown"
+    if _parse_ts(trade["end_time"]) > now_ts:
+        return "end_time_not_passed"
+    return "settlement_not_run"
+
+
+def _trade_market_label(trade: dict[str, Any]) -> str | None:
+    return trade.get("slug") or trade.get("market") or trade.get("ticker")
+
+
+def _sample_unsettled_trade(
+    trade: dict[str, Any],
+    settlement: dict[str, Any] | None,
+    *,
+    normalized_status: str,
+    now_ts: float,
+) -> dict[str, Any]:
+    return {
+        "venue": trade.get("venue"),
+        "market": _trade_market_label(trade),
+        "slug": trade.get("slug"),
+        "end_time": trade.get("end_time"),
+        "status": normalized_status,
+        "settlement_source": settlement.get("settlement_source") if settlement else None,
+        "reason": _settlement_reason(trade, settlement, normalized_status=normalized_status, now_ts=now_ts),
+    }
+
+
+def _status_breakdown(
+    trades: list[dict[str, Any]],
+    settlement_by_trade: dict[int, dict[str, Any]],
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    counts = {
+        "open": 0,
+        "won": 0,
+        "lost": 0,
+        "expired_unsettled": 0,
+        "canceled_future_market": 0,
+        "rejected": 0,
+        "other": 0,
+    }
+    trades_by_status: dict[str, int] = {}
+    closed_trades_list: list[dict[str, Any]] = []
+    unsettled_samples_by_status: dict[str, list[dict[str, Any]]] = {}
+    legacy_unknown_trades = 0
+
+    for trade in trades:
+        settlement = settlement_by_trade.get(int(trade["id"]))
+        normalized_status = _normalize_trade_status(trade, settlement, now_ts=now_ts)
+        if _is_legacy_unknown_status(trade, settlement):
+            legacy_unknown_trades += 1
+        trades_by_status[normalized_status] = int(trades_by_status.get(normalized_status, 0)) + 1
+        counts[normalized_status] += 1
+        if normalized_status in {"won", "lost"}:
+            closed_trades_list.append(trade)
+        if normalized_status in {"expired_unsettled", "canceled_future_market", "other"}:
+            samples = unsettled_samples_by_status.setdefault(normalized_status, [])
+            if len(samples) < 5:
+                samples.append(
+                    _sample_unsettled_trade(trade, settlement, normalized_status=normalized_status, now_ts=now_ts)
+                )
+
+    sample_unsettled_trades: list[dict[str, Any]] = []
+    for status in ("expired_unsettled", "canceled_future_market", "other"):
+        sample_unsettled_trades.extend(unsettled_samples_by_status.get(status, []))
+    sample_unsettled_trades = sample_unsettled_trades[:10]
+
+    return {
+        "open_trades": counts["open"],
+        "closed_trades": counts["won"] + counts["lost"],
+        "expired_unsettled_trades": counts["expired_unsettled"],
+        "canceled_future_market_trades": counts["canceled_future_market"],
+        "rejected_trades": counts["rejected"],
+        "other_trades": counts["other"],
+        "trades_by_status": trades_by_status,
+        "closed_trades_list": closed_trades_list,
+        "sample_unsettled_trades": sample_unsettled_trades,
+        "legacy_unknown_trades": legacy_unknown_trades,
+    }
+
+
 def _calibration_buckets(trades: list[dict[str, Any]], settlements: dict[int, dict[str, Any]]) -> dict[str, Any]:
     buckets = {f"{i}-{i+10}%": {"count": 0, "wins": 0, "observed_win_rate": None, "average_model_probability": None} for i in range(0, 100, 10)}
     sums = {key: 0.0 for key in buckets}
     for trade in trades:
+        settlement = settlements.get(int(trade["id"]))
+        if not settlement or settlement["result"] not in {"won", "lost"}:
+            continue
         prob = max(0.0, min(0.999999, float(trade["model_probability"] or 0.0)))
         lower = int(math.floor(prob * 10.0) * 10)
         label = f"{lower}-{lower+10}%"
         buckets[label]["count"] += 1
         sums[label] += prob
-        settlement = settlements.get(int(trade["id"]))
-        if settlement and settlement["result"] == "won":
+        if settlement["result"] == "won":
             buckets[label]["wins"] += 1
     for label, item in buckets.items():
         item["observed_win_rate"] = item["wins"] / item["count"] if item["count"] else None
