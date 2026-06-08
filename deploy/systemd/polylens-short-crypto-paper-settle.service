@@ -1,0 +1,21 @@
+[Unit]
+Description=Polylens short crypto paper settlement and reporting
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=noel
+WorkingDirectory=/home/noel/polylens
+EnvironmentFile=-/home/noel/polylens/deploy/systemd/polylens-short-crypto-paper.env
+Environment=POLYLENS_LIVE_TRADING=false
+Environment=POLYLENS_AUTONOMOUS_CRYPTO=false
+Environment=POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false
+Environment=POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED=false
+ExecStart=/home/noel/.venv/bin/python -m src.cli short-crypto-paper-settle --json
+ExecStart=/home/noel/.venv/bin/python -m src.cli short-crypto-paper-report --json
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Polylens short crypto paper settlement and reporting every 5 minutes
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=polylens-short-crypto-paper-settle.service
+
+[Install]
+WantedBy=timers.target

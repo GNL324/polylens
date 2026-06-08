@@ -363,7 +363,40 @@ Stop the timer:
 sudo systemctl disable --now polylens-short-crypto-paper.timer
 ```
 
-Settle and report paper trades:
+## Short-Crypto Paper Settlement Timer
+
+The settlement timer settles due paper trades and emits a performance report every 5 minutes. It does not enable live trading and uses `short-crypto-paper-settle` and `short-crypto-paper-report`, not `trade-short-crypto`.
+
+Install the service and timer files:
+
+```bash
+cd /home/noel/polylens
+sudo cp deploy/systemd/polylens-short-crypto-paper-settle.service /etc/systemd/system/
+sudo cp deploy/systemd/polylens-short-crypto-paper-settle.timer /etc/systemd/system/
+cp deploy/systemd/polylens-short-crypto-paper.env.example deploy/systemd/polylens-short-crypto-paper.env
+sudo systemctl daemon-reload
+```
+
+Enable and start the timer only after reviewing the env file:
+
+```bash
+sudo systemctl enable --now polylens-short-crypto-paper-settle.timer
+```
+
+Check timer status and logs:
+
+```bash
+systemctl list-timers polylens-short-crypto-paper-settle.timer
+journalctl -u polylens-short-crypto-paper-settle.service -n 100 --no-pager
+```
+
+Stop the timer:
+
+```bash
+sudo systemctl disable --now polylens-short-crypto-paper-settle.timer
+```
+
+Manual settle and report (same commands the service runs):
 
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.cli short-crypto-paper-settle --json
