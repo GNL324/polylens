@@ -35,6 +35,12 @@ class PaperConfig:
     db_path: str = DEFAULT_DB_PATH
     discover_only: bool = False
     max_market_lead_time_minutes: float = field(default_factory=lambda: _float_env("POLYLENS_MAX_MARKET_LEAD_TIME_MINUTES", DEFAULT_MAX_MARKET_LEAD_TIME_MINUTES))
+    directions: tuple[str, ...] | None = None
+    max_model_probability: float | None = None
+    max_entry_price: float | None = None
+    min_entry_price: float | None = None
+    require_volatility_above_median: bool = False
+    strategy_label: str | None = None
 
 
 class ShortCryptoPaperStore:
@@ -254,9 +260,21 @@ class ShortCryptoPaperStore:
         return float(value or 0.0)
 
     def due_open_trades(self, now_ts: float | None = None) -> list[dict[str, Any]]:
+        return self.due_unsettled_trades(now_ts=now_ts, statuses=("open",))
+
+    def due_unsettled_trades(
+        self,
+        now_ts: float | None = None,
+        *,
+        statuses: tuple[str, ...] = ("open", "unknown", "expired_unsettled", "canceled_future_market"),
+    ) -> list[dict[str, Any]]:
         now_ts = now_ts if now_ts is not None else time.time()
+        placeholders = ",".join("?" for _ in statuses)
         with self.connect() as conn:
-            rows = conn.execute("SELECT * FROM paper_trades WHERE status='open' ORDER BY end_time, id").fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM paper_trades WHERE status IN ({placeholders}) ORDER BY end_time, id",
+                statuses,
+            ).fetchall()
         return [dict(row) for row in rows if _parse_ts(row["end_time"]) <= now_ts]
 
     def mark_settled(self, trade: dict[str, Any], settlement: dict[str, Any]) -> None:
@@ -342,6 +360,9 @@ def run_paper(config: PaperConfig) -> dict[str, Any]:
         return result
     spots = fetch_spot_prices(config.assets)
     exposure = store.open_exposure()
+    volatility_median = _historical_volatility_median(config.db_path) if config.require_volatility_above_median else None
+    counters["strategy_label"] = config.strategy_label
+    counters["strategy_filters"] = _strategy_filter_summary(config)
 
     for market in markets:
         intent = build_intent(market, spots.get(market.asset))
@@ -359,6 +380,15 @@ def run_paper(config: PaperConfig) -> dict[str, Any]:
             continue
         intent.update(fill)
         intent["expected_value"] = (intent["model_probability"] - intent["entry_price"]) * intent["size"] - intent["fee"]
+        strategy_reason = validate_strategy_filters(intent, config, volatility_median=volatility_median)
+        if strategy_reason:
+            store.save_signal(intent, run_id=run_id, status="rejected", reason=strategy_reason)
+            _count_rejection(counters, strategy_reason)
+            _count_strategy_rejection(counters, strategy_reason)
+            rejected += 1
+            continue
+        if config.strategy_label:
+            intent["strategy_label"] = config.strategy_label
         signal_id = store.save_signal(intent, run_id=run_id, status="accepted")
         try:
             store.save_trade(intent, signal_id=signal_id, run_id=run_id)
@@ -606,6 +636,33 @@ def build_intent(market: ShortCryptoMarket, spot_price: float | None, *, now_ts:
     }
 
 
+def validate_strategy_filters(
+    intent: dict[str, Any],
+    config: PaperConfig,
+    *,
+    volatility_median: float | None,
+) -> str | None:
+    if config.directions is not None:
+        allowed = {str(item).lower() for item in config.directions}
+        if str(intent.get("direction") or "").lower() not in allowed:
+            return "direction_filter"
+    if config.max_model_probability is not None:
+        if float(intent.get("model_probability") or 0.0) > float(config.max_model_probability):
+            return "model_probability_filter"
+    entry_price = float(intent.get("entry_price") or 0.0)
+    if config.max_entry_price is not None and entry_price > float(config.max_entry_price):
+        return "entry_price_filter"
+    if config.min_entry_price is not None and entry_price < float(config.min_entry_price):
+        return "entry_price_filter"
+    if config.require_volatility_above_median:
+        volatility = _entry_volatility(intent)
+        if volatility_median is None or volatility is None:
+            return "volatility_filter"
+        if volatility <= volatility_median:
+            return "volatility_filter"
+    return None
+
+
 def validate_intent(intent: dict[str, Any], config: PaperConfig, store: ShortCryptoPaperStore, exposure: float) -> str | None:
     if intent["venue"] not in config.venues:
         return "venue_not_enabled"
@@ -644,6 +701,12 @@ def _debug_counters() -> dict[str, Any]:
         "liquidity_blocks": 0,
         "freshness_blocks": 0,
         "future_market_blocks": 0,
+        "rejected_by_direction": 0,
+        "rejected_by_model_probability": 0,
+        "rejected_by_entry_price": 0,
+        "rejected_by_volatility": 0,
+        "strategy_label": None,
+        "strategy_filters": {},
         "average_market_lead_time_minutes": None,
         "accepted_market_logs": [],
         "rejected_future_market_logs": [],
@@ -668,6 +731,60 @@ def _count_rejection(counters: dict[str, Any], reason: str | None) -> None:
         counters["freshness_blocks"] = int(counters.get("freshness_blocks", 0)) + 1
     elif reason == "future_market":
         counters["future_market_blocks"] = int(counters.get("future_market_blocks", 0)) + 1
+
+
+def _count_strategy_rejection(counters: dict[str, Any], reason: str | None) -> None:
+    mapping = {
+        "direction_filter": "rejected_by_direction",
+        "model_probability_filter": "rejected_by_model_probability",
+        "entry_price_filter": "rejected_by_entry_price",
+        "volatility_filter": "rejected_by_volatility",
+    }
+    key = mapping.get(reason or "")
+    if key:
+        counters[key] = int(counters.get(key, 0)) + 1
+
+
+def _strategy_filter_summary(config: PaperConfig) -> dict[str, Any]:
+    return {
+        "directions": list(config.directions) if config.directions is not None else None,
+        "max_model_probability": config.max_model_probability,
+        "max_entry_price": config.max_entry_price,
+        "min_entry_price": config.min_entry_price,
+        "require_volatility_above_median": config.require_volatility_above_median,
+        "strategy_label": config.strategy_label,
+    }
+
+
+def _entry_volatility(intent: dict[str, Any]) -> float | None:
+    from src.analysis.short_crypto_diagnostics import _btc_context_at_entry
+
+    entry_ts = _parse_ts(intent["entry_time"])
+    context = _btc_context_at_entry(entry_ts, intent.get("spot_price"))
+    value = context.get("btc_volatility_5m")
+    return float(value) if value is not None else None
+
+
+def _historical_volatility_median(db_path: str) -> float | None:
+    try:
+        from src.analysis.short_crypto_diagnostics import ShortCryptoDiagnosticsStore
+
+        store = ShortCryptoDiagnosticsStore(db_path)
+        with store.connect() as conn:
+            rows = conn.execute(
+                "SELECT btc_volatility_5m FROM paper_trade_features WHERE btc_volatility_5m IS NOT NULL ORDER BY btc_volatility_5m"
+            ).fetchall()
+        values = [float(row[0]) for row in rows]
+        if not values:
+            return None
+        return values[len(values) // 2]
+    except Exception:
+        return None
+
+
+def _trade_strategy_label(trade: dict[str, Any]) -> str:
+    raw = _load_json(trade.get("raw_json"))
+    return str(raw.get("strategy_label") or "unlabeled")
 
 
 def market_lead_time(row: dict[str, Any], *, now_ts: float | None = None, max_lead_time_minutes: float = DEFAULT_MAX_MARKET_LEAD_TIME_MINUTES) -> dict[str, Any]:
@@ -730,11 +847,12 @@ def _record_market_log(counters: dict[str, Any], row: dict[str, Any], timing: di
 
 def settle_due(db_path: str = DEFAULT_DB_PATH, *, now_ts: float | None = None) -> dict[str, Any]:
     store = ShortCryptoPaperStore(db_path)
-    due = store.due_open_trades(now_ts=now_ts)
+    due = store.due_unsettled_trades(now_ts=now_ts)
     settled = 0
     unknown = 0
     expired_unsettled = 0
     skipped_open = 0
+    resolved = 0
     for trade in due:
         settlement = settle_trade(trade, now_ts=now_ts)
         if settlement["result"] == "open":
@@ -743,6 +861,7 @@ def settle_due(db_path: str = DEFAULT_DB_PATH, *, now_ts: float | None = None) -
         store.mark_settled(trade, settlement)
         if settlement["result"] in {"won", "lost"}:
             settled += 1
+            resolved += 1
         elif settlement["result"] == "expired_unsettled":
             expired_unsettled += 1
         else:
@@ -750,9 +869,11 @@ def settle_due(db_path: str = DEFAULT_DB_PATH, *, now_ts: float | None = None) -
     return {
         "due_trades": len(due),
         "settled": settled,
+        "resolved": resolved,
         "unknown": unknown,
         "expired_unsettled": expired_unsettled,
         "skipped_open": skipped_open,
+        "remaining_unsettled": expired_unsettled + unknown,
     }
 
 
@@ -767,6 +888,10 @@ def settle_trade(trade: dict[str, Any], *, now_ts: float | None = None) -> dict[
             "settlement_source": "not_past_end_time",
             "reason": "end_time_not_passed",
         }
+    if str(trade.get("venue") or "").lower() == "polymarket":
+        polymarket_settlement = _settle_polymarket_trade(trade)
+        if polymarket_settlement is not None:
+            return polymarket_settlement
     raw = _load_json(trade.get("raw_json"))
     market_raw = raw.get("raw_market") if isinstance(raw, dict) else {}
     result = _explicit_result(market_raw, trade)
@@ -783,11 +908,89 @@ def settle_trade(trade: dict[str, Any], *, now_ts: float | None = None) -> dict[
             "settlement_source": source,
             "reason": "settlement_source_not_found",
         }
-    won = result == "won"
-    payout = float(trade["size"]) if won else 0.0
-    pnl = payout - float(trade["paper_cost"]) - float(trade.get("fee") or 0.0)
-    roi = pnl / float(trade["paper_cost"]) if float(trade["paper_cost"]) else None
-    return {"result": result, "payout": payout, "pnl": pnl, "roi": roi, "settlement_source": source, "reason": source}
+    return _build_settlement_record(trade, result=result, source=source, reason=source)
+
+
+def _settle_polymarket_trade(trade: dict[str, Any]) -> dict[str, Any] | None:
+    from src.analysis.polymarket_short_crypto_settlement import (
+        compute_paper_trade_pnl,
+        resolve_polymarket_short_crypto_market,
+        trade_outcome_to_result,
+    )
+
+    slug = str(trade.get("slug") or "")
+    if not slug:
+        return None
+    resolution = resolve_polymarket_short_crypto_market(slug)
+    if not resolution.get("resolved"):
+        return {
+            "result": "expired_unsettled",
+            "payout": None,
+            "pnl": None,
+            "roi": None,
+            "settlement_source": "polymarket_gamma",
+            "reason": resolution.get("reason") or "outcome_not_available",
+            "resolution": resolution,
+        }
+    result = trade_outcome_to_result(trade, str(resolution["outcome"]))
+    economics = compute_paper_trade_pnl(
+        entry_price=float(trade["entry_price"]),
+        size=float(trade["size"]),
+        fee=float(trade.get("fee") or 0.0),
+        won=result == "won",
+        action=str(trade.get("action") or "BUY"),
+    )
+    return {
+        "result": result,
+        "payout": economics["payout"],
+        "pnl": economics["pnl"],
+        "roi": economics["roi"],
+        "settlement_source": str(resolution["source"]),
+        "reason": str(resolution["source"]),
+        "resolved_outcome": resolution["outcome"],
+        "settlement_timestamp": resolution.get("settlement_timestamp"),
+        "confidence": resolution.get("confidence"),
+        "resolution": resolution,
+    }
+
+
+def _build_settlement_record(
+    trade: dict[str, Any],
+    *,
+    result: str,
+    source: str,
+    reason: str,
+    resolved_outcome: str | None = None,
+    settlement_timestamp: str | None = None,
+    confidence: float | None = None,
+    resolution: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    from src.analysis.polymarket_short_crypto_settlement import compute_paper_trade_pnl
+
+    economics = compute_paper_trade_pnl(
+        entry_price=float(trade["entry_price"]),
+        size=float(trade["size"]),
+        fee=float(trade.get("fee") or 0.0),
+        won=result == "won",
+        action=str(trade.get("action") or "BUY"),
+    )
+    payload = {
+        "result": result,
+        "payout": economics["payout"],
+        "pnl": economics["pnl"],
+        "roi": economics["roi"],
+        "settlement_source": source,
+        "reason": reason,
+    }
+    if resolved_outcome is not None:
+        payload["resolved_outcome"] = resolved_outcome
+    if settlement_timestamp is not None:
+        payload["settlement_timestamp"] = settlement_timestamp
+    if confidence is not None:
+        payload["confidence"] = confidence
+    if resolution is not None:
+        payload["resolution"] = resolution
+    return payload
 
 
 def performance_report(db_path: str = DEFAULT_DB_PATH, *, now_ts: float | None = None) -> dict[str, Any]:
@@ -800,27 +1003,48 @@ def performance_report(db_path: str = DEFAULT_DB_PATH, *, now_ts: float | None =
     settlement_by_trade = {int(s["trade_id"]): s for s in settlements}
     breakdown = _status_breakdown(trades, settlement_by_trade, now_ts=now_ts)
     closed = breakdown["closed_trades_list"]
-    wins = sum(1 for t in closed if _normalized_result(t, settlement_by_trade.get(int(t["id"]))) == "won")
-    pnl = sum(float(settlement_by_trade[int(t["id"])]["pnl"] or 0.0) for t in closed)
+    won_trades = [t for t in closed if _normalized_result(t, settlement_by_trade.get(int(t["id"]))) == "won"]
+    lost_trades = [t for t in closed if _normalized_result(t, settlement_by_trade.get(int(t["id"]))) == "lost"]
+    wins = len(won_trades)
+    realized_pnl = sum(float(settlement_by_trade[int(t["id"])]["pnl"] or 0.0) for t in closed)
     cost = sum(float(t["paper_cost"] or 0.0) for t in closed)
+    open_trades = [t for t in trades if _normalize_trade_status(t, settlement_by_trade.get(int(t["id"])), now_ts=now_ts) == "open"]
+    unrealized_pnl = sum(_trade_unrealized_pnl(t) for t in open_trades)
+    win_pnls = [float(settlement_by_trade[int(t["id"])]["pnl"] or 0.0) for t in won_trades]
+    loss_pnls = [float(settlement_by_trade[int(t["id"])]["pnl"] or 0.0) for t in lost_trades]
+    average_profit_per_trade = _avg(win_pnls)
+    average_loss_per_trade = _avg(loss_pnls)
+    win_rate = wins / len(closed) if closed else None
+    loss_rate = len(lost_trades) / len(closed) if closed else None
+    expectancy = None
+    if closed and average_profit_per_trade is not None and average_loss_per_trade is not None and win_rate is not None and loss_rate is not None:
+        expectancy = (average_profit_per_trade * win_rate) + (average_loss_per_trade * loss_rate)
     report = {
         "total_trades": len(trades),
         "open_trades": breakdown["open_trades"],
         "closed_trades": breakdown["closed_trades"],
+        "won_trades": wins,
+        "lost_trades": len(lost_trades),
         "expired_unsettled_trades": breakdown["expired_unsettled_trades"],
         "canceled_future_market_trades": breakdown["canceled_future_market_trades"],
         "rejected_trades": breakdown["rejected_trades"],
         "other_trades": breakdown["other_trades"],
         "rejected_signals": rejected_signals,
         "trades_by_status": breakdown["trades_by_status"],
-        "win_rate": wins / len(closed) if closed else None,
-        "total_paper_pnl": pnl,
-        "roi": pnl / cost if cost else None,
+        "win_rate": win_rate,
+        "total_paper_pnl": realized_pnl,
+        "realized_pnl": realized_pnl,
+        "unrealized_pnl": unrealized_pnl,
+        "average_profit_per_trade": average_profit_per_trade,
+        "average_loss_per_trade": average_loss_per_trade,
+        "expectancy": expectancy,
+        "roi": realized_pnl / cost if cost else None,
         "average_edge": _avg([t["edge"] for t in trades]),
         "average_entry_price": _avg([t["entry_price"] for t in trades]),
         "by_venue": _group_report(trades, settlement_by_trade, "venue"),
         "by_asset": _group_report(trades, settlement_by_trade, "asset"),
         "by_window": _group_report(trades, settlement_by_trade, "window_minutes"),
+        "by_strategy_label": _strategy_group_report(trades, settlement_by_trade),
         "calibration_buckets": _calibration_buckets(closed, settlement_by_trade),
         "sample_unsettled_trades": breakdown["sample_unsettled_trades"],
         "warnings": [],
@@ -1041,6 +1265,36 @@ def _reference_price_result(raw: dict[str, Any], trade: dict[str, Any]) -> str |
     return "won" if won else "lost"
 
 
+def _strategy_group_report(trades: list[dict[str, Any]], settlements: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for trade in trades:
+        label = _trade_strategy_label(trade)
+        grouped.setdefault(label, []).append(trade)
+    out: dict[str, Any] = {}
+    for label, items in sorted(grouped.items()):
+        closed = [
+            trade
+            for trade in items
+            if int(trade["id"]) in settlements and settlements[int(trade["id"])]["result"] in {"won", "lost"}
+        ]
+        wins = [trade for trade in closed if settlements[int(trade["id"])]["result"] == "won"]
+        losses = [trade for trade in closed if settlements[int(trade["id"])]["result"] == "lost"]
+        pnl = sum(float(settlements[int(trade["id"])]["pnl"] or 0.0) for trade in closed)
+        cost = sum(float(trade["paper_cost"] or 0.0) for trade in closed)
+        win_rate = len(wins) / len(closed) if closed else None
+        loss_rate = len(losses) / len(closed) if closed else None
+        expectancy = pnl / len(closed) if closed else None
+        out[label] = {
+            "total_trades": len(items),
+            "closed_trades": len(closed),
+            "win_rate": win_rate,
+            "roi": pnl / cost if cost else None,
+            "pnl": pnl,
+            "expectancy": expectancy,
+        }
+    return out
+
+
 def _group_report(trades: list[dict[str, Any]], settlements: dict[int, dict[str, Any]], key: str) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for trade in trades:
@@ -1064,6 +1318,19 @@ def _is_legacy_unknown_status(trade: dict[str, Any], settlement: dict[str, Any] 
     status = str(trade.get("status") or "")
     result = str(settlement.get("result") or "") if settlement else ""
     return status == "unknown" or result == "unknown"
+
+
+def _trade_unrealized_pnl(trade: dict[str, Any]) -> float:
+    raw = _load_json(trade.get("raw_json"))
+    if raw.get("expected_value") is not None:
+        try:
+            return float(raw["expected_value"])
+        except (TypeError, ValueError):
+            pass
+    try:
+        return (float(trade["model_probability"]) - float(trade["entry_price"])) * float(trade["size"])
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _normalized_result(trade: dict[str, Any], settlement: dict[str, Any] | None) -> str:

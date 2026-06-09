@@ -1093,6 +1093,13 @@ def _env_str(name: str, default: str | None = None) -> str | None:
     return default if value in (None, "") else value
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value in {None, ""}:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def debug_polymarket_search(keyword: str | None = None, sport_key: str | None = None, category: str | None = None, limit: int = 100, as_json: bool = False) -> dict[str, Any]:
     client = PolymarketClient(raw_dir="data/raw")
     diagnostics = client.debug_active_market_search(keyword=keyword, sport=sport_key, category=category, limit=limit)
@@ -2136,6 +2143,12 @@ def main() -> None:
     short_crypto_paper_run_parser.add_argument("--max-market-lead-time-minutes", type=float)
     short_crypto_paper_run_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
     short_crypto_paper_run_parser.add_argument("--discover-only", action="store_true")
+    short_crypto_paper_run_parser.add_argument("--directions", help="Comma-separated paper-only direction filter, e.g. up,down")
+    short_crypto_paper_run_parser.add_argument("--max-model-probability", type=float)
+    short_crypto_paper_run_parser.add_argument("--max-entry-price", type=float)
+    short_crypto_paper_run_parser.add_argument("--min-entry-price", type=float)
+    short_crypto_paper_run_parser.add_argument("--require-volatility-above-median", action="store_true")
+    short_crypto_paper_run_parser.add_argument("--strategy-label")
     short_crypto_paper_run_parser.add_argument("--json", action="store_true")
 
     short_crypto_paper_settle_parser = sub.add_parser("short-crypto-paper-settle")
@@ -2145,6 +2158,22 @@ def main() -> None:
     short_crypto_paper_report_parser = sub.add_parser("short-crypto-paper-report")
     short_crypto_paper_report_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
     short_crypto_paper_report_parser.add_argument("--json", action="store_true")
+    short_crypto_paper_report_parser.add_argument("--verbose", action="store_true")
+
+    short_crypto_paper_diagnostics_parser = sub.add_parser("short-crypto-paper-diagnostics")
+    short_crypto_paper_diagnostics_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
+    short_crypto_paper_diagnostics_parser.add_argument("--json", action="store_true")
+    short_crypto_paper_diagnostics_parser.add_argument("--no-refresh", action="store_true")
+
+    short_crypto_paper_calibration_parser = sub.add_parser("short-crypto-paper-calibration")
+    short_crypto_paper_calibration_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
+    short_crypto_paper_calibration_parser.add_argument("--json", action="store_true")
+    short_crypto_paper_calibration_parser.add_argument("--no-refresh", action="store_true")
+    short_crypto_paper_calibration_parser.add_argument("--min-segment-trades", type=int, default=20)
+
+    short_crypto_paper_settlement_audit_parser = sub.add_parser("short-crypto-paper-settlement-audit")
+    short_crypto_paper_settlement_audit_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
+    short_crypto_paper_settlement_audit_parser.add_argument("--json", action="store_true")
 
     live_ready_short_crypto_parser = sub.add_parser("live-readiness-short-crypto")
     live_ready_short_crypto_parser.add_argument("--json", action="store_true")
@@ -2294,6 +2323,20 @@ def main() -> None:
     elif args.command == "short-crypto-paper-run":
         from src.analysis.short_crypto_paper import PaperConfig, run_paper
 
+        def _paper_csv_env(arg_value: str | None, env_name: str) -> str | None:
+            return arg_value if arg_value is not None else os.environ.get(env_name)
+
+        def _paper_float_env(arg_value: float | None, env_name: str) -> float | None:
+            if arg_value is not None:
+                return arg_value
+            raw = os.environ.get(env_name)
+            if raw in {None, ""}:
+                return None
+            return float(raw)
+
+        directions_raw = _paper_csv_env(args.directions, "POLYLENS_PAPER_DIRECTIONS")
+        directions = tuple(item.strip().lower() for item in directions_raw.split(",") if item.strip()) if directions_raw else None
+        require_volatility = args.require_volatility_above_median or _env_bool("POLYLENS_PAPER_REQUIRE_VOLATILITY_ABOVE_MEDIAN")
         config = PaperConfig(
             venues=[item.strip().lower() for item in args.venues.split(",") if item.strip()],
             assets=[item.strip().upper() for item in args.assets.split(",") if item.strip()],
@@ -2306,6 +2349,12 @@ def main() -> None:
             **({"max_market_lead_time_minutes": args.max_market_lead_time_minutes} if args.max_market_lead_time_minutes is not None else {}),
             db_path=args.db_path,
             discover_only=args.discover_only,
+            directions=directions,
+            max_model_probability=_paper_float_env(args.max_model_probability, "POLYLENS_PAPER_MAX_MODEL_PROBABILITY"),
+            max_entry_price=_paper_float_env(args.max_entry_price, "POLYLENS_PAPER_MAX_ENTRY_PRICE"),
+            min_entry_price=_paper_float_env(args.min_entry_price, "POLYLENS_PAPER_MIN_ENTRY_PRICE"),
+            require_volatility_above_median=require_volatility,
+            strategy_label=_paper_csv_env(args.strategy_label, "POLYLENS_PAPER_STRATEGY_LABEL"),
         )
         result = run_paper(config)
         if args.json:
@@ -2321,9 +2370,48 @@ def main() -> None:
         else:
             print(result)
     elif args.command == "short-crypto-paper-report":
+        from src.analysis.short_crypto_diagnostics import verbose_report_extensions
         from src.analysis.short_crypto_paper import performance_report
 
         result = performance_report(args.db_path)
+        if args.verbose:
+            result.update(verbose_report_extensions(args.db_path, refresh_features=True))
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(result)
+    elif args.command == "short-crypto-paper-diagnostics":
+        from src.analysis.short_crypto_diagnostics import diagnostics_report
+
+        result = diagnostics_report(args.db_path, refresh_features=not args.no_refresh)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(result)
+    elif args.command == "short-crypto-paper-calibration":
+        from src.analysis.short_crypto_diagnostics import calibration_report, edge_discovery_report, recommendation_report
+
+        result = {
+            **calibration_report(args.db_path, refresh_features=not args.no_refresh),
+            **edge_discovery_report(
+                args.db_path,
+                refresh_features=False,
+                min_segment_trades=args.min_segment_trades,
+            ),
+            **recommendation_report(
+                args.db_path,
+                refresh_features=False,
+                min_segment_trades=args.min_segment_trades,
+            ),
+        }
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(result)
+    elif args.command == "short-crypto-paper-settlement-audit":
+        from src.analysis.polymarket_short_crypto_settlement import settlement_audit
+
+        result = settlement_audit(args.db_path)
         if args.json:
             print(json.dumps(result, indent=2, sort_keys=True))
         else:
