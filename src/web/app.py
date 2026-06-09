@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from src.web.dashboard import create_dashboard
+from src.web.mission_control import create_mission_control_page
 
 
 def run_web_dashboard(host: str | None = None, port: int | None = None, db_path: str | Path = "data/polylens.db") -> None:
@@ -26,5 +27,6 @@ def run_web_dashboard(host: str | None = None, port: int | None = None, db_path:
             return await call_next(request)
 
     create_dashboard(db_path=db_path)
+    create_mission_control_page(polylens_db_path=db_path)
     ui.run(host=bind_host, port=bind_port, title="Polylens Command Center", reload=False, show=False)
 

@@ -2195,6 +2195,10 @@ def main() -> None:
     polymarket_event_slug_audit_parser.add_argument("slug")
     polymarket_event_slug_audit_parser.add_argument("--json", action="store_true")
 
+    web_dashboard_parser = sub.add_parser("web-dashboard", help="run the Polylens NiceGUI web dashboard")
+    web_dashboard_parser.add_argument("--host", default="127.0.0.1")
+    web_dashboard_parser.add_argument("--port", type=int, default=8787)
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -2428,6 +2432,10 @@ def main() -> None:
         _polymarket_tradable_crypto_discovery(as_json=args.json)
     elif args.command == "polymarket-event-slug-audit":
         _polymarket_event_slug_audit(slug=args.slug, as_json=args.json)
+    elif args.command == "web-dashboard":
+        from src.web.app import run_web_dashboard
+
+        run_web_dashboard(host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

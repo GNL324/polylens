@@ -111,74 +111,77 @@ def should_refresh_page(page: str, ui_state: dict[str, Any]) -> bool:
 def create_dashboard(db_path: str | Path = POLYLENS_DB_PATH, prop_db_path: str | Path = OPPORTUNITIES_DB_PATH) -> None:
     from nicegui import ui
 
-    ui.add_head_html(
-        """
-        <style>
-        body { background: #f6f7f9; color: #1f2933; }
-        .q-page { min-height: 100vh; }
-        .polylens-wrap { max-width: 1440px; margin: 0 auto; padding: 18px; }
-        .metric { border: 1px solid #d9dee7; border-radius: 6px; background: white; padding: 12px; min-width: 170px; }
-        .metric .label { color: #52606d; font-size: 12px; text-transform: uppercase; }
-        .metric .value { color: #102a43; font-size: 22px; font-weight: 650; }
-        .status-pill { border-radius: 999px; padding: 3px 9px; font-size: 12px; background: #e8f5e9; color: #1b5e20; }
-        </style>
-        """
-    )
+    @ui.page("/")
+    def command_center_page() -> None:
+        ui.add_head_html(
+            """
+            <style>
+            body { background: #f6f7f9; color: #1f2933; }
+            .q-page { min-height: 100vh; }
+            .polylens-wrap { max-width: 1440px; margin: 0 auto; padding: 18px; }
+            .metric { border: 1px solid #d9dee7; border-radius: 6px; background: white; padding: 12px; min-width: 170px; }
+            .metric .label { color: #52606d; font-size: 12px; text-transform: uppercase; }
+            .metric .value { color: #102a43; font-size: 22px; font-weight: 650; }
+            .status-pill { border-radius: 999px; padding: 3px 9px; font-size: 12px; background: #e8f5e9; color: #1b5e20; }
+            </style>
+            """
+        )
 
-    selected = {"page": NAV_ITEMS[0]}
-    filters: dict[str, Any] = {"min_roi": 0.0, "sport": "", "bookmaker": "", "player": ""}
-    ui_state: dict[str, Any] = {"detail_dialog_open": False, "settlement_dialog_open": False}
-    content = ui.column().classes("polylens-wrap w-full gap-4")
+        selected = {"page": NAV_ITEMS[0]}
+        filters: dict[str, Any] = {"min_roi": 0.0, "sport": "", "bookmaker": "", "player": ""}
+        ui_state: dict[str, Any] = {"detail_dialog_open": False, "settlement_dialog_open": False}
+        content = ui.column().classes("polylens-wrap w-full gap-4")
 
-    def render() -> None:
-        if not should_refresh_page(selected["page"], ui_state):
-            return
-        content.clear()
-        with content:
-            ui.label("Polylens Command Center").classes("text-2xl font-semibold")
-            ui.label("Paper/research mode only. No live betting or real-money execution is enabled.").classes("text-base font-semibold text-red-700")
-            if selected["page"] == "Live Opportunities":
-                _render_live_opportunities(db_path, prop_db_path, filters, ui_state, manual_refresh, edit_active_profile)
-            elif selected["page"] == "Results / P&L":
-                _render_results(db_path, prop_db_path, ui_state)
-            elif selected["page"] == "Operations":
-                _render_operations(prop_db_path)
-            elif selected["page"] == "Profile Performance":
-                _render_profile_performance(prop_db_path)
-            elif selected["page"] == "Opportunity Explorer":
-                _render_opportunity_explorer(prop_db_path)
-            elif selected["page"] == "Scanner Config":
-                _render_scanner_config(prop_db_path)
-            elif selected["page"] == "Alerts":
-                _render_alerts(prop_db_path)
-            elif selected["page"] == "Risk Engine":
-                _render_risk(db_path)
-            elif selected["page"] == "Bot Control":
-                _render_controls()
-            elif selected["page"] == "Scanner Status":
-                _render_scanner_status(prop_db_path)
-            else:
-                _render_audit(db_path)
+        def render() -> None:
+            if not should_refresh_page(selected["page"], ui_state):
+                return
+            content.clear()
+            with content:
+                ui.label("Polylens Command Center").classes("text-2xl font-semibold")
+                ui.label("Paper/research mode only. No live betting or real-money execution is enabled.").classes("text-base font-semibold text-red-700")
+                if selected["page"] == "Live Opportunities":
+                    _render_live_opportunities(db_path, prop_db_path, filters, ui_state, manual_refresh, edit_active_profile)
+                elif selected["page"] == "Results / P&L":
+                    _render_results(db_path, prop_db_path, ui_state)
+                elif selected["page"] == "Operations":
+                    _render_operations(prop_db_path)
+                elif selected["page"] == "Profile Performance":
+                    _render_profile_performance(prop_db_path)
+                elif selected["page"] == "Opportunity Explorer":
+                    _render_opportunity_explorer(prop_db_path)
+                elif selected["page"] == "Scanner Config":
+                    _render_scanner_config(prop_db_path)
+                elif selected["page"] == "Alerts":
+                    _render_alerts(prop_db_path)
+                elif selected["page"] == "Risk Engine":
+                    _render_risk(db_path)
+                elif selected["page"] == "Bot Control":
+                    _render_controls()
+                elif selected["page"] == "Scanner Status":
+                    _render_scanner_status(prop_db_path)
+                else:
+                    _render_audit(db_path)
 
-    def manual_refresh() -> None:
-        if not should_refresh_page(selected["page"], ui_state):
-            ui.notify("Close detail view before refreshing.")
-            return
+        def manual_refresh() -> None:
+            if not should_refresh_page(selected["page"], ui_state):
+                ui.notify("Close detail view before refreshing.")
+                return
+            render()
+
+        def edit_active_profile() -> None:
+            selected["page"] = "Scanner Config"
+            render()
+
+        with ui.header(elevated=True).classes("bg-white text-gray-900"):
+            ui.label("Polylens").classes("font-semibold text-lg")
+            for item in NAV_ITEMS:
+                ui.button(item, on_click=lambda item=item: (selected.update(page=item), render())).props("flat")
+            ui.space()
+            ui.link("Mission Control", "/mission-control").classes("text-sm")
+            ui.label("LIVE DISABLED").classes("status-pill")
+
         render()
-
-    def edit_active_profile() -> None:
-        selected["page"] = "Scanner Config"
-        render()
-
-    with ui.header(elevated=True).classes("bg-white text-gray-900"):
-        ui.label("Polylens").classes("font-semibold text-lg")
-        for item in NAV_ITEMS:
-            ui.button(item, on_click=lambda item=item: (selected.update(page=item), render())).props("flat")
-        ui.space()
-        ui.label("LIVE DISABLED").classes("status-pill")
-
-    render()
-    ui.timer(10.0, lambda: render() if selected["page"] == "Live Opportunities" and should_refresh_page(selected["page"], ui_state) else None)
+        ui.timer(10.0, lambda: render() if selected["page"] == "Live Opportunities" and should_refresh_page(selected["page"], ui_state) else None)
 
 
 def _render_live_opportunities(db_path: str | Path, prop_db_path: str | Path, filters: dict[str, Any], ui_state: dict[str, Any], on_refresh: Any, on_edit_profile: Any) -> None:
