@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 
 import src.analysis.short_crypto_paper as paper
@@ -120,8 +121,9 @@ def test_strategy_label_persisted_in_raw_json(tmp_path, monkeypatch):
     assert result["paper_trades_created"] == 1
     assert result["strategy_label"] == "down_ask50_prob55"
     with ShortCryptoPaperStore(str(tmp_path / "paper.db")).connect() as conn:
-        raw = conn.execute("SELECT raw_json FROM paper_trades").fetchone()[0]
-    payload = json.loads(raw)
+        row = conn.execute("SELECT strategy_label, raw_json FROM paper_trades").fetchone()
+    payload = json.loads(row["raw_json"])
+    assert row["strategy_label"] == "down_ask50_prob55"
     assert payload["strategy_label"] == "down_ask50_prob55"
 
 
@@ -145,8 +147,9 @@ def test_by_strategy_label_report_grouping(tmp_path, monkeypatch):
     group = report["by_strategy_label"]["down_ask50_prob55"]
     assert group["closed_trades"] == 1
     assert group["win_rate"] == 1.0
+    assert group["roi"] == 0.51 / intent["paper_cost"]
     assert group["pnl"] == 0.51
-    assert group["expectancy"] is not None
+    assert group["expectancy"] == 0.51
 
 
 def test_volatility_filter_rejection_counter(tmp_path, monkeypatch):
@@ -190,3 +193,168 @@ def test_default_runner_behavior_unchanged_without_filters(tmp_path, monkeypatch
     assert result["rejected_by_model_probability"] == 0
     assert result["rejected_by_entry_price"] == 0
     assert result["strategy_label"] is None
+
+
+def test_migration_adds_strategy_label_and_backfills_raw_json(tmp_path):
+    db_path = tmp_path / "paper.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE paper_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                venues TEXT NOT NULL,
+                assets TEXT NOT NULL,
+                windows TEXT NOT NULL,
+                max_trades INTEGER NOT NULL,
+                created_trades INTEGER NOT NULL DEFAULT 0,
+                rejected_signals INTEGER NOT NULL DEFAULT 0,
+                raw_json TEXT NOT NULL
+            );
+            CREATE TABLE paper_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER,
+                created_at TEXT NOT NULL,
+                venue TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                market TEXT,
+                ticker TEXT,
+                slug TEXT,
+                token_id TEXT,
+                direction TEXT NOT NULL,
+                side TEXT NOT NULL,
+                action TEXT NOT NULL,
+                window_minutes INTEGER NOT NULL,
+                entry_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
+                spot_price REAL,
+                model_probability REAL,
+                implied_probability REAL,
+                edge REAL,
+                size REAL,
+                status TEXT NOT NULL,
+                rejection_reason TEXT,
+                raw_json TEXT NOT NULL
+            );
+            CREATE TABLE paper_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signal_id INTEGER NOT NULL,
+                run_id INTEGER,
+                created_at TEXT NOT NULL,
+                venue TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                market TEXT,
+                ticker TEXT,
+                slug TEXT,
+                token_id TEXT,
+                direction TEXT NOT NULL,
+                side TEXT NOT NULL,
+                action TEXT NOT NULL,
+                window_minutes INTEGER NOT NULL,
+                entry_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                model_probability REAL NOT NULL,
+                implied_probability REAL NOT NULL,
+                edge REAL NOT NULL,
+                size REAL NOT NULL,
+                paper_cost REAL NOT NULL,
+                fee REAL NOT NULL DEFAULT 0,
+                expected_value REAL NOT NULL,
+                status TEXT NOT NULL,
+                raw_json TEXT NOT NULL
+            );
+            CREATE TABLE paper_settlements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id INTEGER NOT NULL UNIQUE,
+                settled_at TEXT NOT NULL,
+                result TEXT NOT NULL,
+                payout REAL,
+                pnl REAL,
+                roi REAL,
+                settlement_source TEXT NOT NULL,
+                raw_json TEXT NOT NULL
+            );
+            """
+        )
+        intent = paper.build_intent(_market(), 61000.0)
+        intent.update(paper.simulate_fill(intent, intent["book"]))
+        intent["expected_value"] = 0.05
+        intent["strategy_label"] = "raw_label"
+        conn.execute(
+            """
+            INSERT INTO paper_trades
+            (signal_id, run_id, created_at, venue, asset, market, ticker, slug, token_id, direction, side, action,
+             window_minutes, entry_time, end_time, entry_price, model_probability, implied_probability, edge,
+             size, paper_cost, fee, expected_value, status, raw_json)
+            VALUES (1, 1, '2026-06-09T00:00:00+00:00', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+            """,
+            (
+                intent["venue"],
+                intent["asset"],
+                intent.get("market"),
+                intent.get("ticker"),
+                intent.get("slug"),
+                intent.get("token_id"),
+                intent["direction"],
+                intent["side"],
+                intent["action"],
+                int(intent["window_minutes"]),
+                intent["entry_time"],
+                intent["end_time"],
+                float(intent["entry_price"]),
+                float(intent["model_probability"]),
+                float(intent["implied_probability"]),
+                float(intent["edge"]),
+                float(intent["size"]),
+                float(intent["paper_cost"]),
+                float(intent.get("fee", 0.0)),
+                float(intent["expected_value"]),
+                json.dumps(intent),
+            ),
+        )
+
+    ShortCryptoPaperStore(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(paper_trades)")}
+        row = conn.execute("SELECT strategy_label FROM paper_trades").fetchone()
+    assert "strategy_label" in columns
+    assert row[0] == "raw_label"
+
+
+def test_legacy_unlabeled_trades_group_as_unlabeled(tmp_path):
+    store = ShortCryptoPaperStore(str(tmp_path / "paper.db"))
+    cfg = PaperConfig(venues=["polymarket"], assets=["BTC"], windows=[5], db_path=str(tmp_path / "paper.db"))
+    run_id = store.start_run(cfg)
+    intent = paper.build_intent(_market(), 61000.0)
+    intent.update(paper.simulate_fill(intent, intent["book"]))
+    intent["expected_value"] = 0.05
+    sid = store.save_signal(intent, run_id=run_id, status="accepted")
+    store.save_trade(intent, signal_id=sid, run_id=run_id)
+
+    report = performance_report(str(tmp_path / "paper.db"))
+
+    assert report["by_strategy_label"]["unlabeled"]["total_trades"] == 1
+    assert report["by_strategy_label"]["unlabeled"]["open_trades"] == 1
+
+
+def test_open_labeled_trades_appear_in_strategy_report_before_settlement(tmp_path, monkeypatch):
+    cfg = PaperConfig(
+        venues=["polymarket"],
+        assets=["BTC"],
+        windows=[5],
+        max_trades=1,
+        min_edge=-1.0,
+        db_path=str(tmp_path / "paper.db"),
+        strategy_label="down_only",
+    )
+    result = _run_with_markets(tmp_path, cfg, [_market()], monkeypatch)
+
+    report = performance_report(str(tmp_path / "paper.db"))
+
+    assert result["paper_trades_created"] == 1
+    assert report["by_strategy_label"]["down_only"]["total_trades"] == 1
+    assert report["by_strategy_label"]["down_only"]["open_trades"] == 1
+    assert report["by_strategy_label"]["down_only"]["closed_trades"] == 0

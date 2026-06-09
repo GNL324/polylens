@@ -116,6 +116,7 @@ class ShortCryptoPaperStore:
                     fee REAL NOT NULL DEFAULT 0,
                     expected_value REAL NOT NULL,
                     status TEXT NOT NULL,
+                    strategy_label TEXT,
                     raw_json TEXT NOT NULL
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_trades_open_market
@@ -134,11 +135,27 @@ class ShortCryptoPaperStore:
                 );
                 """
             )
+            self._migrate(conn)
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(paper_trades)").fetchall()}
+        if "strategy_label" not in columns:
+            conn.execute("ALTER TABLE paper_trades ADD COLUMN strategy_label TEXT")
+        conn.execute(
+            """
+            UPDATE paper_trades
+            SET strategy_label = json_extract(raw_json, '$.strategy_label')
+            WHERE (strategy_label IS NULL OR strategy_label = '')
+              AND json_valid(raw_json)
+              AND json_extract(raw_json, '$.strategy_label') IS NOT NULL
+              AND json_extract(raw_json, '$.strategy_label') != ''
+            """
+        )
 
     def start_run(self, config: PaperConfig) -> int:
         with self.connect() as conn:
@@ -202,8 +219,8 @@ class ShortCryptoPaperStore:
                 INSERT INTO paper_trades
                 (signal_id, run_id, created_at, venue, asset, market, ticker, slug, token_id, direction, side, action,
                  window_minutes, entry_time, end_time, entry_price, model_probability, implied_probability, edge,
-                 size, paper_cost, fee, expected_value, status, raw_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+                 size, paper_cost, fee, expected_value, status, strategy_label, raw_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
                 """,
                 (
                     signal_id,
@@ -229,6 +246,7 @@ class ShortCryptoPaperStore:
                     float(intent["paper_cost"]),
                     float(intent.get("fee", 0.0)),
                     float(intent["expected_value"]),
+                    _clean_strategy_label(intent.get("strategy_label")),
                     _json(intent),
                 ),
             )
@@ -782,9 +800,19 @@ def _historical_volatility_median(db_path: str) -> float | None:
         return None
 
 
+def _clean_strategy_label(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _trade_strategy_label(trade: dict[str, Any]) -> str:
+    column_label = _clean_strategy_label(trade.get("strategy_label"))
+    if column_label:
+        return column_label
     raw = _load_json(trade.get("raw_json"))
-    return str(raw.get("strategy_label") or "unlabeled")
+    return _clean_strategy_label(raw.get("strategy_label")) or "unlabeled"
 
 
 def market_lead_time(row: dict[str, Any], *, now_ts: float | None = None, max_lead_time_minutes: float = DEFAULT_MAX_MARKET_LEAD_TIME_MINUTES) -> dict[str, Any]:
@@ -1272,6 +1300,7 @@ def _strategy_group_report(trades: list[dict[str, Any]], settlements: dict[int, 
         grouped.setdefault(label, []).append(trade)
     out: dict[str, Any] = {}
     for label, items in sorted(grouped.items()):
+        open_trades = [trade for trade in items if str(trade.get("status") or "").lower() == "open"]
         closed = [
             trade
             for trade in items
@@ -1279,17 +1308,21 @@ def _strategy_group_report(trades: list[dict[str, Any]], settlements: dict[int, 
         ]
         wins = [trade for trade in closed if settlements[int(trade["id"])]["result"] == "won"]
         losses = [trade for trade in closed if settlements[int(trade["id"])]["result"] == "lost"]
+        expired_unsettled = [trade for trade in items if str(trade.get("status") or "").lower() == "expired_unsettled"]
         pnl = sum(float(settlements[int(trade["id"])]["pnl"] or 0.0) for trade in closed)
         cost = sum(float(trade["paper_cost"] or 0.0) for trade in closed)
         win_rate = len(wins) / len(closed) if closed else None
-        loss_rate = len(losses) / len(closed) if closed else None
         expectancy = pnl / len(closed) if closed else None
         out[label] = {
             "total_trades": len(items),
+            "open_trades": len(open_trades),
             "closed_trades": len(closed),
-            "win_rate": win_rate,
-            "roi": pnl / cost if cost else None,
+            "won_trades": len(wins),
+            "lost_trades": len(losses),
+            "expired_unsettled_trades": len(expired_unsettled),
             "pnl": pnl,
+            "roi": pnl / cost if cost else None,
+            "win_rate": win_rate,
             "expectancy": expectancy,
         }
     return out
