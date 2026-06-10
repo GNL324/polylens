@@ -1,0 +1,22 @@
+[Unit]
+Description=Polylens prop arbitrage analytics collector (single scan)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=noel
+WorkingDirectory=/home/noel/polylens
+EnvironmentFile=-/home/noel/polylens/deploy/systemd/polylens-prop-arb-collector.env
+Environment=PYTHONPATH=/home/noel/polylens
+Environment=POLYLENS_LIVE_TRADING=false
+Environment=POLYLENS_AUTONOMOUS_CRYPTO=false
+Environment=POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false
+Environment=POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED=false
+ExecStartPre=/home/noel/polylens/deploy/systemd/polylens-prop-arb-collector-preflight.sh
+ExecStart=/home/noel/.venv/bin/python -m src.cli scan-prop-arb --provider all --sport basketball_nba --sportsbook draftkings,betmgm,caesars,hard-rock,fanatics --markets player_points --bankroll 1000 --min-roi 0.005 --max-leg-age-seconds 180 --max-cross-leg-update-gap-seconds 300 --summary-json
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

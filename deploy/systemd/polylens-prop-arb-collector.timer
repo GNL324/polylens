@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Polylens prop arbitrage analytics collector every 60 seconds
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=60
+Persistent=true
+Unit=polylens-prop-arb-collector.service
+
+[Install]
+WantedBy=timers.target

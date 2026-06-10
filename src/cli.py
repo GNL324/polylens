@@ -799,6 +799,7 @@ def scan_prop_arb(
     db_path: str = "data/opportunities.db",
     record_analytics: bool = False,
     inactive_after_seconds: int = 900,
+    summary_json: bool = False,
 ) -> dict[str, Any]:
     profile_row = resolve_scanner_profile(profile, db_path=db_path) if profile else None
     if profile and profile_row is None:
@@ -850,7 +851,9 @@ def scan_prop_arb(
     result["provider"] = provider
     if record_analytics:
         result["analytics"] = record_scan_analytics(result, db_path=db_path, inactive_after_seconds=inactive_after_seconds)
-    if as_json:
+    if summary_json:
+        print(json.dumps(scan_prop_arb_summary(result), indent=2, sort_keys=True))
+    elif as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
         print("Polylens Player Prop Arbitrage")
@@ -2166,6 +2169,7 @@ def main() -> None:
     prop_arb_parser.add_argument("--sportsbooks")
     prop_arb_parser.add_argument("--db-path", default="data/opportunities.db")
     prop_arb_parser.add_argument("--json", action="store_true")
+    prop_arb_parser.add_argument("--summary-json", action="store_true", help="emit compact scan summary JSON without full candidate payloads")
 
     watch_prop_parser = sub.add_parser("watch-prop-arb")
     watch_prop_parser.add_argument("--sport", required=True, dest="sport_key")
@@ -2488,7 +2492,7 @@ def main() -> None:
     elif args.command == "debug-player-props":
         debug_player_props(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
     elif args.command == "scan-prop-arb":
-        scan_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, provider=args.provider, oddsblaze_sportsbooks=_split_csv_values(args.oddsblaze_sportsbooks), oddsblaze_market_contains=args.oddsblaze_market_contains, bankroll=args.bankroll, min_guaranteed_roi=args.min_roi if args.min_roi is not None else args.min_guaranteed_roi, min_profit=args.min_profit, max_leg_age_seconds=args.max_leg_age_seconds, max_cross_leg_update_gap_seconds=args.max_cross_leg_update_gap_seconds, as_json=args.json, profile=args.profile, sportsbooks=args.sportsbooks, db_path=args.db_path, record_analytics=True)
+        scan_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, provider=args.provider, oddsblaze_sportsbooks=_split_csv_values(args.oddsblaze_sportsbooks), oddsblaze_market_contains=args.oddsblaze_market_contains, bankroll=args.bankroll, min_guaranteed_roi=args.min_roi if args.min_roi is not None else args.min_guaranteed_roi, min_profit=args.min_profit, max_leg_age_seconds=args.max_leg_age_seconds, max_cross_leg_update_gap_seconds=args.max_cross_leg_update_gap_seconds, as_json=args.json, profile=args.profile, sportsbooks=args.sportsbooks, db_path=args.db_path, record_analytics=True, summary_json=args.summary_json)
     elif args.command == "watch-prop-arb":
         watch_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, provider=args.provider, oddsblaze_sportsbooks=_split_csv_values(args.oddsblaze_sportsbooks), oddsblaze_market_contains=args.oddsblaze_market_contains, interval=args.interval, bankroll=args.bankroll, min_roi=args.min_roi, min_profit=args.min_profit, max_leg_age_seconds=args.max_leg_age_seconds, max_cross_leg_update_gap_seconds=args.max_cross_leg_update_gap_seconds, once=args.once, as_json=args.json, db_path=args.db_path, record_analytics=True)
     elif args.command == "fetch-futures":

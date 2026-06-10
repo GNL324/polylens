@@ -18,6 +18,10 @@ def test_service_files_exist():
     assert (SYSTEMD / "polylens-short-crypto-paper.env.example").exists()
     assert (SYSTEMD / "polylens-short-crypto-paper-settle.service").exists()
     assert (SYSTEMD / "polylens-short-crypto-paper-settle.timer").exists()
+    assert (SYSTEMD / "polylens-prop-arb-collector.service").exists()
+    assert (SYSTEMD / "polylens-prop-arb-collector.timer").exists()
+    assert (SYSTEMD / "polylens-prop-arb-collector.env.example").exists()
+    assert (SYSTEMD / "polylens-prop-arb-collector-preflight.sh").exists()
 
 
 def test_service_command_is_correct():
@@ -108,6 +112,35 @@ def test_env_parsing(monkeypatch):
 
 
 def test_scripts_are_executable():
-    for name in ("install_polylens_service.sh", "uninstall_polylens_service.sh"):
+    for name in ("install_polylens_service.sh", "uninstall_polylens_service.sh", "polylens-prop-arb-collector-preflight.sh"):
         mode = os.stat(SYSTEMD / name).st_mode
         assert mode & stat.S_IXUSR
+
+
+def test_prop_arb_collector_service_is_analytics_only():
+    text = (SYSTEMD / "polylens-prop-arb-collector.service").read_text()
+    assert "WorkingDirectory=/home/noel/polylens" in text
+    assert "User=noel" in text
+    assert "Type=oneshot" in text
+    assert "EnvironmentFile=-/home/noel/polylens/deploy/systemd/polylens-prop-arb-collector.env" in text
+    assert "ExecStartPre=/home/noel/polylens/deploy/systemd/polylens-prop-arb-collector-preflight.sh" in text
+    assert "scan-prop-arb" in text
+    assert "--summary-json" in text
+    assert "--json" not in text.replace("--summary-json", "")
+    assert "POLYLENS_LIVE_TRADING=false" in text
+    assert "watch-prop-arb" not in text
+    assert "trade-" not in text
+
+
+def test_prop_arb_collector_timer_schedule():
+    text = (SYSTEMD / "polylens-prop-arb-collector.timer").read_text()
+    assert "OnUnitActiveSec=60" in text
+    assert "Unit=polylens-prop-arb-collector.service" in text
+    assert "WantedBy=timers.target" in text
+
+
+def test_prop_arb_collector_env_example_requires_keys():
+    text = (SYSTEMD / "polylens-prop-arb-collector.env.example").read_text()
+    assert "ODDS_API_KEY=" in text
+    assert "ODDSBLAZE_API_KEY=" in text
+    assert "POLYLENS_LIVE_TRADING=false" in text

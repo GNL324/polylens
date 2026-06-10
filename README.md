@@ -83,7 +83,7 @@ python -m src.cli scan-prop-arb --sport basketball_nba --provider oddsblaze --sp
 Start the local dashboard:
 
 ```bash
-python -m src.cli dashboard
+python -m src.cli web-dashboard --host 127.0.0.1 --port 8787
 ```
 
 Check risk state:
@@ -93,6 +93,43 @@ python -m src.cli risk-status
 ```
 
 Polylens defaults to `DRY_RUN=true` and `LIVE_TRADING=false`; live execution remains blocked. See [docs/dashboard.md](docs/dashboard.md) and [docs/risk_engine.md](docs/risk_engine.md).
+
+## Prop Arbitrage Analytics Collector
+
+The analytics collector runs `scan-prop-arb` on a timer and records opportunity lifecycle snapshots to `data/opportunities.db`. It does not place bets or send alerts.
+
+### Install timer (manual enable)
+
+```bash
+cp deploy/systemd/polylens-prop-arb-collector.env.example deploy/systemd/polylens-prop-arb-collector.env
+# edit deploy/systemd/polylens-prop-arb-collector.env and set ODDS_API_KEY / ODDSBLAZE_API_KEY
+
+sudo cp deploy/systemd/polylens-prop-arb-collector.service /etc/systemd/system/
+sudo cp deploy/systemd/polylens-prop-arb-collector.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now polylens-prop-arb-collector.timer
+```
+
+The timer is **not** enabled by the repo install scripts. Enable it only when you want active monitoring.
+
+### Disable timer
+
+```bash
+sudo systemctl disable --now polylens-prop-arb-collector.timer
+sudo systemctl stop polylens-prop-arb-collector.service
+```
+
+### View analytics
+
+```bash
+python -m src.cli opportunity-leaderboard --json
+python -m src.cli opportunity-lifetimes --json
+python -m src.cli opportunity-quality-report --json
+```
+
+The web dashboard also includes an **Opportunity Analytics** page at `/` (Command Center navigation).
+
+Collector logs use `--summary-json` so journal output stays compact (counts and analytics metadata only, no full candidate payloads).
 
 
 ## Short-Crypto Live Trading
