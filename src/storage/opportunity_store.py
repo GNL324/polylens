@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+from src.sqlite_utils import closing_connection
 
 DEFAULT_DB_PATH = "data/polylens.db"
 
@@ -230,10 +233,10 @@ class OpportunityStore:
                     row[key[:-5]] = _loads(row.pop(key))
         return rows
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        with closing_connection(self.db_path, row_factory=sqlite3.Row) as conn:
+            yield conn
 
 
 def _market_titles(candidate: dict[str, Any]) -> dict[str, Any]:

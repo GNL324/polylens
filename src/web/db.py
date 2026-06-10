@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+from src.sqlite_utils import closing_connection
 
 POLYLENS_DB_PATH = Path("data/polylens.db")
 OPPORTUNITIES_DB_PATH = Path("data/opportunities.db")
 
 
-def connect(db_path: str | Path) -> sqlite3.Connection:
-    path = Path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    return conn
+@contextmanager
+def connect(db_path: str | Path) -> Iterator[sqlite3.Connection]:
+    with closing_connection(db_path, row_factory=sqlite3.Row) as conn:
+        yield conn
 
 
 def table_exists(conn: sqlite3.Connection, table: str) -> bool:

@@ -5,16 +5,18 @@ import math
 import os
 import sqlite3
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from src.adapters.kalshi import KalshiClient
 from src.adapters.polymarket import PolymarketClient
 from src.analysis.short_crypto_markets import ShortCryptoMarket, normalize_short_crypto_markets
+from src.sqlite_utils import closing_connection
 
 DEFAULT_DB_PATH = "data/short_crypto_paper.db"
 DEFAULT_SIZE = 1.0
@@ -137,10 +139,10 @@ class ShortCryptoPaperStore:
             )
             self._migrate(conn)
 
-    def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        with closing_connection(self.db_path, row_factory=sqlite3.Row) as conn:
+            yield conn
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(paper_trades)").fetchall()}

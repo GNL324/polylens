@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.sqlite_utils import closing_connection
+
 DEFAULT_DB_PATH = "data/opportunities.db"
 
 
@@ -85,7 +87,7 @@ def should_alert(
         db_path = f"/tmp/polylens_test_alert_history_{safe_test}_{os.getpid()}.db"
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
+    with closing_connection(path, row_factory=None) as conn:
         _init_table(conn)
         row = conn.execute(
             "SELECT first_seen_at, last_alerted_at, alert_count, fingerprint, last_roi, last_profit FROM alert_history WHERE fingerprint = ?",

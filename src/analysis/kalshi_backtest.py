@@ -10,6 +10,7 @@ from pathlib import Path
 from statistics import mean, pstdev
 from typing import Any
 
+from src.sqlite_utils import closing_connection
 from src.storage.kalshi_market_data import DEFAULT_KALSHI_DATA_DB
 
 STRATEGIES = {"spread-compression", "momentum", "mean-reversion", "probability-extremes"}
@@ -205,8 +206,7 @@ def _load_price_series(db_path: str) -> dict[str, list[dict[str, Any]]]:
     path = Path(db_path)
     if not path.exists():
         return {}
-    with sqlite3.connect(path) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing_connection(path, row_factory=sqlite3.Row) as conn:
         rows = [dict(row) for row in conn.execute("SELECT * FROM kalshi_price_series ORDER BY ticker, timestamp, id").fetchall()]
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -218,8 +218,7 @@ def _load_market_snapshots(db_path: str) -> list[dict[str, Any]]:
     path = Path(db_path)
     if not path.exists():
         return []
-    with sqlite3.connect(path) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing_connection(path, row_factory=sqlite3.Row) as conn:
         try:
             rows = [dict(row) for row in conn.execute("SELECT * FROM kalshi_market_snapshots").fetchall()]
         except sqlite3.OperationalError:

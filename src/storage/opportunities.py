@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from src.sqlite_utils import closing_connection
 from src.web.redaction import redact_mapping
 
 DEFAULT_DB_PATH = "data/opportunities.db"
@@ -14,7 +15,7 @@ DEFAULT_DB_PATH = "data/opportunities.db"
 def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
+    with closing_connection(path, row_factory=None) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS opportunities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,7 +150,7 @@ def save_opportunity(opportunity: dict[str, Any], db_path: str = DEFAULT_DB_PATH
     init_db(db_path)
     key = opportunity.get("opportunity_key") or opportunity_key(opportunity)
     timestamp = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         try:
             conn.execute(
                 """
@@ -202,7 +203,7 @@ def save_prop_arbitrage_scan_result(
     timestamp = discovered_at or datetime.now(timezone.utc).isoformat()
     finished = finished_at or datetime.now(timezone.utc).isoformat()
     opportunities = result.get("prop_arbitrage_candidates") or []
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         cur = conn.execute(
             """
             INSERT INTO prop_arbitrage_scan_runs
@@ -256,7 +257,7 @@ def save_prop_arbitrage_scan_result(
     raw_result["duplicate_count"] = duplicate_count
     if error_message or result.get("error_message"):
         raw_result["error_message"] = error_message or result.get("error_message")
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.execute(
             """
             UPDATE prop_arbitrage_scan_runs
@@ -285,7 +286,7 @@ def create_scanner_profile(
     now = datetime.now(timezone.utc).isoformat()
     markets_json = json.dumps(_list_value(markets), sort_keys=True)
     sportsbooks_json = json.dumps(_list_value(sportsbooks), sort_keys=True)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         if is_active:
             conn.execute("UPDATE scanner_profiles SET is_active = 0")
         cur = conn.execute(
@@ -312,7 +313,7 @@ def update_scanner_profile(profile_id: int, *, db_path: str = DEFAULT_DB_PATH, *
     if "is_active" in values:
         values["is_active"] = 1 if bool(values["is_active"]) else 0
     values["updated_at"] = datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         if values.get("is_active"):
             conn.execute("UPDATE scanner_profiles SET is_active = 0 WHERE id != ?", (profile_id,))
         assignments = ", ".join(f"{key} = ?" for key in values)
@@ -322,7 +323,7 @@ def update_scanner_profile(profile_id: int, *, db_path: str = DEFAULT_DB_PATH, *
 
 def delete_scanner_profile(profile_id: int, *, db_path: str = DEFAULT_DB_PATH) -> None:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.execute("DELETE FROM scanner_profiles WHERE id = ?", (profile_id,))
     if get_active_scanner_profile(db_path=db_path) is None:
         profiles = list_scanner_profiles(db_path=db_path)
@@ -332,7 +333,7 @@ def delete_scanner_profile(profile_id: int, *, db_path: str = DEFAULT_DB_PATH) -
 
 def set_active_scanner_profile(profile_id: int, *, db_path: str = DEFAULT_DB_PATH) -> dict[str, Any] | None:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.execute("UPDATE scanner_profiles SET is_active = 0")
         conn.execute(
             "UPDATE scanner_profiles SET is_active = 1, updated_at = ? WHERE id = ?",
@@ -343,7 +344,7 @@ def set_active_scanner_profile(profile_id: int, *, db_path: str = DEFAULT_DB_PAT
 
 def get_scanner_profile(profile_id: int, *, db_path: str = DEFAULT_DB_PATH) -> dict[str, Any] | None:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM scanner_profiles WHERE id = ?", (profile_id,)).fetchone()
     return _profile_row(row) if row else None
@@ -351,7 +352,7 @@ def get_scanner_profile(profile_id: int, *, db_path: str = DEFAULT_DB_PATH) -> d
 
 def get_scanner_profile_by_name(name: str, *, db_path: str = DEFAULT_DB_PATH) -> dict[str, Any] | None:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM scanner_profiles WHERE name = ?", (name,)).fetchone()
     return _profile_row(row) if row else None
@@ -359,7 +360,7 @@ def get_scanner_profile_by_name(name: str, *, db_path: str = DEFAULT_DB_PATH) ->
 
 def get_active_scanner_profile(*, db_path: str = DEFAULT_DB_PATH) -> dict[str, Any] | None:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM scanner_profiles WHERE is_active = 1 ORDER BY id LIMIT 1").fetchone()
     return _profile_row(row) if row else None
@@ -367,7 +368,7 @@ def get_active_scanner_profile(*, db_path: str = DEFAULT_DB_PATH) -> dict[str, A
 
 def list_scanner_profiles(*, db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT * FROM scanner_profiles ORDER BY is_active DESC, name").fetchall()
     return [_profile_row(row) for row in rows]
@@ -383,7 +384,7 @@ def resolve_scanner_profile(name: str | None, *, db_path: str = DEFAULT_DB_PATH)
 
 def unique_scanner_profile_name(base_name: str, *, db_path: str = DEFAULT_DB_PATH) -> str:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         existing = {row[0] for row in conn.execute("SELECT name FROM scanner_profiles").fetchall()}
     if base_name not in existing:
         return base_name
@@ -447,7 +448,7 @@ def save_prop_arbitrage_opportunity(
     timestamp = discovered_at or datetime.now(timezone.utc).isoformat()
     cutoff = (datetime.fromisoformat(timestamp.replace("Z", "+00:00")) - timedelta(hours=24)).isoformat()
     prop_type = opportunity.get("prop_type") or opportunity.get("market_type")
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         duplicate = conn.execute(
             """
             SELECT id FROM prop_arbitrage_opportunities
@@ -577,14 +578,14 @@ def load_prop_arbitrage_opportunities(
     }.get(sort_by, "ranking_score DESC, guaranteed_roi DESC, discovered_at DESC")
     sql += f" ORDER BY {order_by} LIMIT ?"
     params.append(max(1, int(limit)))
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         return [dict(row) for row in conn.execute(sql, tuple(params)).fetchall()]
 
 
 def get_prop_arbitrage_opportunity(opportunity_id: int, db_path: str = DEFAULT_DB_PATH) -> dict[str, Any] | None:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM prop_arbitrage_opportunities WHERE id = ?", (opportunity_id,)).fetchone()
     if not row:
@@ -597,7 +598,7 @@ def get_prop_arbitrage_opportunity(opportunity_id: int, db_path: str = DEFAULT_D
 def mark_opportunity_viewed(opportunity_id: int, *, db_path: str = DEFAULT_DB_PATH, viewed_at: str | None = None) -> dict[str, Any] | None:
     init_db(db_path)
     viewed_at = viewed_at or datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         _migrate_prop_arbitrage_opportunities(conn)
         conn.execute(
             """
@@ -617,7 +618,7 @@ def mark_opportunity_viewed(opportunity_id: int, *, db_path: str = DEFAULT_DB_PA
 def archive_opportunity(opportunity_id: int, *, db_path: str = DEFAULT_DB_PATH, archived_at: str | None = None) -> dict[str, Any] | None:
     init_db(db_path)
     archived_at = archived_at or datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         _migrate_prop_arbitrage_opportunities(conn)
         conn.execute(
             "UPDATE prop_arbitrage_opportunities SET lifecycle_status = 'archived', archived_at = ?, status = 'archived' WHERE id = ?",
@@ -664,7 +665,7 @@ def create_paper_trade(
     expected_profit = _float0(opportunity.get("guaranteed_profit_amount")) if expected_profit is None else float(expected_profit)
     expected_roi = (expected_profit / total_stake) if total_stake else _float0(opportunity.get("guaranteed_roi"))
     raw = opportunity.get("raw") or _loads(opportunity.get("raw_json"), {})
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         _migrate_paper_trades(conn)
         existing = conn.execute(
             "SELECT id FROM paper_trades WHERE opportunity_id = ? ORDER BY id DESC LIMIT 1",
@@ -733,7 +734,7 @@ def load_paper_trades(*, db_path: str = DEFAULT_DB_PATH, limit: int = 100, statu
         where = "WHERE result_status = ?"
         params.append(status)
     params.append(max(1, int(limit)))
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         _migrate_paper_trades(conn)
         rows = conn.execute(
@@ -765,7 +766,7 @@ def settle_paper_trade(
     if outcome not in {"over-won", "under-won", "push", "void"}:
         raise ValueError(f"unsupported settlement outcome: {outcome}")
     settled_at = settled_at or datetime.now(timezone.utc).isoformat()
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         _migrate_paper_trades(conn)
         row = conn.execute("SELECT * FROM paper_trades WHERE id = ?", (trade_id,)).fetchone()
@@ -801,7 +802,7 @@ def settle_paper_trade(
 
 def get_paper_trade(trade_id: int, *, db_path: str = DEFAULT_DB_PATH) -> dict[str, Any] | None:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         _migrate_paper_trades(conn)
         row = conn.execute("SELECT * FROM paper_trades WHERE id = ?", (trade_id,)).fetchone()
@@ -810,7 +811,7 @@ def get_paper_trade(trade_id: int, *, db_path: str = DEFAULT_DB_PATH) -> dict[st
 
 def paper_trade_summary(db_path: str = DEFAULT_DB_PATH) -> dict[str, Any]:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         _migrate_paper_trades(conn)
         rows = [dict(row) for row in conn.execute("SELECT * FROM paper_trades")]
@@ -833,7 +834,7 @@ def paper_trade_summary(db_path: str = DEFAULT_DB_PATH) -> dict[str, Any]:
 
 def paper_pnl_analytics(db_path: str = DEFAULT_DB_PATH) -> dict[str, list[dict[str, Any]]]:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         _migrate_paper_trades(conn)
         settled = [dict(row) for row in conn.execute("SELECT * FROM paper_trades WHERE result_status != 'open' ORDER BY COALESCE(settled_at, executed_at, '') ASC, id ASC")]
@@ -878,7 +879,7 @@ def prop_arbitrage_summary_today(db_path: str = DEFAULT_DB_PATH, now: datetime |
     init_db(db_path)
     now = now or datetime.now(timezone.utc)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         open_count = conn.execute("SELECT COUNT(*) FROM prop_arbitrage_opportunities WHERE status = 'open'").fetchone()[0]
         row = conn.execute(
             """
@@ -902,7 +903,7 @@ def prop_arbitrage_summary_today(db_path: str = DEFAULT_DB_PATH, now: datetime |
 
 def latest_prop_scan_status(db_path: str = DEFAULT_DB_PATH) -> dict[str, Any] | None:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM prop_arbitrage_scan_runs ORDER BY id DESC LIMIT 1").fetchone()
     return dict(row) if row else None
@@ -914,7 +915,7 @@ def prop_watch_health(db_path: str = DEFAULT_DB_PATH, now: datetime | None = Non
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     latest = latest_prop_scan_status(db_path) or {}
     metrics = alert_metrics(db_path, now=now)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         duplicate_alerts = conn.execute(
             "SELECT COUNT(*) FROM alert_events WHERE created_at >= ? AND status = 'duplicate'",
             (day_start,),
@@ -955,7 +956,7 @@ def record_alert_event(
     init_db(db_path)
     created_at = created_at or datetime.now(timezone.utc).isoformat()
     clean_raw = redact_mapping(raw or {})
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         cur = conn.execute(
             """
             INSERT INTO alert_events
@@ -981,7 +982,7 @@ def record_alert_event(
 
 def load_alert_events(*, db_path: str = DEFAULT_DB_PATH, limit: int = 100) -> list[dict[str, Any]]:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
@@ -1000,7 +1001,7 @@ def alert_metrics(db_path: str = DEFAULT_DB_PATH, now: datetime | None = None) -
     init_db(db_path)
     now = now or datetime.now(timezone.utc)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         sent = conn.execute("SELECT COUNT(*) FROM alert_events WHERE created_at >= ? AND status = 'sent'", (day_start,)).fetchone()[0]
         duplicates = conn.execute("SELECT COUNT(*) FROM alert_events WHERE created_at >= ? AND status = 'duplicate'", (day_start,)).fetchone()[0]
@@ -1030,7 +1031,7 @@ def alert_metrics(db_path: str = DEFAULT_DB_PATH, now: datetime | None = None) -
 def opportunity_funnel(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     init_db(db_path)
     states = ["discovered", "viewed", "paper_traded", "settled", "archived"]
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         _migrate_prop_arbitrage_opportunities(conn)
         counts = {
             row[0] or "discovered": int(row[1] or 0)
@@ -1050,7 +1051,7 @@ def operations_metrics(db_path: str = DEFAULT_DB_PATH, now: datetime | None = No
     now = now or datetime.now(timezone.utc)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     path = Path(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         _migrate_prop_arbitrage_opportunities(conn)
         _migrate_paper_trades(conn)
@@ -1087,7 +1088,7 @@ def operations_metrics(db_path: str = DEFAULT_DB_PATH, now: datetime | None = No
 
 def bookmaker_pair_performance(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         _migrate_prop_arbitrage_opportunities(conn)
         _migrate_paper_trades(conn)
@@ -1123,7 +1124,7 @@ def bookmaker_pair_performance(db_path: str = DEFAULT_DB_PATH) -> list[dict[str,
 
 def profile_performance(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         profiles = [_profile_row(row) for row in conn.execute("SELECT * FROM scanner_profiles ORDER BY name").fetchall()]
         scan_rows = [dict(row) for row in conn.execute("SELECT * FROM prop_arbitrage_scan_runs").fetchall()]
@@ -1241,7 +1242,7 @@ def template_performance(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]
 def book_pair_by_profile_performance(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     init_db(db_path)
     profiles = {_profile_key(profile): profile for profile in list_scanner_profiles(db_path=db_path)}
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         opps = [dict(row) for row in conn.execute("SELECT * FROM prop_arbitrage_opportunities WHERE profile_id IS NOT NULL OR profile_name IS NOT NULL").fetchall()]
         trades = [dict(row) for row in conn.execute(
@@ -1287,7 +1288,7 @@ def active_profile_operations_metrics(db_path: str = DEFAULT_DB_PATH, now: datet
     profile_id = active.get("id")
     profile_name = active.get("name")
     summary = next((row for row in profile_performance(db_path) if row.get("profile_id") == profile_id), None)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         scans = conn.execute("SELECT COUNT(*) FROM prop_arbitrage_scan_runs WHERE started_at >= ? AND (profile_id = ? OR profile_name = ?)", (day_start, profile_id, profile_name)).fetchone()[0]
         opportunities = conn.execute("SELECT COUNT(*) FROM prop_arbitrage_opportunities WHERE discovered_at >= ? AND (profile_id = ? OR profile_name = ?)", (day_start, profile_id, profile_name)).fetchone()[0]
         alerts = conn.execute(
@@ -1304,7 +1305,7 @@ def active_profile_operations_metrics(db_path: str = DEFAULT_DB_PATH, now: datet
 
 def save_alert(opportunity_key_value: str, destination: str, status: str, error: str | None = None, db_path: str = DEFAULT_DB_PATH) -> None:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.execute(
             "INSERT INTO alerts (timestamp, opportunity_key, destination, status, error) VALUES (?, ?, ?, ?, ?)",
             (datetime.now(timezone.utc).isoformat(), opportunity_key_value, destination, status, error),
@@ -1313,7 +1314,7 @@ def save_alert(opportunity_key_value: str, destination: str, status: str, error:
 
 def load_recent_opportunities(limit: int = 20, db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT * FROM opportunities ORDER BY timestamp DESC LIMIT ?", (limit,)).fetchall()
     return [dict(row) for row in rows]
@@ -1321,7 +1322,7 @@ def load_recent_opportunities(limit: int = 20, db_path: str = DEFAULT_DB_PATH) -
 
 def load_recent_alerts(limit: int = 20, db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT * FROM alerts ORDER BY timestamp DESC LIMIT ?", (limit,)).fetchall()
     return [dict(row) for row in rows]
@@ -1329,7 +1330,7 @@ def load_recent_alerts(limit: int = 20, db_path: str = DEFAULT_DB_PATH) -> list[
 
 def opportunity_stats(db_path: str = DEFAULT_DB_PATH) -> dict[str, Any]:
     init_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         total = conn.execute("SELECT COUNT(*) FROM opportunities").fetchone()[0]
         avg_roi = conn.execute("SELECT AVG(guaranteed_roi) FROM opportunities").fetchone()[0]
         best_roi = conn.execute("SELECT MAX(guaranteed_roi) FROM opportunities").fetchone()[0]

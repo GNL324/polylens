@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from src.risk.models import RiskConfig, RiskDecision, RiskDecisionType, RiskRequest
+from src.sqlite_utils import closing_connection
 
 DEFAULT_RISK_DB_PATH = "data/polylens.db"
 
@@ -359,10 +361,10 @@ class RiskEngine:
             return "DRY RUN"
         return "PAPER"
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        with closing_connection(self.db_path, row_factory=sqlite3.Row) as conn:
+            yield conn
 
     def _set_state_defaults(self, conn: sqlite3.Connection) -> None:
         for key, value in {"daily_pnl": 0.0, "monthly_pnl": 0.0, "current_equity": 0.0, "peak_equity": 0.0}.items():
