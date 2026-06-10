@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.adapters.kalshi import KalshiAuthenticatedClient, KalshiAuthConfigError, KalshiClient
+from src.adapters.oddsblaze import MissingOddsBlazeKey, OddsBlazeClient
 from src.adapters.odds_api import MissingOddsAPIKey, OddsAPIClient
 from src.adapters.polymarket import PolymarketClient
 from src.alerts.notifier import MissingWebhookURLError, build_notifier
@@ -635,6 +636,112 @@ def fetch_player_props(sport_key: str, event_id: str | None = None, bookmaker: s
     return normalized
 
 
+DEFAULT_ODDSBLAZE_SPORTSBOOKS = ("draftkings", "fanduel", "betmgm", "caesars", "hard-rock")
+
+
+def fetch_oddsblaze_odds(
+    sportsbook: str,
+    league: str,
+    market: str | None = None,
+    market_contains: str | None = None,
+    main: bool | None = None,
+    live: bool | None = None,
+    as_json: bool = False,
+    quiet: bool = False,
+) -> list[dict[str, Any]]:
+    client = OddsBlazeClient(raw_dir="data/raw")
+    rows = client.fetch_odds(
+        sportsbook=sportsbook,
+        league=_oddsblaze_league(league),
+        market=market,
+        market_contains=market_contains,
+        main=main,
+        live=live,
+    )
+    if as_json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+    elif not quiet:
+        print(f"Fetched OddsBlaze odds: {len(rows)}")
+        for row in rows[:20]:
+            print(f"- {row.get('player')} {row.get('market_type')} {row.get('side')} {row.get('line')} {row.get('sportsbook')} odds={row.get('odds')}")
+    return rows
+
+
+def fetch_provider_player_props(
+    sport_key: str,
+    event_id: str | None = None,
+    bookmaker: str | None = None,
+    region: str = "us",
+    markets: str | None = None,
+    provider: str = "odds-api",
+    oddsblaze_sportsbooks: list[str] | None = None,
+    oddsblaze_market_contains: str | None = None,
+) -> list[dict[str, Any]]:
+    provider_key = (provider or "odds-api").strip().lower()
+    if provider_key not in {"odds-api", "oddsblaze", "all"}:
+        raise ValueError("--provider must be one of odds-api, oddsblaze, all")
+    props: list[dict[str, Any]] = []
+    if provider_key in {"odds-api", "all"}:
+        props.extend(fetch_player_props(sport_key, event_id=event_id, bookmaker=bookmaker, region=region, markets=markets, quiet=True))
+    if provider_key in {"oddsblaze", "all"}:
+        league = _oddsblaze_league(sport_key)
+        market_contains = _oddsblaze_market_contains(markets, oddsblaze_market_contains)
+        for sportsbook in oddsblaze_sportsbooks or list(DEFAULT_ODDSBLAZE_SPORTSBOOKS):
+            props.extend(fetch_oddsblaze_odds(sportsbook=sportsbook, league=league, market_contains=market_contains, main=True, live=False, quiet=True))
+    return props
+
+
+def _split_csv_values(values: list[str] | str | None) -> list[str]:
+    if not values:
+        return []
+    parts = values if isinstance(values, list) else [values]
+    return [item.strip() for part in parts for item in str(part).split(",") if item.strip()]
+
+
+def _parse_bool(value: str | bool | None) -> bool | None:
+    if value is None or isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y"}:
+        return True
+    if text in {"0", "false", "no", "n"}:
+        return False
+    raise ValueError(f"invalid boolean value: {value}")
+
+
+def _oddsblaze_league(value: str | None) -> str:
+    mapping = {
+        "basketball_nba": "nba",
+        "americanfootball_nfl": "nfl",
+        "baseball_mlb": "mlb",
+        "icehockey_nhl": "nhl",
+    }
+    text = str(value or "").strip()
+    return mapping.get(text, text).lower()
+
+
+def _oddsblaze_market_contains(markets: str | None, override: str | None = None) -> str:
+    if override:
+        return override
+    internal_player_markets = {
+        "player_points",
+        "player_rebounds",
+        "player_assists",
+        "player_threes",
+        "player_blocks",
+        "player_steals",
+        "player_turnovers",
+        "player_points_rebounds_assists",
+        "player_points_rebounds",
+        "player_points_assists",
+        "player_rebounds_assists",
+    }
+    requested = {item.strip().lower() for item in str(markets or "").split(",") if item.strip()}
+    if not requested or requested & internal_player_markets:
+        return "Player"
+    return str(markets).strip()
+
+
 def debug_player_props(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, as_json: bool = False) -> dict[str, Any]:
     client = OddsAPIClient(raw_dir="data/raw")
     payload = client.get_player_props(sport_key, event_id=event_id, regions=region, markets=markets, bookmakers=bookmaker)
@@ -677,9 +784,14 @@ def scan_prop_arb(
     bookmaker: str | None = None,
     region: str = "us",
     markets: str | None = None,
+    provider: str = "odds-api",
+    oddsblaze_sportsbooks: list[str] | None = None,
+    oddsblaze_market_contains: str | None = None,
     bankroll: float | None = None,
     min_guaranteed_roi: float | None = None,
     min_profit: float | None = None,
+    max_leg_age_seconds: float | None = None,
+    max_cross_leg_update_gap_seconds: float | None = None,
     as_json: bool = False,
     profile: str | None = None,
     sportsbooks: str | None = None,
@@ -700,7 +812,16 @@ def scan_prop_arb(
     effective_bankroll = bankroll if bankroll is not None else (profile_row.get("bankroll") if profile_row else None)
     effective_min_roi = min_guaranteed_roi if min_guaranteed_roi is not None else (profile_row.get("min_roi") if profile_row else None)
     started = time.time()
-    props = fetch_player_props(effective_sport, event_id=event_id, bookmaker=effective_bookmaker, region=region, markets=effective_markets, quiet=True)
+    props = fetch_provider_player_props(
+        effective_sport,
+        event_id=event_id,
+        bookmaker=effective_bookmaker,
+        region=region,
+        markets=effective_markets,
+        provider=provider,
+        oddsblaze_sportsbooks=oddsblaze_sportsbooks or _split_csv_values(sportsbooks),
+        oddsblaze_market_contains=oddsblaze_market_contains,
+    )
     if sportsbook_filter:
         allowed = set(sportsbook_filter)
         props = [
@@ -708,12 +829,22 @@ def scan_prop_arb(
             if str(row.get("bookmaker_key") or row.get("bookmaker") or row.get("bookmaker_name") or "").strip().lower() in allowed
         ]
     duration = round(time.time() - started, 4)
-    result = scan_prop_arbitrage(props, bankroll=effective_bankroll, min_guaranteed_roi=effective_min_roi, min_profit=min_profit, scan_duration_seconds=duration, api_calls=None)
+    result = scan_prop_arbitrage(
+        props,
+        bankroll=effective_bankroll,
+        min_guaranteed_roi=effective_min_roi,
+        min_profit=min_profit,
+        scan_duration_seconds=duration,
+        api_calls=None,
+        max_leg_age_seconds=max_leg_age_seconds,
+        max_cross_leg_update_gap_seconds=max_cross_leg_update_gap_seconds,
+    )
     if profile_row:
         result["scanner_profile"] = profile_row.get("name")
         result["scanner_profile_id"] = profile_row.get("id")
     if sportsbook_filter:
         result["sportsbooks_filter"] = sportsbook_filter
+    result["provider"] = provider
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -726,14 +857,14 @@ def scan_prop_arb(
     return result
 
 
-def watch_prop_arb(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, interval: int = 30, bankroll: float | None = None, min_roi: float | None = None, min_profit: float | None = None, once: bool = False, as_json: bool = False, db_path: str = "data/opportunities.db") -> dict[str, Any]:
+def watch_prop_arb(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, provider: str = "odds-api", oddsblaze_sportsbooks: list[str] | None = None, oddsblaze_market_contains: str | None = None, interval: int = 30, bankroll: float | None = None, min_roi: float | None = None, min_profit: float | None = None, max_leg_age_seconds: float | None = None, max_cross_leg_update_gap_seconds: float | None = None, once: bool = False, as_json: bool = False, db_path: str = "data/opportunities.db") -> dict[str, Any]:
     seen: set[str] = set()
     iterations = 0
     alerts_sent = 0
     last_result: dict[str, Any] = {}
     while True:
         iterations += 1
-        result = scan_prop_arb(sport_key, event_id=event_id, bookmaker=bookmaker, region=region, markets=markets, bankroll=bankroll, min_guaranteed_roi=min_roi, min_profit=min_profit, as_json=False)
+        result = scan_prop_arb(sport_key, event_id=event_id, bookmaker=bookmaker, region=region, markets=markets, provider=provider, oddsblaze_sportsbooks=oddsblaze_sportsbooks, oddsblaze_market_contains=oddsblaze_market_contains, bankroll=bankroll, min_guaranteed_roi=min_roi, min_profit=min_profit, max_leg_age_seconds=max_leg_age_seconds, max_cross_leg_update_gap_seconds=max_cross_leg_update_gap_seconds, as_json=False)
         new_items = []
         for opp in result.get("prop_arbitrage_candidates", []):
             key = prop_opportunity_key(opp)
@@ -1939,6 +2070,15 @@ def main() -> None:
     props_parser.add_argument("--markets")
     props_parser.add_argument("--json", action="store_true")
 
+    oddsblaze_parser = sub.add_parser("oddsblaze-odds")
+    oddsblaze_parser.add_argument("--sportsbook", required=True)
+    oddsblaze_parser.add_argument("--league", required=True)
+    oddsblaze_parser.add_argument("--market")
+    oddsblaze_parser.add_argument("--market-contains")
+    oddsblaze_parser.add_argument("--main")
+    oddsblaze_parser.add_argument("--live")
+    oddsblaze_parser.add_argument("--json", action="store_true")
+
     debug_props_parser = sub.add_parser("debug-player-props")
     debug_props_parser.add_argument("--sport", required=True, dest="sport_key")
     debug_props_parser.add_argument("--event-id")
@@ -1951,12 +2091,17 @@ def main() -> None:
     prop_arb_parser.add_argument("--sport", required=True, dest="sport_key")
     prop_arb_parser.add_argument("--event-id")
     prop_arb_parser.add_argument("--bookmaker")
+    prop_arb_parser.add_argument("--sportsbook", action="append", dest="oddsblaze_sportsbooks", help="OddsBlaze sportsbook; repeat or pass comma-separated values")
+    prop_arb_parser.add_argument("--oddsblaze-market-contains", help="OddsBlaze market_contains override for provider oddsblaze/all")
+    prop_arb_parser.add_argument("--provider", choices=["odds-api", "oddsblaze", "all"], default="odds-api")
     prop_arb_parser.add_argument("--region", default="us")
     prop_arb_parser.add_argument("--markets")
     prop_arb_parser.add_argument("--bankroll", type=float)
     prop_arb_parser.add_argument("--min-guaranteed-roi", type=float)
     prop_arb_parser.add_argument("--min-roi", type=float, dest="min_roi")
     prop_arb_parser.add_argument("--min-profit", type=float)
+    prop_arb_parser.add_argument("--max-leg-age-seconds", type=float, default=180)
+    prop_arb_parser.add_argument("--max-cross-leg-update-gap-seconds", type=float, default=300)
     prop_arb_parser.add_argument("--profile")
     prop_arb_parser.add_argument("--sportsbooks")
     prop_arb_parser.add_argument("--db-path", default="data/opportunities.db")
@@ -1966,12 +2111,17 @@ def main() -> None:
     watch_prop_parser.add_argument("--sport", required=True, dest="sport_key")
     watch_prop_parser.add_argument("--event-id")
     watch_prop_parser.add_argument("--bookmaker")
+    watch_prop_parser.add_argument("--sportsbook", action="append", dest="oddsblaze_sportsbooks", help="OddsBlaze sportsbook; repeat or pass comma-separated values")
+    watch_prop_parser.add_argument("--oddsblaze-market-contains", help="OddsBlaze market_contains override for provider oddsblaze/all")
+    watch_prop_parser.add_argument("--provider", choices=["odds-api", "oddsblaze", "all"], default="odds-api")
     watch_prop_parser.add_argument("--region", default="us")
     watch_prop_parser.add_argument("--markets")
     watch_prop_parser.add_argument("--interval", type=int, default=30)
     watch_prop_parser.add_argument("--bankroll", type=float)
     watch_prop_parser.add_argument("--min-roi", type=float)
     watch_prop_parser.add_argument("--min-profit", type=float)
+    watch_prop_parser.add_argument("--max-leg-age-seconds", type=float, default=180)
+    watch_prop_parser.add_argument("--max-cross-leg-update-gap-seconds", type=float, default=300)
     watch_prop_parser.add_argument("--once", action="store_true")
     watch_prop_parser.add_argument("--json", action="store_true")
     watch_prop_parser.add_argument("--db-path", default="data/opportunities.db")
@@ -2259,12 +2409,14 @@ def main() -> None:
         fetch_odds(args.sport_key, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
     elif args.command == "fetch-player-props":
         fetch_player_props(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
+    elif args.command == "oddsblaze-odds":
+        fetch_oddsblaze_odds(args.sportsbook, args.league, market=args.market, market_contains=args.market_contains, main=_parse_bool(args.main), live=_parse_bool(args.live), as_json=args.json)
     elif args.command == "debug-player-props":
         debug_player_props(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
     elif args.command == "scan-prop-arb":
-        scan_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, bankroll=args.bankroll, min_guaranteed_roi=args.min_roi if args.min_roi is not None else args.min_guaranteed_roi, min_profit=args.min_profit, as_json=args.json, profile=args.profile, sportsbooks=args.sportsbooks, db_path=args.db_path)
+        scan_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, provider=args.provider, oddsblaze_sportsbooks=_split_csv_values(args.oddsblaze_sportsbooks), oddsblaze_market_contains=args.oddsblaze_market_contains, bankroll=args.bankroll, min_guaranteed_roi=args.min_roi if args.min_roi is not None else args.min_guaranteed_roi, min_profit=args.min_profit, max_leg_age_seconds=args.max_leg_age_seconds, max_cross_leg_update_gap_seconds=args.max_cross_leg_update_gap_seconds, as_json=args.json, profile=args.profile, sportsbooks=args.sportsbooks, db_path=args.db_path)
     elif args.command == "watch-prop-arb":
-        watch_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, interval=args.interval, bankroll=args.bankroll, min_roi=args.min_roi, min_profit=args.min_profit, once=args.once, as_json=args.json, db_path=args.db_path)
+        watch_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, provider=args.provider, oddsblaze_sportsbooks=_split_csv_values(args.oddsblaze_sportsbooks), oddsblaze_market_contains=args.oddsblaze_market_contains, interval=args.interval, bankroll=args.bankroll, min_roi=args.min_roi, min_profit=args.min_profit, max_leg_age_seconds=args.max_leg_age_seconds, max_cross_leg_update_gap_seconds=args.max_cross_leg_update_gap_seconds, once=args.once, as_json=args.json, db_path=args.db_path)
     elif args.command == "fetch-futures":
         fetch_futures(args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
     elif args.command == "scan-sportsbook-arb":
@@ -2441,5 +2593,5 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except (MissingOddsAPIKey, MissingWebhookURLError) as exc:
+    except (MissingOddsAPIKey, MissingOddsBlazeKey, MissingWebhookURLError) as exc:
         raise SystemExit(str(exc)) from exc

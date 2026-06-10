@@ -51,7 +51,8 @@ If `requirements.txt` is not present in your checkout yet, install the small run
 ### Environment Variables
 
 ```text
-ODDS_API_KEY          Required for sportsbook odds, futures, and player props.
+ODDS_API_KEY          Required for The Odds API sportsbook odds, futures, and player props.
+ODDSBLAZE_API_KEY    Optional OddsBlaze provider for player prop odds.
 TELEGRAM_BOT_TOKEN   Optional for Telegram alerts.
 TELEGRAM_CHAT_ID     Optional for Telegram alerts.
 ```
@@ -65,6 +66,16 @@ python -m src.cli analyze-wallet 0x0000000000000000000000000000000000000000
 python -m src.cli compare-kalshi 0x0000000000000000000000000000000000000000
 python -m src.cli scan-prop-arb --sport basketball_nba --markets player_points --bankroll 1000 --json
 python -m src.cli watch-prop-arb --sport basketball_nba --markets player_points --interval 30 --bankroll 1000 --min-roi 0.01
+```
+
+## OddsBlaze
+
+OddsBlaze is optional and does not replace The Odds API flow.
+
+```bash
+export ODDSBLAZE_API_KEY="..."
+python -m src.cli oddsblaze-odds --sportsbook draftkings --league nba --market-contains Player --live false --main true --json
+python -m src.cli scan-prop-arb --sport basketball_nba --provider oddsblaze --sportsbook draftkings --sportsbook fanduel --markets Player --json
 ```
 
 ## Local Dashboard And Risk

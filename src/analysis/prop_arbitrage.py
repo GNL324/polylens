@@ -1,12 +1,27 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 from src.analysis.prop_matching import match_prop_pairs_with_metrics
 
 
-def scan_prop_arbitrage(props: list[dict[str, Any]], bankroll: float | None = None, min_guaranteed_roi: float | None = None, min_profit: float | None = None, scan_duration_seconds: float | None = None, api_calls: int | None = None) -> dict[str, Any]:
+def scan_prop_arbitrage(
+    props: list[dict[str, Any]],
+    bankroll: float | None = None,
+    min_guaranteed_roi: float | None = None,
+    min_profit: float | None = None,
+    scan_duration_seconds: float | None = None,
+    api_calls: int | None = None,
+    max_leg_age_seconds: float | None = None,
+    max_cross_leg_update_gap_seconds: float | None = None,
+    scan_time: datetime | str | None = None,
+) -> dict[str, Any]:
+    side_diagnostics = _side_diagnostics(props)
+    market_mismatch_diagnostics = _market_mismatch_diagnostics(props)
+    period_mismatch_diagnostics = _period_mismatch_diagnostics(props)
+    effective_scan_time = _parse_timestamp(scan_time) or datetime.now(timezone.utc)
     match_result = match_prop_pairs_with_metrics(props)
     pairs = match_result["matches"]
     rejects = match_result["rejects"]
@@ -16,6 +31,15 @@ def scan_prop_arbitrage(props: list[dict[str, Any]], bankroll: float | None = No
     for pair in pairs:
         over = pair["over"]
         under = pair["under"]
+        freshness_reject = _freshness_reject(
+            pair,
+            max_leg_age_seconds=max_leg_age_seconds,
+            max_cross_leg_update_gap_seconds=max_cross_leg_update_gap_seconds,
+            scan_time=effective_scan_time,
+        )
+        if freshness_reject:
+            pair_rejects.append(freshness_reject)
+            continue
         total = round(float(over.get("implied_probability") or 999) + float(under.get("implied_probability") or 999), 6)
         if total >= 1:
             pair_rejects.append({
@@ -32,8 +56,12 @@ def scan_prop_arbitrage(props: list[dict[str, Any]], bankroll: float | None = No
             "prop_type": pair.get("market_type"),
             "line": pair.get("line"),
             "over_book": over.get("bookmaker"),
+            "over_source": over.get("source") or over.get("provider") or "odds-api",
+            "over_sportsbook": over.get("sportsbook") or over.get("bookmaker"),
             "over_odds": over.get("odds"),
             "under_book": under.get("bookmaker"),
+            "under_source": under.get("source") or under.get("provider") or "odds-api",
+            "under_sportsbook": under.get("sportsbook") or under.get("bookmaker"),
             "under_odds": under.get("odds"),
             "implied_probability_sum": total,
             "guaranteed_profit": round(1 - total, 6),
@@ -66,6 +94,17 @@ def scan_prop_arbitrage(props: list[dict[str, Any]], bankroll: float | None = No
         "scan_duration_seconds": scan_duration_seconds,
         "arb_candidates": candidates_after,
         "api_calls": api_calls,
+        "max_leg_age_seconds": max_leg_age_seconds,
+        "max_cross_leg_update_gap_seconds": max_cross_leg_update_gap_seconds,
+        "stale_leg_count": sum(1 for item in pair_rejects if item.get("rejection_reason") == "stale leg"),
+        "stale_leg_examples": [item for item in pair_rejects if item.get("rejection_reason") == "stale leg"][:10],
+        "update_gap_rejection_count": sum(1 for item in pair_rejects if item.get("rejection_reason") == "cross-leg update gap too large"),
+        "side_counts_by_provider_sportsbook": side_diagnostics["side_counts_by_provider_sportsbook"],
+        "invalid_side_examples": side_diagnostics["invalid_side_examples"],
+        "market_mismatch_count": market_mismatch_diagnostics["market_mismatch_count"],
+        "market_mismatch_examples": market_mismatch_diagnostics["market_mismatch_examples"],
+        "period_mismatch_count": period_mismatch_diagnostics["period_mismatch_count"],
+        "period_mismatch_examples": period_mismatch_diagnostics["period_mismatch_examples"],
         "prop_arbitrage_candidates": sorted(arbs, key=lambda item: (item.get("guaranteed_roi") or 0, item.get("guaranteed_profit_amount") or 0, item.get("last_update") or ""), reverse=True),
         "diagnostics": [_compact_match_reject(item) for item in rejects] + pair_rejects,
     }
@@ -79,6 +118,112 @@ def _stake_size(over_prob: float, under_prob: float, bankroll: float, total: flo
         "stake_under": round(float(bankroll) * under_prob / total, 2),
         "guaranteed_profit_amount": round(float(bankroll) * ((1 - total) / total), 2),
     }
+
+
+def _freshness_reject(
+    pair: dict[str, Any],
+    max_leg_age_seconds: float | None,
+    max_cross_leg_update_gap_seconds: float | None,
+    scan_time: datetime,
+) -> dict[str, Any] | None:
+    over = pair["over"]
+    under = pair["under"]
+    over_time = _row_update_time(over)
+    under_time = _row_update_time(under)
+    over_age = _age_seconds(over_time, scan_time)
+    under_age = _age_seconds(under_time, scan_time)
+    if max_leg_age_seconds is not None:
+        stale_sides: list[str] = []
+        if over_age is None or over_age > max_leg_age_seconds:
+            stale_sides.append("over")
+        if under_age is None or under_age > max_leg_age_seconds:
+            stale_sides.append("under")
+        if stale_sides:
+            return _freshness_reject_payload(
+                pair,
+                "stale leg",
+                over_time,
+                under_time,
+                over_age,
+                under_age,
+                stale_sides=stale_sides,
+                max_leg_age_seconds=max_leg_age_seconds,
+            )
+    if max_cross_leg_update_gap_seconds is not None and over_time and under_time:
+        gap = abs((over_time - under_time).total_seconds())
+        if gap > max_cross_leg_update_gap_seconds:
+            return _freshness_reject_payload(
+                pair,
+                "cross-leg update gap too large",
+                over_time,
+                under_time,
+                over_age,
+                under_age,
+                update_gap_seconds=round(gap, 3),
+                max_cross_leg_update_gap_seconds=max_cross_leg_update_gap_seconds,
+            )
+    return None
+
+
+def _freshness_reject_payload(
+    pair: dict[str, Any],
+    reason: str,
+    over_time: datetime | None,
+    under_time: datetime | None,
+    over_age: float | None,
+    under_age: float | None,
+    **extra: Any,
+) -> dict[str, Any]:
+    over = pair["over"]
+    under = pair["under"]
+    payload = {
+        "player": pair.get("player"),
+        "market_type": pair.get("market_type"),
+        "line": pair.get("line"),
+        "rejection_reason": reason,
+        "over_book": over.get("bookmaker"),
+        "under_book": under.get("bookmaker"),
+        "over_last_update": _format_timestamp(over_time),
+        "under_last_update": _format_timestamp(under_time),
+        "over_age_seconds": None if over_age is None else round(over_age, 3),
+        "under_age_seconds": None if under_age is None else round(under_age, 3),
+    }
+    payload.update(extra)
+    return payload
+
+
+def _row_update_time(row: dict[str, Any]) -> datetime | None:
+    return _parse_timestamp(row.get("last_update") or row.get("updated") or row.get("event_date") or row.get("commence_time"))
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _age_seconds(updated_at: datetime | None, scan_time: datetime) -> float | None:
+    if updated_at is None:
+        return None
+    return max(0.0, (scan_time - updated_at).total_seconds())
+
+
+def _format_timestamp(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _compact_match_reject(item: dict[str, Any]) -> dict[str, Any]:
@@ -98,6 +243,147 @@ def _compact_match_reject(item: dict[str, Any]) -> dict[str, Any]:
         "left_side": left.get("side"),
         "right_side": right.get("side"),
     }
+
+
+def _side_diagnostics(props: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[tuple[str, str], Counter[str]] = {}
+    invalid_examples: list[dict[str, Any]] = []
+    for row in props:
+        provider = str(row.get("source") or row.get("provider") or "odds-api")
+        sportsbook = str(row.get("sportsbook") or row.get("bookmaker_key") or row.get("bookmaker") or "unknown")
+        side = row.get("side")
+        side_label = str(side) if side in {"over", "under"} else "invalid"
+        key = (provider, sportsbook)
+        grouped.setdefault(key, Counter())[side_label] += 1
+        if side_label == "invalid" and len(invalid_examples) < 10:
+            raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
+            selection = raw.get("selection") if isinstance(raw.get("selection"), dict) else {}
+            invalid_examples.append({
+                "provider": provider,
+                "sportsbook": sportsbook,
+                "market": row.get("market") or row.get("market_type") or raw.get("market"),
+                "name": raw.get("name") or row.get("raw_outcome_name"),
+                "selection": selection,
+                "side": row.get("side"),
+                "line": row.get("line"),
+                "player": row.get("player") or row.get("player_name"),
+            })
+    return {
+        "side_counts_by_provider_sportsbook": [
+            {"provider": provider, "sportsbook": sportsbook, **dict(counts)}
+            for (provider, sportsbook), counts in sorted(grouped.items())
+        ],
+        "invalid_side_examples": invalid_examples,
+    }
+
+
+def _market_mismatch_diagnostics(props: list[dict[str, Any]]) -> dict[str, Any]:
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in props:
+        if row.get("side") not in {"over", "under"}:
+            continue
+        key = (
+            row.get("sport"),
+            row.get("league"),
+            row.get("event_id"),
+            _norm(row.get("player")),
+            _line(row.get("line")),
+        )
+        groups.setdefault(key, []).append(row)
+
+    count = 0
+    examples: list[dict[str, Any]] = []
+    for rows in groups.values():
+        for left_index, left in enumerate(rows):
+            for right in rows[left_index + 1:]:
+                if left.get("side") == right.get("side"):
+                    continue
+                left_identity = _prop_identity(left)
+                right_identity = _prop_identity(right)
+                if left_identity == right_identity:
+                    continue
+                count += 1
+                if len(examples) < 10:
+                    examples.append({
+                        "player": left.get("player") or right.get("player"),
+                        "line": left.get("line") if left.get("line") is not None else right.get("line"),
+                        "left_market": left.get("market") or left.get("market_type"),
+                        "left_prop_identity": left_identity,
+                        "left_side": left.get("side"),
+                        "left_bookmaker": left.get("bookmaker"),
+                        "right_market": right.get("market") or right.get("market_type"),
+                        "right_prop_identity": right_identity,
+                        "right_side": right.get("side"),
+                        "right_bookmaker": right.get("bookmaker"),
+                        "rejection_reason": "market mismatch",
+                    })
+    return {"market_mismatch_count": count, "market_mismatch_examples": examples}
+
+
+def _period_mismatch_diagnostics(props: list[dict[str, Any]]) -> dict[str, Any]:
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in props:
+        if row.get("side") not in {"over", "under"}:
+            continue
+        key = (
+            row.get("sport"),
+            row.get("league"),
+            row.get("event_id"),
+            _norm(row.get("player")),
+            _prop_identity(row),
+            _line(row.get("line")),
+        )
+        groups.setdefault(key, []).append(row)
+
+    count = 0
+    examples: list[dict[str, Any]] = []
+    for rows in groups.values():
+        for left_index, left in enumerate(rows):
+            for right in rows[left_index + 1:]:
+                if left.get("side") == right.get("side"):
+                    continue
+                left_period = _prop_period(left)
+                right_period = _prop_period(right)
+                if left_period == right_period:
+                    continue
+                count += 1
+                if len(examples) < 10:
+                    examples.append({
+                        "player": left.get("player") or right.get("player"),
+                        "line": left.get("line") if left.get("line") is not None else right.get("line"),
+                        "prop_identity": _prop_identity(left) or _prop_identity(right),
+                        "left_market": left.get("market") or left.get("market_type"),
+                        "left_period": left_period,
+                        "left_side": left.get("side"),
+                        "left_bookmaker": left.get("bookmaker"),
+                        "right_market": right.get("market") or right.get("market_type"),
+                        "right_period": right_period,
+                        "right_side": right.get("side"),
+                        "right_bookmaker": right.get("bookmaker"),
+                        "rejection_reason": "period mismatch",
+                    })
+    return {"period_mismatch_count": count, "period_mismatch_examples": examples}
+
+
+def _prop_identity(row: dict[str, Any]) -> Any:
+    return row.get("prop_identity") or row.get("market_type")
+
+
+def _prop_period(row: dict[str, Any]) -> Any:
+    return row.get("prop_period") or "full_game"
+
+
+def _norm(value: Any) -> str:
+    return " ".join(str(value or "").lower().split())
+
+
+def _line(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _ranking_score(arb: dict[str, Any]) -> float:
