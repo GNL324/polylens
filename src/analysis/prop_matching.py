@@ -53,8 +53,10 @@ def prop_rejection_reason(left: dict[str, Any], right: dict[str, Any]) -> str | 
             return "event mismatch"
         if _norm(left.get("player")) != _norm(right.get("player")):
             return "player mismatch"
-        if left.get("market_type") != right.get("market_type"):
+        if _prop_identity(left) != _prop_identity(right):
             return "market mismatch"
+        if _prop_period(left) != _prop_period(right):
+            return "period mismatch"
         if _line(left.get("line")) != _line(right.get("line")):
             return "line mismatch"
     if left.get("side") == right.get("side"):
@@ -70,9 +72,18 @@ def _group_key(prop: dict[str, Any]) -> tuple[Any, ...]:
         prop.get("league"),
         prop.get("event_id"),
         _norm(prop.get("player")),
-        prop.get("market_type"),
+        _prop_identity(prop),
+        _prop_period(prop),
         _line(prop.get("line")),
     )
+
+
+def _prop_identity(prop: dict[str, Any]) -> Any:
+    return prop.get("prop_identity") or prop.get("market_type")
+
+
+def _prop_period(prop: dict[str, Any]) -> Any:
+    return prop.get("prop_period") or "full_game"
 
 
 def _reject(prop: dict[str, Any], reason: str) -> dict[str, Any]:

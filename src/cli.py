@@ -45,6 +45,7 @@ from src.analysis.watch_mode import watch_live_arbitrage
 from src.reports.wallet_report import WalletReport
 from src.storage.kalshi_market_data import DEFAULT_KALSHI_DATA_DB
 from src.storage.opportunity_store import OpportunityStore
+from src.storage.opportunity_analytics import opportunity_leaderboard as build_opportunity_leaderboard, opportunity_lifetimes as build_opportunity_lifetimes, opportunity_quality_report as build_opportunity_quality_report, record_scan_analytics
 from src.storage.opportunities import load_recent_alerts as load_prop_recent_alerts, load_recent_opportunities as load_prop_recent_opportunities, opportunity_key as prop_opportunity_key, opportunity_stats as prop_opportunity_stats, record_alert_event, resolve_scanner_profile, save_alert as save_prop_alert, save_opportunity as save_prop_opportunity
 from src.risk import RiskEngine
 from src.trading.executor import KalshiExecutor
@@ -796,6 +797,8 @@ def scan_prop_arb(
     profile: str | None = None,
     sportsbooks: str | None = None,
     db_path: str = "data/opportunities.db",
+    record_analytics: bool = False,
+    inactive_after_seconds: int = 900,
 ) -> dict[str, Any]:
     profile_row = resolve_scanner_profile(profile, db_path=db_path) if profile else None
     if profile and profile_row is None:
@@ -845,6 +848,8 @@ def scan_prop_arb(
     if sportsbook_filter:
         result["sportsbooks_filter"] = sportsbook_filter
     result["provider"] = provider
+    if record_analytics:
+        result["analytics"] = record_scan_analytics(result, db_path=db_path, inactive_after_seconds=inactive_after_seconds)
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -857,14 +862,28 @@ def scan_prop_arb(
     return result
 
 
-def watch_prop_arb(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, provider: str = "odds-api", oddsblaze_sportsbooks: list[str] | None = None, oddsblaze_market_contains: str | None = None, interval: int = 30, bankroll: float | None = None, min_roi: float | None = None, min_profit: float | None = None, max_leg_age_seconds: float | None = None, max_cross_leg_update_gap_seconds: float | None = None, once: bool = False, as_json: bool = False, db_path: str = "data/opportunities.db") -> dict[str, Any]:
+def scan_prop_arb_summary(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "props_fetched": result.get("props_fetched"),
+        "normalized_props": result.get("normalized_props"),
+        "matched_prop_pairs": result.get("matched_prop_pairs"),
+        "true_arb_candidates": len(result.get("prop_arbitrage_candidates") or []),
+        "rejection_reasons": result.get("rejection_reasons"),
+        "provider": result.get("provider"),
+        "sportsbooks_filter": result.get("sportsbooks_filter"),
+        "scan_duration_seconds": result.get("scan_duration_seconds"),
+        "analytics": result.get("analytics"),
+    }
+
+
+def watch_prop_arb(sport_key: str, event_id: str | None = None, bookmaker: str | None = None, region: str = "us", markets: str | None = None, provider: str = "odds-api", oddsblaze_sportsbooks: list[str] | None = None, oddsblaze_market_contains: str | None = None, interval: int = 30, bankroll: float | None = None, min_roi: float | None = None, min_profit: float | None = None, max_leg_age_seconds: float | None = None, max_cross_leg_update_gap_seconds: float | None = None, once: bool = False, as_json: bool = False, db_path: str = "data/opportunities.db", record_analytics: bool = False, inactive_after_seconds: int = 900) -> dict[str, Any]:
     seen: set[str] = set()
     iterations = 0
     alerts_sent = 0
     last_result: dict[str, Any] = {}
     while True:
         iterations += 1
-        result = scan_prop_arb(sport_key, event_id=event_id, bookmaker=bookmaker, region=region, markets=markets, provider=provider, oddsblaze_sportsbooks=oddsblaze_sportsbooks, oddsblaze_market_contains=oddsblaze_market_contains, bankroll=bankroll, min_guaranteed_roi=min_roi, min_profit=min_profit, max_leg_age_seconds=max_leg_age_seconds, max_cross_leg_update_gap_seconds=max_cross_leg_update_gap_seconds, as_json=False)
+        result = scan_prop_arb(sport_key, event_id=event_id, bookmaker=bookmaker, region=region, markets=markets, provider=provider, oddsblaze_sportsbooks=oddsblaze_sportsbooks, oddsblaze_market_contains=oddsblaze_market_contains, bankroll=bankroll, min_guaranteed_roi=min_roi, min_profit=min_profit, max_leg_age_seconds=max_leg_age_seconds, max_cross_leg_update_gap_seconds=max_cross_leg_update_gap_seconds, as_json=False, db_path=db_path, record_analytics=record_analytics, inactive_after_seconds=inactive_after_seconds)
         new_items = []
         for opp in result.get("prop_arbitrage_candidates", []):
             key = prop_opportunity_key(opp)
@@ -919,6 +938,47 @@ def prop_stats(db_path: str = "data/opportunities.db", as_json: bool = False) ->
         print(f"Most common bookmaker pair: {stats['most_common_bookmaker_pair']}")
         print(f"Opportunities by sport: {stats['opportunities_by_sport']}")
     return stats
+
+
+def opportunity_leaderboard(db_path: str = "data/opportunities.db", limit: int = 20, as_json: bool = False) -> dict[str, Any]:
+    result = build_opportunity_leaderboard(db_path=db_path, limit=limit)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        for title, rows in result.items():
+            print(title.replace("_", " ").title())
+            for row in rows[:limit]:
+                label = row.get(title[:-1]) or row.get(title.rstrip("s")) or row.get("sportsbook_pair") or row.get("provider") or row.get("prop_identity") or row.get("player")
+                print(f"- {label}: appearances={row.get('appearances')} avg_roi={row.get('average_roi')} max_roi={row.get('max_roi')} median_roi={row.get('median_roi')} avg_life_s={row.get('average_lifetime_seconds')}")
+    return result
+
+
+def opportunity_lifetimes(db_path: str = "data/opportunities.db", limit: int = 20, as_json: bool = False) -> dict[str, Any]:
+    result = build_opportunity_lifetimes(db_path=db_path, limit=limit)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print("Survival histogram")
+        for bucket, count in result.get("survival_histogram", {}).items():
+            print(f"- {bucket}: {count}")
+        print(f"Average duration seconds: {result.get('average_duration_seconds')}")
+        print("Longest-lived opportunities")
+        for row in result.get("longest_lived", [])[:limit]:
+            print(f"- {row.get('opportunity_id')} {row.get('player')} {row.get('prop_identity')} {row.get('sportsbook_pair')} duration={row.get('duration_seconds')}")
+    return result
+
+
+def opportunity_quality_report(db_path: str = "data/opportunities.db", as_json: bool = False) -> dict[str, Any]:
+    result = build_opportunity_quality_report(db_path=db_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Total rejections: {result.get('total_rejections')}")
+        print(f"Stale leg rejection %: {result.get('stale_leg_rejection_percent')}")
+        print(f"Period mismatch %: {result.get('period_mismatch_percent')}")
+        print(f"Market mismatch %: {result.get('market_mismatch_percent')}")
+        print(f"Invalid side %: {result.get('invalid_side_percent')}")
+    return result
 
 
 def fetch_futures(sport_key: str, bookmaker: str | None = None, region: str = "us", as_json: bool = False, quiet: bool = False) -> dict[str, Any]:
@@ -2236,6 +2296,20 @@ def main() -> None:
     stats_parser.add_argument("--db-path", default="data/polylens.db")
     stats_parser.add_argument("--json", action="store_true")
 
+    opportunity_leaderboard_parser = sub.add_parser("opportunity-leaderboard")
+    opportunity_leaderboard_parser.add_argument("--db-path", default="data/opportunities.db")
+    opportunity_leaderboard_parser.add_argument("--limit", type=int, default=20)
+    opportunity_leaderboard_parser.add_argument("--json", action="store_true")
+
+    opportunity_lifetimes_parser = sub.add_parser("opportunity-lifetimes")
+    opportunity_lifetimes_parser.add_argument("--db-path", default="data/opportunities.db")
+    opportunity_lifetimes_parser.add_argument("--limit", type=int, default=20)
+    opportunity_lifetimes_parser.add_argument("--json", action="store_true")
+
+    opportunity_quality_parser = sub.add_parser("opportunity-quality-report")
+    opportunity_quality_parser.add_argument("--db-path", default="data/opportunities.db")
+    opportunity_quality_parser.add_argument("--json", action="store_true")
+
     telegram_test_parser = sub.add_parser("telegram-test-alert")
     telegram_test_parser.add_argument("--db-path", default="data/opportunities.db")
     telegram_test_parser.add_argument("--json", action="store_true")
@@ -2414,9 +2488,9 @@ def main() -> None:
     elif args.command == "debug-player-props":
         debug_player_props(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, as_json=args.json)
     elif args.command == "scan-prop-arb":
-        scan_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, provider=args.provider, oddsblaze_sportsbooks=_split_csv_values(args.oddsblaze_sportsbooks), oddsblaze_market_contains=args.oddsblaze_market_contains, bankroll=args.bankroll, min_guaranteed_roi=args.min_roi if args.min_roi is not None else args.min_guaranteed_roi, min_profit=args.min_profit, max_leg_age_seconds=args.max_leg_age_seconds, max_cross_leg_update_gap_seconds=args.max_cross_leg_update_gap_seconds, as_json=args.json, profile=args.profile, sportsbooks=args.sportsbooks, db_path=args.db_path)
+        scan_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, provider=args.provider, oddsblaze_sportsbooks=_split_csv_values(args.oddsblaze_sportsbooks), oddsblaze_market_contains=args.oddsblaze_market_contains, bankroll=args.bankroll, min_guaranteed_roi=args.min_roi if args.min_roi is not None else args.min_guaranteed_roi, min_profit=args.min_profit, max_leg_age_seconds=args.max_leg_age_seconds, max_cross_leg_update_gap_seconds=args.max_cross_leg_update_gap_seconds, as_json=args.json, profile=args.profile, sportsbooks=args.sportsbooks, db_path=args.db_path, record_analytics=True)
     elif args.command == "watch-prop-arb":
-        watch_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, provider=args.provider, oddsblaze_sportsbooks=_split_csv_values(args.oddsblaze_sportsbooks), oddsblaze_market_contains=args.oddsblaze_market_contains, interval=args.interval, bankroll=args.bankroll, min_roi=args.min_roi, min_profit=args.min_profit, max_leg_age_seconds=args.max_leg_age_seconds, max_cross_leg_update_gap_seconds=args.max_cross_leg_update_gap_seconds, once=args.once, as_json=args.json, db_path=args.db_path)
+        watch_prop_arb(args.sport_key, event_id=args.event_id, bookmaker=args.bookmaker, region=args.region, markets=args.markets, provider=args.provider, oddsblaze_sportsbooks=_split_csv_values(args.oddsblaze_sportsbooks), oddsblaze_market_contains=args.oddsblaze_market_contains, interval=args.interval, bankroll=args.bankroll, min_roi=args.min_roi, min_profit=args.min_profit, max_leg_age_seconds=args.max_leg_age_seconds, max_cross_leg_update_gap_seconds=args.max_cross_leg_update_gap_seconds, once=args.once, as_json=args.json, db_path=args.db_path, record_analytics=True)
     elif args.command == "fetch-futures":
         fetch_futures(args.sport_key, bookmaker=args.bookmaker, region=args.region, as_json=args.json)
     elif args.command == "scan-sportsbook-arb":
@@ -2447,6 +2521,12 @@ def main() -> None:
         recent_prop_alerts(limit=args.limit, db_path=args.db_path if args.db_path != "data/polylens.db" else "data/opportunities.db", as_json=args.json)
     elif args.command == "opportunity-stats":
         prop_stats(db_path=args.db_path if args.db_path != "data/polylens.db" else "data/opportunities.db", as_json=args.json)
+    elif args.command == "opportunity-leaderboard":
+        opportunity_leaderboard(db_path=args.db_path, limit=args.limit, as_json=args.json)
+    elif args.command == "opportunity-lifetimes":
+        opportunity_lifetimes(db_path=args.db_path, limit=args.limit, as_json=args.json)
+    elif args.command == "opportunity-quality-report":
+        opportunity_quality_report(db_path=args.db_path, as_json=args.json)
     elif args.command == "telegram-test-alert":
         telegram_test_alert(as_json=args.json, db_path=args.db_path)
     elif args.command == "risk-status":

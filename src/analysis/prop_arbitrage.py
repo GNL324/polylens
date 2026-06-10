@@ -27,6 +27,7 @@ def scan_prop_arbitrage(
     rejects = match_result["rejects"]
     metrics = match_result["metrics"]
     arbs: list[dict[str, Any]] = []
+    candidate_snapshots: list[dict[str, Any]] = []
     pair_rejects: list[dict[str, Any]] = []
     for pair in pairs:
         over = pair["over"]
@@ -45,15 +46,24 @@ def scan_prop_arbitrage(
             pair_rejects.append({
                 "player": pair.get("player"),
                 "market_type": pair.get("market_type"),
+                "prop_identity": _prop_identity(over) or _prop_identity(under),
+                "prop_period": _prop_period(over) or _prop_period(under),
                 "line": pair.get("line"),
+                "over_book": over.get("bookmaker"),
+                "under_book": under.get("bookmaker"),
+                "over_odds": over.get("odds"),
+                "under_odds": under.get("odds"),
                 "rejection_reason": "total implied probability >= 1",
                 "implied_probability_sum": total,
+                "guaranteed_roi": round((1 - total) / total, 6) if total else None,
             })
             continue
         arb = {
             "opportunity_type": "true_arbitrage",
             "player": pair.get("player"),
             "prop_type": pair.get("market_type"),
+            "prop_identity": _prop_identity(over) or _prop_identity(under) or pair.get("market_type"),
+            "prop_period": _prop_period(over) or _prop_period(under) or "full_game",
             "line": pair.get("line"),
             "over_book": over.get("bookmaker"),
             "over_source": over.get("source") or over.get("provider") or "odds-api",
@@ -72,14 +82,34 @@ def scan_prop_arbitrage(
         if bankroll is not None:
             arb.update(_stake_size(float(over.get("implied_probability") or 0), float(under.get("implied_probability") or 0), bankroll, total))
         arb["ranking_score"] = _ranking_score(arb)
+        candidate_snapshots.append(dict(arb))
         arbs.append(arb)
     candidates_before = len(arbs)
     if min_guaranteed_roi is not None:
         arbs = [arb for arb in arbs if (arb.get("guaranteed_roi") or 0) >= min_guaranteed_roi]
     if min_profit is not None:
         arbs = [arb for arb in arbs if (arb.get("guaranteed_profit_amount") or 0) >= min_profit]
+    final_keys = {_analytics_candidate_key(arb) for arb in arbs}
+    filter_rejects = []
+    for arb in candidate_snapshots:
+        if _analytics_candidate_key(arb) in final_keys:
+            continue
+        filter_rejects.append({
+            "player": arb.get("player"),
+            "market_type": arb.get("prop_type") or arb.get("market_type"),
+            "prop_identity": arb.get("prop_identity") or (arb.get("over") or {}).get("prop_identity") or (arb.get("under") or {}).get("prop_identity") or arb.get("prop_type"),
+            "prop_period": arb.get("prop_period") or (arb.get("over") or {}).get("prop_period") or (arb.get("under") or {}).get("prop_period") or "full_game",
+            "line": arb.get("line"),
+            "over_book": arb.get("over_book"),
+            "under_book": arb.get("under_book"),
+            "over_odds": arb.get("over_odds"),
+            "under_odds": arb.get("under_odds"),
+            "implied_probability_sum": arb.get("implied_probability_sum"),
+            "guaranteed_roi": arb.get("guaranteed_roi"),
+            "rejection_reason": "final filter",
+        })
     candidates_after = len(arbs)
-    reasons = Counter(item["rejection_reason"] for item in rejects + pair_rejects)
+    reasons = Counter(item["rejection_reason"] for item in rejects + pair_rejects + filter_rejects)
     return {
         "props_fetched": len(props),
         "normalized_props": len(props),
@@ -105,8 +135,10 @@ def scan_prop_arbitrage(
         "market_mismatch_examples": market_mismatch_diagnostics["market_mismatch_examples"],
         "period_mismatch_count": period_mismatch_diagnostics["period_mismatch_count"],
         "period_mismatch_examples": period_mismatch_diagnostics["period_mismatch_examples"],
+        "pre_filter_candidates": candidate_snapshots,
         "prop_arbitrage_candidates": sorted(arbs, key=lambda item: (item.get("guaranteed_roi") or 0, item.get("guaranteed_profit_amount") or 0, item.get("last_update") or ""), reverse=True),
-        "diagnostics": [_compact_match_reject(item) for item in rejects] + pair_rejects,
+        "analytics_rejected_candidates": pair_rejects + filter_rejects + [_compact_match_reject(item) for item in rejects],
+        "diagnostics": [_compact_match_reject(item) for item in rejects] + [_compact_pair_reject(item) for item in pair_rejects] + [_compact_pair_reject(item) for item in filter_rejects],
     }
 
 
@@ -226,6 +258,18 @@ def _format_timestamp(value: datetime | None) -> str | None:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _analytics_candidate_key(arb: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        arb.get("player"),
+        arb.get("prop_type") or arb.get("market_type"),
+        arb.get("line"),
+        arb.get("over_book"),
+        arb.get("under_book"),
+        arb.get("over_odds"),
+        arb.get("under_odds"),
+    )
+
+
 def _compact_match_reject(item: dict[str, Any]) -> dict[str, Any]:
     left = item.get("left") or {}
     right = item.get("right") or {}
@@ -242,6 +286,14 @@ def _compact_match_reject(item: dict[str, Any]) -> dict[str, Any]:
         "right_line": right.get("line"),
         "left_side": left.get("side"),
         "right_side": right.get("side"),
+    }
+
+
+def _compact_pair_reject(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: item.get(key)
+        for key in ("player", "market_type", "line", "rejection_reason", "implied_probability_sum")
+        if item.get(key) is not None
     }
 
 

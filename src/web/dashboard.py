@@ -8,6 +8,7 @@ from src.services.results_service import fetch_trades, summarize_results
 from src.web.controls import automation_status, health_badges, prop_watch_service_card, run_allowed_command
 from src.web.db import OPPORTUNITIES_DB_PATH, POLYLENS_DB_PATH, load_json, rows_or_empty
 from src.web.risk import risk_payload
+from src.storage.opportunity_analytics import opportunity_analytics_dashboard
 from src.storage.opportunities import (
     alert_metrics,
     archive_opportunity,
@@ -49,7 +50,7 @@ from src.web.sportsbook_registry import (
     sportsbook_url,
 )
 
-NAV_ITEMS = ("Live Opportunities", "Results / P&L", "Operations", "Profile Performance", "Opportunity Explorer", "Scanner Config", "Alerts", "Risk Engine", "Bot Control", "Scanner Status", "Alerts / Audit")
+NAV_ITEMS = ("Live Opportunities", "Results / P&L", "Operations", "Profile Performance", "Opportunity Explorer", "Opportunity Analytics", "Scanner Config", "Alerts", "Risk Engine", "Bot Control", "Scanner Status", "Alerts / Audit")
 
 SPORT_CATALOG: tuple[dict[str, str], ...] = (
     {"key": "basketball_nba", "label": "NBA"},
@@ -149,6 +150,8 @@ def create_dashboard(db_path: str | Path = POLYLENS_DB_PATH, prop_db_path: str |
                     _render_profile_performance(prop_db_path)
                 elif selected["page"] == "Opportunity Explorer":
                     _render_opportunity_explorer(prop_db_path)
+                elif selected["page"] == "Opportunity Analytics":
+                    _render_opportunity_analytics(prop_db_path)
                 elif selected["page"] == "Scanner Config":
                     _render_scanner_config(prop_db_path)
                 elif selected["page"] == "Alerts":
@@ -760,6 +763,45 @@ def _render_opportunity_explorer(prop_db_path: str | Path) -> None:
 
     ui.button("Search", icon="search", on_click=search).props("outline")
     search()
+
+
+def _render_opportunity_analytics(prop_db_path: str | Path) -> None:
+    from nicegui import ui
+
+    ui.label("Opportunity Analytics").classes("text-xl font-semibold")
+    data = opportunity_analytics_dashboard(str(prop_db_path))
+    leaderboard = data.get("leaderboard") or {}
+    lifetimes = data.get("lifetimes") or {}
+
+    with ui.row().classes("gap-4 w-full"):
+        _analytics_table("Top Sportsbook Pairs", leaderboard.get("sportsbook_pairs") or [])
+        _analytics_table("Top Prop Types", leaderboard.get("prop_types") or [])
+    with ui.row().classes("gap-4 w-full"):
+        _analytics_table("Longest-Lived Opportunities", lifetimes.get("longest_lived") or [])
+        _analytics_table("Highest ROI Opportunities", data.get("highest_roi") or [])
+
+    ui.label("Opportunities Per Day").classes("text-lg font-semibold")
+    _analytics_table("Daily Counts", data.get("opportunities_per_day") or [])
+    with ui.row().classes("gap-4 w-full"):
+        _analytics_table("ROI Distribution", data.get("roi_distribution") or [])
+        lifetime_rows = [{"bucket": key, "count": value} for key, value in (data.get("lifetime_distribution") or {}).items()]
+        _analytics_table("Lifetime Distribution", lifetime_rows)
+
+
+def _analytics_table(title: str, rows: list[dict[str, Any]]) -> None:
+    from nicegui import ui
+
+    with ui.column().classes("gap-2").style("min-width: 360px; flex: 1"):
+        ui.label(title).classes("text-lg font-semibold")
+        if not rows:
+            ui.label("No data yet").classes("text-gray-600")
+            return
+        display_rows = [{key: _format_metric(key, value) for key, value in row.items() if not key.endswith("_json")} for row in rows]
+        ui.table(
+            columns=[{"name": key, "label": key.replace("_", " ").title(), "field": key} for key in display_rows[0]],
+            rows=display_rows,
+            pagination=10,
+        ).classes("w-full")
 
 
 def _render_scanner_config(prop_db_path: str | Path) -> None:
