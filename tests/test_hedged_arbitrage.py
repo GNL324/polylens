@@ -73,13 +73,23 @@ def test_classification_groups_positive_ev_separately():
     assert len(groups["positive_ev_candidates"]) == 1
 
 
+@patch("src.cli.scan_multibook_arb")
 @patch("src.cli.scan_live_arb")
-def test_scan_true_arb_cli_smoke(mock_scan_live, capsys):
+def test_scan_true_arb_cli_smoke(mock_scan_live, mock_scan_multibook, capsys):
     from src.cli import scan_true_arb
 
     mock_scan_live.return_value = {"top_scored_candidates": [{"venue_pair": "polymarket_kalshi", "confidence_band": "high", "polymarket_implied_yes_price": 0.42, "kalshi_implied_no_price": 0.53}]}
+    mock_scan_multibook.return_value = {"sportsbook_multibook_arbs": [], "synthetic_field_arbs": [], "incomplete_hedges": []}
 
     result = scan_true_arb(keyword="knicks", sport_key="basketball_nba", bankroll=1000)
 
     assert len(result["true_arbitrage_candidates"]) == 1
     assert "True arbitrage candidates: 1" in capsys.readouterr().out
+    mock_scan_multibook.assert_called_once_with(
+        sport_key="basketball_nba",
+        keyword="knicks",
+        limit=100,
+        bankroll=1000,
+        min_guaranteed_roi=None,
+        as_json=False,
+    )
