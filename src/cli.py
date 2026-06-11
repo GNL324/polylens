@@ -2394,6 +2394,12 @@ def main() -> None:
     strategy_feedback_parser.add_argument("--max-adjustment", type=float, default=0.10)
     strategy_feedback_parser.add_argument("--json", action="store_true")
 
+    short_crypto_feedback_loop_parser = sub.add_parser("short-crypto-feedback-loop")
+    short_crypto_feedback_loop_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
+    short_crypto_feedback_loop_parser.add_argument("--min-trades", type=int, default=25)
+    short_crypto_feedback_loop_parser.add_argument("--max-adjustment", type=float, default=0.10)
+    short_crypto_feedback_loop_parser.add_argument("--json", action="store_true")
+
     short_crypto_paper_diagnostics_parser = sub.add_parser("short-crypto-paper-diagnostics")
     short_crypto_paper_diagnostics_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
     short_crypto_paper_diagnostics_parser.add_argument("--json", action="store_true")
@@ -2630,6 +2636,18 @@ def main() -> None:
         from src.analysis.strategy_feedback import strategy_feedback_report
 
         result = strategy_feedback_report(
+            args.db_path,
+            min_trades=args.min_trades,
+            max_adjustment=args.max_adjustment,
+        )
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(result)
+    elif args.command == "short-crypto-feedback-loop":
+        from src.analysis.short_crypto_feedback_loop import short_crypto_feedback_loop
+
+        result = short_crypto_feedback_loop(
             args.db_path,
             min_trades=args.min_trades,
             max_adjustment=args.max_adjustment,
