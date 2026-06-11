@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from src.risk import RiskEngine
+from src.sqlite_utils import closing_connection
 from src.storage.opportunities import load_recent_alerts as load_prop_alerts
 from src.storage.opportunities import load_recent_opportunities as load_prop_opportunities
 from src.storage.opportunity_store import OpportunityStore
@@ -140,8 +141,7 @@ def _recent_scan_runs(db_path: str, limit: int = 10) -> list[dict[str, Any]]:
     if not Path(db_path).exists():
         return []
     try:
-        with sqlite3.connect(db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        with closing_connection(db_path, row_factory=sqlite3.Row) as conn:
             rows = conn.execute(
                 "SELECT timestamp, scan_mode, candidate_count, alert_count FROM scan_runs ORDER BY id DESC LIMIT ?",
                 (limit,),

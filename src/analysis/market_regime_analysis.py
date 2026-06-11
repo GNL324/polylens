@@ -12,6 +12,7 @@ from typing import Any
 
 from src.analysis.kalshi_account_history_export import DEFAULT_ACCOUNT_HISTORY_PATH, load_kalshi_account_history
 from src.analysis.kalshi_account_analytics import build_kalshi_account_report
+from src.sqlite_utils import closing_connection
 from src.storage.kalshi_market_data import DEFAULT_KALSHI_DATA_DB
 
 
@@ -302,8 +303,7 @@ def _load_price_series(db_path: str) -> dict[str, list[dict[str, Any]]]:
     path = Path(db_path)
     if not path.exists():
         return {}
-    with sqlite3.connect(path) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing_connection(path, row_factory=sqlite3.Row) as conn:
         try:
             rows = [dict(row) for row in conn.execute("SELECT * FROM kalshi_price_series ORDER BY ticker, timestamp, id").fetchall()]
         except sqlite3.OperationalError:

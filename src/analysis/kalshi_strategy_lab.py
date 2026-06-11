@@ -9,6 +9,7 @@ from typing import Any
 
 from src.analysis.kalshi_account_history_export import DEFAULT_ACCOUNT_HISTORY_PATH, load_kalshi_account_history
 from src.analysis.kalshi_edge_analysis import DEFAULT_EDGE_REPORT_JSON
+from src.sqlite_utils import closing_connection
 from src.storage.kalshi_market_data import DEFAULT_KALSHI_DATA_DB
 
 
@@ -297,7 +298,7 @@ def _snapshot_summary(path: str | Path) -> dict[str, Any]:
         return {"available": False, "price_points": 0, "tickers": 0}
     if target.suffix.lower() not in {".db", ".sqlite", ".sqlite3"}:
         return {"available": True, "price_points": None, "tickers": None}
-    with sqlite3.connect(target) as conn:
+    with closing_connection(target, row_factory=sqlite3.Row) as conn:
         try:
             count = conn.execute("SELECT COUNT(*) FROM kalshi_price_series").fetchone()[0]
             tickers = conn.execute("SELECT COUNT(DISTINCT ticker) FROM kalshi_price_series").fetchone()[0]

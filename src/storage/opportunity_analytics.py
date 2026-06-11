@@ -8,13 +8,15 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+from src.sqlite_utils import closing_connection
+
 DEFAULT_DB_PATH = "data/opportunities.db"
 
 
 def init_opportunity_analytics_db(db_path: str = DEFAULT_DB_PATH) -> None:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
+    with closing_connection(path, row_factory=None) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS opportunity_snapshots (
@@ -94,7 +96,7 @@ def record_scan_analytics(
     init_opportunity_analytics_db(db_path)
     timestamp = observed_at or datetime.now(timezone.utc).isoformat()
     rows = _snapshot_rows(result, timestamp, scan_run_id)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.executemany(
             """
             INSERT INTO opportunity_snapshots
@@ -146,13 +148,13 @@ def mark_inactive(conn_or_path: sqlite3.Connection | str = DEFAULT_DB_PATH, obse
         )
         return int(cur.rowcount or 0)
     init_opportunity_analytics_db(conn_or_path)
-    with sqlite3.connect(conn_or_path) as conn:
+    with closing_connection(conn_or_path, row_factory=None) as conn:
         return mark_inactive(conn, timestamp.isoformat(), inactive_after_seconds)
 
 
 def opportunity_leaderboard(db_path: str = DEFAULT_DB_PATH, limit: int = 20) -> dict[str, Any]:
     init_opportunity_analytics_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         _backfill_historical_if_needed(conn)
         final_rows = [dict(row) for row in conn.execute("SELECT * FROM opportunity_snapshots WHERE stage = 'final'")]
@@ -168,7 +170,7 @@ def opportunity_leaderboard(db_path: str = DEFAULT_DB_PATH, limit: int = 20) -> 
 
 def opportunity_lifetimes(db_path: str = DEFAULT_DB_PATH, limit: int = 20) -> dict[str, Any]:
     init_opportunity_analytics_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         _backfill_historical_if_needed(conn)
         rows = [dict(row) for row in conn.execute("SELECT * FROM opportunity_lifecycle")]
@@ -199,7 +201,7 @@ def opportunity_lifetimes(db_path: str = DEFAULT_DB_PATH, limit: int = 20) -> di
 
 def opportunity_quality_report(db_path: str = DEFAULT_DB_PATH) -> dict[str, Any]:
     init_opportunity_analytics_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         _backfill_historical_if_needed(conn)
         rows = conn.execute("SELECT rejection_reason, COUNT(*) FROM opportunity_snapshots WHERE stage = 'rejected' GROUP BY rejection_reason").fetchall()
         total = conn.execute("SELECT COUNT(*) FROM opportunity_snapshots WHERE stage = 'rejected'").fetchone()[0] or 0
@@ -220,7 +222,7 @@ def opportunity_analytics_dashboard(db_path: str = DEFAULT_DB_PATH) -> dict[str,
     init_opportunity_analytics_db(db_path)
     leaderboard = opportunity_leaderboard(db_path=db_path, limit=10)
     lifetimes = opportunity_lifetimes(db_path=db_path, limit=10)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.row_factory = sqlite3.Row
         _backfill_historical_if_needed(conn)
         per_day = [dict(row) for row in conn.execute(

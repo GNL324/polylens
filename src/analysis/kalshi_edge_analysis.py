@@ -10,6 +10,7 @@ from statistics import mean
 from typing import Any
 
 from src.analysis.kalshi_account_history_export import DEFAULT_ACCOUNT_HISTORY_PATH, load_kalshi_account_history
+from src.sqlite_utils import closing_connection
 from src.storage.kalshi_market_data import DEFAULT_KALSHI_DATA_DB
 
 
@@ -241,8 +242,7 @@ def _load_json_snapshots(path: Path) -> list[dict[str, Any]]:
 
 def _load_sqlite_snapshots(path: Path) -> list[dict[str, Any]]:
     rows = []
-    with sqlite3.connect(path) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing_connection(path, row_factory=sqlite3.Row) as conn:
         for table in ("kalshi_price_series", "kalshi_market_snapshots", "kalshi_orderbook_snapshots"):
             try:
                 rows.extend(_normalize_snapshot(dict(row)) for row in conn.execute(f"SELECT * FROM {table} ORDER BY ticker, timestamp").fetchall())

@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from src.sqlite_utils import closing_connection
+
 from src.adapters.polymarket_live import (
     BUY,
     PolymarketLiveAdapter,
@@ -372,7 +374,7 @@ def _base_not_ready(
 
 def _duplicate_exists(db_path: str, key: str) -> bool:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    with closing_connection(db_path, row_factory=None) as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS polymarket_first_live_keys (dedupe_key TEXT PRIMARY KEY, created_at REAL NOT NULL)")
         row = conn.execute("SELECT 1 FROM polymarket_first_live_keys WHERE dedupe_key=? LIMIT 1", (key,)).fetchone()
     return row is not None

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+from src.sqlite_utils import closing_connection
 
 DEFAULT_KALSHI_DATA_DB = "data/kalshi_market_data.db"
 
@@ -13,10 +16,10 @@ class KalshiMarketDataStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.init_db()
 
-    def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        with closing_connection(self.db_path, row_factory=sqlite3.Row) as conn:
+            yield conn
 
     def init_db(self) -> None:
         with self.connect() as conn:

@@ -150,6 +150,14 @@ def test_by_strategy_label_report_grouping(tmp_path, monkeypatch):
     assert group["roi"] == 0.51 / intent["paper_cost"]
     assert group["pnl"] == 0.51
     assert group["expectancy"] == 0.51
+    assert report["strategy_leaderboard"][0] == {
+        "strategy_label": "down_ask50_prob55",
+        "closed_trades": 1,
+        "win_rate": 1.0,
+        "roi": 0.51 / intent["paper_cost"],
+        "expectancy": 0.51,
+        "pnl": 0.51,
+    }
 
 
 def test_volatility_filter_rejection_counter(tmp_path, monkeypatch):

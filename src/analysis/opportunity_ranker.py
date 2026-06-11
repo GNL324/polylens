@@ -9,6 +9,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
+from src.sqlite_utils import closing_connection
 
 DEFAULT_REPORT_JSON = "data/reports/opportunity_rankings.json"
 DEFAULT_REPORT_CSV = "data/reports/opportunity_rankings.csv"
@@ -120,8 +121,7 @@ def _load_sqlite_candidates(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    with sqlite3.connect(path) as conn:
-        conn.row_factory = sqlite3.Row
+    with closing_connection(path, row_factory=sqlite3.Row) as conn:
         tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if "opportunities" not in tables:
             return []

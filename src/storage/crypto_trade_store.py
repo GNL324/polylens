@@ -1,8 +1,10 @@
 from __future__ import annotations
 import json, sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+from src.sqlite_utils import closing_connection
 DEFAULT_DB_PATH = "data/polylens.db"
 class CryptoTradeStore:
     def __init__(self, db_path=DEFAULT_DB_PATH):
@@ -40,8 +42,10 @@ class CryptoTradeStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM crypto_price_ticks ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
-    def _connect(self):
-        return sqlite3.connect(self.db_path)
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        with closing_connection(self.db_path, row_factory=None) as conn:
+            yield conn
 def _n(v):
     if v is None or v == "":
         return None

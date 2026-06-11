@@ -138,7 +138,8 @@ def test_health_badges_missing_and_stale(tmp_path, monkeypatch: pytest.MonkeyPat
 
 def test_prop_watch_service_card_uses_allowlisted_status_and_metrics(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "opportunities.db"
-    fixed_now = datetime(2026, 6, 6, 11, 30, tzinfo=timezone.utc)
+    today = datetime.now(timezone.utc).date()
+    fixed_now = datetime(today.year, today.month, today.day, 11, 30, tzinfo=timezone.utc)
     save_prop_arbitrage_scan_result(
         {
             "props_fetched": 10,

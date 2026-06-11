@@ -1075,6 +1075,7 @@ def performance_report(db_path: str = DEFAULT_DB_PATH, *, now_ts: float | None =
         "by_asset": _group_report(trades, settlement_by_trade, "asset"),
         "by_window": _group_report(trades, settlement_by_trade, "window_minutes"),
         "by_strategy_label": _strategy_group_report(trades, settlement_by_trade),
+        "strategy_leaderboard": _strategy_leaderboard_report(trades, settlement_by_trade),
         "calibration_buckets": _calibration_buckets(closed, settlement_by_trade),
         "sample_unsettled_trades": breakdown["sample_unsettled_trades"],
         "warnings": [],
@@ -1328,6 +1329,31 @@ def _strategy_group_report(trades: list[dict[str, Any]], settlements: dict[int, 
             "expectancy": expectancy,
         }
     return out
+
+
+def _strategy_leaderboard_report(trades: list[dict[str, Any]], settlements: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+    groups = _strategy_group_report(trades, settlements)
+    rows = []
+    for label, metrics in groups.items():
+        rows.append(
+            {
+                "strategy_label": label,
+                "closed_trades": metrics["closed_trades"],
+                "win_rate": metrics["win_rate"],
+                "roi": metrics["roi"],
+                "expectancy": metrics["expectancy"],
+                "pnl": metrics["pnl"],
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda item: (
+            item["roi"] if item["roi"] is not None else float("-inf"),
+            item["expectancy"] if item["expectancy"] is not None else float("-inf"),
+            item["closed_trades"],
+        ),
+        reverse=True,
+    )
 
 
 def _group_report(trades: list[dict[str, Any]], settlements: dict[int, dict[str, Any]], key: str) -> dict[str, Any]:
