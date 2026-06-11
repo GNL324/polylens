@@ -8,6 +8,7 @@ import src.analysis.short_crypto_paper as paper
 from src.analysis.short_crypto_paper import (
     PaperConfig,
     ShortCryptoPaperStore,
+    derive_strategy_label,
     performance_report,
     run_paper,
     validate_strategy_filters,
@@ -127,6 +128,85 @@ def test_strategy_label_persisted_in_raw_json(tmp_path, monkeypatch):
     assert payload["strategy_label"] == "down_ask50_prob55"
 
 
+def test_explicit_strategy_label_is_preserved() -> None:
+    cfg = PaperConfig(
+        venues=["polymarket"],
+        assets=["BTC"],
+        windows=[5],
+        strategy_label="custom_research_label",
+        directions=("down",),
+        max_entry_price=0.50,
+        max_model_probability=0.55,
+    )
+
+    assert derive_strategy_label(cfg) == "custom_research_label"
+
+
+def test_missing_strategy_label_derives_baseline(tmp_path, monkeypatch):
+    cfg = PaperConfig(
+        venues=["polymarket"],
+        assets=["BTC"],
+        windows=[5],
+        max_trades=1,
+        min_edge=-1.0,
+        db_path=str(tmp_path / "paper.db"),
+    )
+
+    result = _run_with_markets(tmp_path, cfg, [_market()], monkeypatch)
+
+    assert result["strategy_label"] == "baseline"
+    with ShortCryptoPaperStore(str(tmp_path / "paper.db")).connect() as conn:
+        row = conn.execute("SELECT strategy_label, raw_json FROM paper_trades").fetchone()
+    payload = json.loads(row["raw_json"])
+    assert row["strategy_label"] == "baseline"
+    assert payload["strategy_label"] == "baseline"
+
+
+def test_missing_strategy_label_derives_filter_based_label(tmp_path, monkeypatch):
+    cfg = PaperConfig(
+        venues=["polymarket"],
+        assets=["BTC"],
+        windows=[5],
+        max_trades=1,
+        min_edge=-1.0,
+        db_path=str(tmp_path / "paper.db"),
+        directions=("down",),
+        max_entry_price=0.50,
+        max_model_probability=0.55,
+    )
+
+    result = _run_with_markets(tmp_path, cfg, [_market()], monkeypatch)
+
+    assert result["strategy_label"] == "down_only_ask50_prob55"
+    with ShortCryptoPaperStore(str(tmp_path / "paper.db")).connect() as conn:
+        row = conn.execute("SELECT strategy_label FROM paper_trades").fetchone()
+    assert row["strategy_label"] == "down_only_ask50_prob55"
+
+
+def test_derived_strategy_label_is_deterministic() -> None:
+    first = PaperConfig(
+        venues=["polymarket"],
+        assets=["BTC"],
+        windows=[5],
+        directions=("down",),
+        max_entry_price=0.50,
+        max_model_probability=0.55,
+        require_volatility_above_median=True,
+    )
+    second = PaperConfig(
+        venues=["kalshi"],
+        assets=["ETH"],
+        windows=[15],
+        directions=("down",),
+        max_entry_price=0.50,
+        max_model_probability=0.55,
+        require_volatility_above_median=True,
+    )
+
+    assert derive_strategy_label(first) == "down_only_ask50_prob55_vol_above_median"
+    assert derive_strategy_label(first) == derive_strategy_label(second)
+
+
 def test_by_strategy_label_report_grouping(tmp_path, monkeypatch):
     store = ShortCryptoPaperStore(str(tmp_path / "paper.db"))
     cfg = PaperConfig(venues=["polymarket"], assets=["BTC"], windows=[5], db_path=str(tmp_path / "paper.db"))
@@ -200,7 +280,7 @@ def test_default_runner_behavior_unchanged_without_filters(tmp_path, monkeypatch
     assert result["rejected_by_direction"] == 0
     assert result["rejected_by_model_probability"] == 0
     assert result["rejected_by_entry_price"] == 0
-    assert result["strategy_label"] is None
+    assert result["strategy_label"] == "baseline"
 
 
 def test_migration_adds_strategy_label_and_backfills_raw_json(tmp_path):

@@ -362,6 +362,9 @@ def run_paper(config: PaperConfig) -> dict[str, Any]:
     rejected = 0
     errors: list[dict[str, Any]] = []
     counters = _debug_counters()
+    strategy_label = derive_strategy_label(config)
+    counters["strategy_label"] = strategy_label
+    counters["strategy_filters"] = _strategy_filter_summary(config)
     counters["max_market_lead_time_minutes"] = float(config.max_market_lead_time_minutes)
     markets = discover_markets(config, errors, counters)
     _finalize_lead_time_stats(counters)
@@ -381,8 +384,6 @@ def run_paper(config: PaperConfig) -> dict[str, Any]:
     spots = fetch_spot_prices(config.assets)
     exposure = store.open_exposure()
     volatility_median = _historical_volatility_median(config.db_path) if config.require_volatility_above_median else None
-    counters["strategy_label"] = config.strategy_label
-    counters["strategy_filters"] = _strategy_filter_summary(config)
 
     for market in markets:
         intent = build_intent(market, spots.get(market.asset))
@@ -407,8 +408,7 @@ def run_paper(config: PaperConfig) -> dict[str, Any]:
             _count_strategy_rejection(counters, strategy_reason)
             rejected += 1
             continue
-        if config.strategy_label:
-            intent["strategy_label"] = config.strategy_label
+        intent["strategy_label"] = strategy_label
         signal_id = store.save_signal(intent, run_id=run_id, status="accepted")
         try:
             store.save_trade(intent, signal_id=signal_id, run_id=run_id)
@@ -773,7 +773,39 @@ def _strategy_filter_summary(config: PaperConfig) -> dict[str, Any]:
         "min_entry_price": config.min_entry_price,
         "require_volatility_above_median": config.require_volatility_above_median,
         "strategy_label": config.strategy_label,
+        "derived_strategy_label": derive_strategy_label(config),
     }
+
+
+def derive_strategy_label(config: PaperConfig) -> str:
+    explicit = _clean_strategy_label(config.strategy_label)
+    if explicit:
+        return explicit
+
+    parts: list[str] = []
+    directions = tuple(str(item).strip().lower() for item in config.directions or () if str(item).strip())
+    if len(directions) == 1:
+        parts.append(f"{directions[0]}_only")
+    elif len(directions) > 1:
+        parts.append("dir_" + "_".join(sorted(directions)))
+
+    if config.max_entry_price is not None:
+        parts.append(f"ask{_percent_label(config.max_entry_price)}")
+    if config.min_entry_price is not None:
+        parts.append(f"minask{_percent_label(config.min_entry_price)}")
+    if config.max_model_probability is not None:
+        parts.append(f"prob{_percent_label(config.max_model_probability)}")
+    if config.require_volatility_above_median:
+        parts.append("vol_above_median")
+
+    return "_".join(parts) if parts else "baseline"
+
+
+def _percent_label(value: float) -> str:
+    percentage = float(value) * 100
+    if percentage.is_integer():
+        return str(int(percentage))
+    return f"{percentage:.2f}".rstrip("0").rstrip(".").replace(".", "p")
 
 
 def _entry_volatility(intent: dict[str, Any]) -> float | None:
