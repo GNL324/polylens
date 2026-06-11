@@ -2388,6 +2388,12 @@ def main() -> None:
     short_crypto_paper_report_parser.add_argument("--json", action="store_true")
     short_crypto_paper_report_parser.add_argument("--verbose", action="store_true")
 
+    strategy_feedback_parser = sub.add_parser("strategy-feedback")
+    strategy_feedback_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
+    strategy_feedback_parser.add_argument("--min-trades", type=int, default=25)
+    strategy_feedback_parser.add_argument("--max-adjustment", type=float, default=0.10)
+    strategy_feedback_parser.add_argument("--json", action="store_true")
+
     short_crypto_paper_diagnostics_parser = sub.add_parser("short-crypto-paper-diagnostics")
     short_crypto_paper_diagnostics_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
     short_crypto_paper_diagnostics_parser.add_argument("--json", action="store_true")
@@ -2616,6 +2622,18 @@ def main() -> None:
         result = performance_report(args.db_path)
         if args.verbose:
             result.update(verbose_report_extensions(args.db_path, refresh_features=True))
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(result)
+    elif args.command == "strategy-feedback":
+        from src.analysis.strategy_feedback import strategy_feedback_report
+
+        result = strategy_feedback_report(
+            args.db_path,
+            min_trades=args.min_trades,
+            max_adjustment=args.max_adjustment,
+        )
         if args.json:
             print(json.dumps(result, indent=2, sort_keys=True))
         else:
