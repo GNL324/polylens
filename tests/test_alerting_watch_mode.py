@@ -282,3 +282,89 @@ def test_prop_alert_different_line():
     changed_line = _prop_opportunity(line=3.5)
     allowed, _ = should_alert(changed_line)
     assert allowed is True
+
+
+# ===== Crypto-specific fingerprinting tests =====
+
+def _crypto_opportunity(**overrides):
+    """Create a crypto opportunity for fingerprinting tests."""
+    opportunity = {
+        "asset": "BTC",
+        "venue": "polymarket",
+        "direction": "up",
+        "window_minutes": 5,
+        "market": "btc-updown-5m-12345",
+        "condition_id": "cond-123",
+        "ticker": "BTC-USD-5M-UP",
+        "slug": "btc-updown-5m",
+        "token_id": "token-123",
+        "model_probability": 0.52,
+        "edge": 0.01,
+        "guaranteed_roi": 0.05,
+        "guaranteed_profit_amount": 50.0,
+    }
+    opportunity.update(overrides)
+    return opportunity
+
+
+def test_crypto_fingerprint_repeated_opportunity_matches():
+    """Same crypto opportunity should produce same fingerprint."""
+    opp = _crypto_opportunity()
+    fp1 = fingerprint(opp)
+    fp2 = fingerprint(opp)
+    assert fp1 == fp2
+
+
+def test_crypto_fingerprint_different_window_differs():
+    """BTC 5m UP should differ from BTC 15m UP."""
+    opp_5m = _crypto_opportunity(window_minutes=5, market="btc-updown-5m-12345")
+    opp_15m = _crypto_opportunity(window_minutes=15, market="btc-updown-15m-12345")
+    fp_5m = fingerprint(opp_5m)
+    fp_15m = fingerprint(opp_15m)
+    assert fp_5m != fp_15m
+
+
+def test_crypto_fingerprint_different_direction_differs():
+    """BTC 5m UP should differ from BTC 5m DOWN."""
+    opp_up = _crypto_opportunity(direction="up", market="btc-updown-5m-12345")
+    opp_down = _crypto_opportunity(direction="down", market="btc-downup-5m-12345")
+    fp_up = fingerprint(opp_up)
+    fp_down = fingerprint(opp_down)
+    assert fp_up != fp_down
+
+
+def test_crypto_fingerprint_different_market_differs():
+    """Different markets should generate different fingerprints."""
+    opp_a = _crypto_opportunity(market="btc-updown-5m-11111", ticker="BTC-5M-UP-1")
+    opp_b = _crypto_opportunity(market="btc-updown-5m-22222", ticker="BTC-5M-UP-2")
+    fp_a = fingerprint(opp_a)
+    fp_b = fingerprint(opp_b)
+    assert fp_a != fp_b
+
+
+def test_crypto_fingerprint_different_asset_differs():
+    """BTC vs ETH should differ."""
+    opp_btc = _crypto_opportunity(asset="BTC", market="btc-updown-5m-123")
+    opp_eth = _crypto_opportunity(asset="ETH", market="eth-updown-5m-123")
+    fp_btc = fingerprint(opp_btc)
+    fp_eth = fingerprint(opp_eth)
+    assert fp_btc != fp_eth
+
+
+def test_crypto_fingerprint_different_venue_differs():
+    """Polymarket vs Kalshi should differ."""
+    opp_poly = _crypto_opportunity(venue="polymarket", market="btc-updown-5m-123")
+    opp_kalshi = _crypto_opportunity(venue="kalshi", ticker="BTC-USD-5M-UP")
+    fp_poly = fingerprint(opp_poly)
+    fp_kalshi = fingerprint(opp_kalshi)
+    assert fp_poly != fp_kalshi
+
+
+def test_crypto_fingerprint_falls_back_to_tokens_and_slugs():
+    """When market is missing, should use token_id or slug."""
+    opp1 = _crypto_opportunity(market="", condition_id="", ticker="", slug="btc-5m-a", token_id="token-abc")
+    opp2 = _crypto_opportunity(market="", condition_id="", ticker="", slug="btc-5m-b", token_id="token-xyz")
+    fp1 = fingerprint(opp1)
+    fp2 = fingerprint(opp2)
+    # Different slugs should produce different fingerprints
+    assert fp1 != fp2

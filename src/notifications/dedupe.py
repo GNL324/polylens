@@ -27,11 +27,58 @@ class DedupeKeyParts:
     under_odds: str
 
 
+@dataclasses.dataclass(frozen=True)
+class CryptoDedupeKeyParts:
+    asset: str
+    venue: str
+    direction: str
+    window_minutes: str
+    market_id: str
+
+
+def _is_crypto_opportunity(opportunity: dict[str, Any]) -> bool:
+    return all(
+        opportunity.get(k) is not None
+        for k in ("asset", "venue", "direction", "window_minutes")
+    )
+
+
+def _crypto_fingerprint(opportunity: dict[str, Any]) -> str:
+    def _fmt(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    market_id = (
+        opportunity.get("market")
+        or opportunity.get("condition_id")
+        or opportunity.get("market_id")
+        or opportunity.get("ticker")
+        or opportunity.get("slug")
+        or opportunity.get("token_id")
+        or ""
+    )
+
+    parts = CryptoDedupeKeyParts(
+        asset=_fmt(opportunity.get("asset")),
+        venue=_fmt(opportunity.get("venue")),
+        direction=_fmt(opportunity.get("direction")),
+        window_minutes=_fmt(opportunity.get("window_minutes")),
+        market_id=_fmt(market_id),
+    )
+    raw = "|".join(dataclasses.astuple(parts))
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+    return f"{digest}:{raw}"
+
+
 def fingerprint(opportunity: dict[str, Any]) -> str:
     def _fmt(value: Any) -> str:
         if value is None:
             return ""
         return str(value).strip()
+
+    if _is_crypto_opportunity(opportunity):
+        return _crypto_fingerprint(opportunity)
 
     parts = DedupeKeyParts(
         sport=_fmt(opportunity.get("sport")),
