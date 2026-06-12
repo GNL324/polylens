@@ -1,0 +1,71 @@
+{
+  "wallet": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "activities": [
+    {
+      "conditionId": "0xdir001",
+      "outcome": "Yes",
+      "price": 0.62,
+      "side": "BUY",
+      "size": 250.0,
+      "timestamp": 2000,
+      "title": "Trump wins 2024 election",
+      "type": "TRADE",
+      "usdcSize": 155.0
+    },
+    {
+      "conditionId": "0xdir002",
+      "outcome": "Yes",
+      "price": 0.58,
+      "side": "BUY",
+      "size": 180.0,
+      "timestamp": 2001,
+      "title": "Republicans control Senate",
+      "type": "TRADE",
+      "usdcSize": 104.4
+    },
+    {
+      "conditionId": "0xdir003",
+      "outcome": "Yes",
+      "price": 0.71,
+      "side": "BUY",
+      "size": 120.0,
+      "timestamp": 2002,
+      "title": "Bitcoin above $100k by year end",
+      "type": "TRADE",
+      "usdcSize": 85.2
+    },
+    {
+      "conditionId": "0xdir001",
+      "outcome": "Yes",
+      "price": 0.68,
+      "side": "BUY",
+      "size": 90.0,
+      "timestamp": 2003,
+      "title": "Trump wins 2024 election",
+      "type": "TRADE",
+      "usdcSize": 61.2
+    },
+    {
+      "conditionId": "0xdir004",
+      "outcome": "No",
+      "price": 0.44,
+      "side": "BUY",
+      "size": 200.0,
+      "timestamp": 2004,
+      "title": "Inflation above 4% in Q3",
+      "type": "TRADE",
+      "usdcSize": 88.0
+    },
+    {
+      "conditionId": "0xdir002",
+      "outcome": "Yes",
+      "price": 0.64,
+      "side": "SELL",
+      "size": 50.0,
+      "timestamp": 2005,
+      "title": "Republicans control Senate",
+      "type": "TRADE",
+      "usdcSize": 32.0
+    }
+  ]
+}

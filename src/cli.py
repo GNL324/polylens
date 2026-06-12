@@ -41,6 +41,7 @@ from src.analysis.sportsbook_matching import match_sportsbook_lines
 from src.analysis.synthetic_field import debug_synthetic_field as build_debug_synthetic_field
 from src.analysis.timing import summarize_timing
 from src.analysis.volume import summarize_volume
+from src.analysis.wallet_forensics import build_wallet_forensics_report
 from src.analysis.watch_mode import watch_live_arbitrage
 from src.reports.wallet_report import WalletReport
 from src.storage.kalshi_market_data import DEFAULT_KALSHI_DATA_DB
@@ -165,6 +166,29 @@ def export_wallet(wallet: str, include_kalshi: bool = False, include_pricing: bo
     logging.getLogger(__name__).info("exported report %s", output)
     print(output)
     return report
+
+
+def wallet_forensics_cli(wallet: str | None = None, input_json: str | None = None, as_json: bool = False) -> dict[str, Any]:
+    logger = logging.getLogger(__name__)
+    report = None
+    try:
+        if not input_json:
+            raise ValueError("--input-json is required for offline wallet forensics")
+        report = build_wallet_forensics_report(input_json, wallet=wallet)
+        payload = report.to_dict()
+        payload["accepted"] = True
+    except Exception as exc:
+        logger.warning("wallet forensics failed: %s", exc)
+        payload = {"accepted": False, "error": str(exc)}
+        if wallet:
+            payload["wallet"] = wallet
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif payload.get("accepted") and report is not None:
+        print(report.summary_text())
+    else:
+        print(f"Wallet forensics error: {payload.get('error')}")
+    return payload
 
 
 def compare_kalshi(wallet: str) -> WalletReport:
@@ -1988,6 +2012,11 @@ def main() -> None:
     export_parser.add_argument("--include-kalshi", action="store_true", help="include conservative Polymarket/Kalshi market-overlap candidates")
     export_parser.add_argument("--include-pricing", action="store_true", help="include price-aware arbitrage calculations for Kalshi overlap candidates")
 
+    wallet_forensics_parser = sub.add_parser("wallet-forensics", help="offline wallet behavior forensics from exported activity JSON")
+    wallet_forensics_parser.add_argument("--wallet", help="wallet address (optional if present in input JSON)")
+    wallet_forensics_parser.add_argument("--input-json", required=True, help="path to exported Polymarket activity JSON")
+    wallet_forensics_parser.add_argument("--json", action="store_true", help="emit forensics report as JSON")
+
     compare_parser = sub.add_parser("compare-kalshi")
     compare_parser.add_argument("wallet")
 
@@ -2445,6 +2474,8 @@ def main() -> None:
         analyze_wallet(args.wallet)
     elif args.command == "export-wallet":
         export_wallet(args.wallet, include_kalshi=args.include_kalshi or args.include_pricing, include_pricing=args.include_pricing)
+    elif args.command == "wallet-forensics":
+        wallet_forensics_cli(wallet=args.wallet, input_json=args.input_json, as_json=args.json)
     elif args.command == "compare-kalshi":
         compare_kalshi(args.wallet)
     elif args.command == "scan-arb":
