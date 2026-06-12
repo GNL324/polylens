@@ -4,13 +4,14 @@ import argparse
 import json
 import logging
 import os
+LOGGER = logging.getLogger(__name__)
 import resource
 import time
 from pathlib import Path
 from typing import Any
 
 from src.adapters.kalshi import KalshiAuthenticatedClient, KalshiAuthConfigError, KalshiClient
-from src.adapters.oddsblaze import MissingOddsBlazeKey, OddsBlazeClient
+from src.adapters.oddsblaze import MissingOddsBlazeKey, OddsBlazeClient, OddsBlazeError
 from src.adapters.odds_api import MissingOddsAPIKey, OddsAPIClient
 from src.adapters.polymarket import PolymarketClient
 from src.alerts.notifier import MissingWebhookURLError, build_notifier
@@ -675,21 +676,27 @@ def fetch_oddsblaze_odds(
     quiet: bool = False,
 ) -> list[dict[str, Any]]:
     client = OddsBlazeClient(raw_dir="data/raw")
-    rows = client.fetch_odds(
-        sportsbook=sportsbook,
-        league=_oddsblaze_league(league),
-        market=market,
-        market_contains=market_contains,
-        main=main,
-        live=live,
-    )
+    try:
+        rows = client.fetch_odds(
+            sportsbook=sportsbook,
+            league=_oddsblaze_league(league),
+            market=market,
+            market_contains=market_contains,
+            main=main,
+            live=live,
+        )
+    except OddsBlazeError as exc:
+        LOGGER.warning("OddsBlaze fetch failed for %s/%s: %s", league, sportsbook, exc)
+        rows = []
     if as_json:
         print(json.dumps(rows, indent=2, sort_keys=True))
-    elif not quiet:
+    elif not quiet and rows:
         print(f"Fetched OddsBlaze odds: {len(rows)}")
         for row in rows[:20]:
-            print(f"- {row.get('player')} {row.get('market_type')} {row.get('side')} {row.get('line')} {row.get('sportsbook')} odds={row.get('odds')}")
+            print(f"- {row.get("player")} {row.get("market_type")} {row.get("side")} {row.get("line")} {row.get("sportsbook")} odds={row.get("odds")}")
     return rows
+
+
 
 
 def fetch_provider_player_props(
@@ -706,13 +713,31 @@ def fetch_provider_player_props(
     if provider_key not in {"odds-api", "oddsblaze", "all"}:
         raise ValueError("--provider must be one of odds-api, oddsblaze, all")
     props: list[dict[str, Any]] = []
+    odd_api_failed = False
     if provider_key in {"odds-api", "all"}:
-        props.extend(fetch_player_props(sport_key, event_id=event_id, bookmaker=bookmaker, region=region, markets=markets, quiet=True))
+        try:
+            props.extend(fetch_player_props(sport_key, event_id=event_id, bookmaker=bookmaker, region=region, markets=markets, quiet=True))
+        except Exception as exc:
+            LOGGER.warning("fetch_player_props (odds-api) failed: %s", exc)
+            odd_api_failed = True
     if provider_key in {"oddsblaze", "all"}:
         league = _oddsblaze_league(sport_key)
         market_contains = _oddsblaze_market_contains(markets, oddsblaze_market_contains)
+        any_success = False
         for sportsbook in oddsblaze_sportsbooks or list(DEFAULT_ODDSBLAZE_SPORTSBOOKS):
-            props.extend(fetch_oddsblaze_odds(sportsbook=sportsbook, league=league, market_contains=market_contains, main=True, live=False, quiet=True))
+            try:
+                rows = fetch_oddsblaze_odds(sportsbook=sportsbook, league=league, market_contains=market_contains, main=True, live=False, quiet=True)
+                if rows:
+                    any_success = True
+                props.extend(rows)
+            except Exception as exc:
+                LOGGER.warning("OddsBlaze fetch failed for sportsbook %s: %s", sportsbook, exc)
+        if not any_success:
+            LOGGER.warning("All OddsBlaze sportsbooks failed or returned no data")
+    if provider_key == "odds-api" and odd_api_failed:
+        raise RuntimeError("odds-api provider failed and no fallback providers configured")
+    if provider_key == "oddsblaze" and not props:
+        raise RuntimeError("All OddsBlaze sportsbooks failed")
     return props
 
 

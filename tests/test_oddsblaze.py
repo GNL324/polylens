@@ -316,3 +316,119 @@ def test_scan_prop_arb_oddsblaze_market_contains_override(monkeypatch):
         oddsblaze_market_contains="Points",
     )
     assert calls[0]["market_contains"] == "Points"
+
+
+# ===== Graceful degradation tests =====
+
+def test_fetch_oddsblaze_odds_graceful_degradation_on_401(monkeypatch, caplog):
+    """When OddsBlaze returns 401, should log warning and return empty list."""
+    from src import cli
+    from src.adapters.oddsblaze import OddsBlazeError
+
+    def failing_fetch_odds(self, **kwargs):
+        raise OddsBlazeError("GET OddsBlaze odds failed with HTTP 401: Expired key")
+
+    monkeypatch.setattr(cli.OddsBlazeClient, "fetch_odds", failing_fetch_odds)
+
+    with caplog.at_level("WARNING"):
+        rows = cli.fetch_oddsblaze_odds("draftkings", "nba", as_json=False, quiet=True)
+
+    assert rows == []
+    assert any("OddsBlaze fetch failed" in record.message for record in caplog.records)
+    assert any("401" in record.message for record in caplog.records)
+
+
+def test_fetch_provider_player_props_continues_on_oddsblaze_failure(monkeypatch, caplog):
+    """When one OddsBlaze sportsbook fails, should continue with others."""
+    from src import cli
+    from src.adapters.oddsblaze import OddsBlazeError
+
+    call_count = {"count": 0}
+
+    def failing_fetch_odds(self, sportsbook, **kwargs):
+        call_count["count"] += 1
+        if sportsbook == "draftkings":
+            raise OddsBlazeError("GET OddsBlaze odds failed with HTTP 401: Expired key")
+        return normalize_oddsblaze_payload(oddsblaze_payload())
+
+    monkeypatch.setattr(cli.OddsBlazeClient, "fetch_odds", failing_fetch_odds)
+
+    with caplog.at_level("WARNING"):
+        props = cli.fetch_provider_player_props(
+            "basketball_nba",
+            provider="oddsblaze",
+            oddsblaze_sportsbooks=["draftkings", "fanduel"],
+        )
+
+    # Should have tried both sportsbooks
+    assert call_count["count"] == 2
+    # Should have succeeded with fanduel
+    assert len(props) > 0
+    assert any("OddsBlaze fetch failed for nba/draftkings" in record.message for record in caplog.records)
+
+
+def test_fetch_provider_player_props_all_oddsblaze_fails_raises(monkeypatch):
+    """When ALL OddsBlaze sportsbooks fail, should raise RuntimeError."""
+    from src import cli
+    from src.adapters.oddsblaze import OddsBlazeError
+
+    def failing_fetch_odds(self, **kwargs):
+        raise OddsBlazeError("GET OddsBlaze odds failed with HTTP 401: Expired key")
+
+    monkeypatch.setattr(cli.OddsBlazeClient, "fetch_odds", failing_fetch_odds)
+
+    try:
+        cli.fetch_provider_player_props(
+            "basketball_nba",
+            provider="oddsblaze",
+            oddsblaze_sportsbooks=["draftkings", "fanduel"],
+        )
+        assert False, "Should have raised RuntimeError"
+    except RuntimeError as exc:
+        assert "All OddsBlaze sportsbooks failed" in str(exc)
+
+
+def test_fetch_provider_player_props_odds_api_fallback(monkeypatch):
+    """When provider=all and odds-api works but oddsblaze fails, should use odds-api data."""
+    from src import cli
+
+    # Make oddsblaze fail
+    from src.adapters.oddsblaze import OddsBlazeError
+
+    def failing_fetch_odds(self, **kwargs):
+        raise OddsBlazeError("GET OddsBlaze odds failed with HTTP 401: Expired key")
+
+    monkeypatch.setattr(cli.OddsBlazeClient, "fetch_odds", failing_fetch_odds)
+
+    # Mock odds-api to return data
+    from src.analysis.odds_normalization import normalize_odds_events
+
+    def fake_fetch_player_props(*args, **kwargs):
+        return normalize_odds_events([{
+            "id": "evt1",
+            "sport_key": "basketball_nba",
+            "commence_time": "2026-01-01T00:00:00Z",
+            "home_team": "Lakers",
+            "away_team": "Celtics",
+            "bookmakers": [{
+                "key": "draftkings",
+                "markets": [{
+                    "key": "player_points",
+                    "outcomes": [
+                        {"name": "LeBron James", "description": "Over", "price": -110, "point": 25.5},
+                        {"name": "LeBron James", "description": "Under", "price": -110, "point": 25.5},
+                    ]
+                }]
+            }]
+        }])
+
+    monkeypatch.setattr(cli, "fetch_player_props", fake_fetch_player_props)
+
+    props = cli.fetch_provider_player_props(
+        "basketball_nba",
+        provider="all",
+        oddsblaze_sportsbooks=["draftkings"],
+    )
+
+    # Should have odds-api data despite oddsblaze failure
+    assert len(props) > 0
