@@ -21,6 +21,11 @@ POLYMARKET_ACTIVITY_URL = "https://data-api.polymarket.com/activity"
 SUPPORTED_ACTIONS = {"buy", "sell", "redeem", "merge"}
 FUTURE_ACTIONS = {"transfer", "liquidity_add", "liquidity_remove"}
 WALLET_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
+POLYMARKET_MAX_HISTORICAL_ACTIVITY_OFFSET = 3000
+
+
+class HistoricalActivityLimitReached(RuntimeError):
+    pass
 
 
 @dataclass
@@ -83,6 +88,7 @@ class PolymarketActivitySource:
         timeout: int = 20,
         retries: int = 3,
         retry_backoff_seconds: float = 0.5,
+        max_historical_offset: int = POLYMARKET_MAX_HISTORICAL_ACTIVITY_OFFSET,
         sleep: Any = time.sleep,
     ) -> None:
         self.base_url = base_url
@@ -90,6 +96,7 @@ class PolymarketActivitySource:
         self.timeout = timeout
         self.retries = max(0, retries)
         self.retry_backoff_seconds = max(0.0, retry_backoff_seconds)
+        self.max_historical_offset = max_historical_offset
         self._sleep = sleep
 
     def fetch_activity(self, wallet: str, limit: int | None = None) -> list[dict[str, Any]]:
@@ -101,8 +108,15 @@ class PolymarketActivitySource:
             remaining = None if target is None else target - len(rows)
             if remaining is not None and remaining <= 0:
                 break
+            if self.max_historical_offset is not None and offset > self.max_historical_offset:
+                LOGGER.info("stopping Polymarket activity pagination at max historical offset=%s", self.max_historical_offset)
+                break
             page_limit = self.page_size if remaining is None else min(self.page_size, remaining)
-            payload = self._get_page(wallet=wallet, limit=page_limit, offset=offset)
+            try:
+                payload = self._get_page(wallet=wallet, limit=page_limit, offset=offset)
+            except HistoricalActivityLimitReached:
+                LOGGER.info("Polymarket activity history exhausted at offset=%s wallet=%s", offset, wallet)
+                break
             if not isinstance(payload, list):
                 LOGGER.warning("Polymarket activity returned non-list payload for wallet=%s", wallet)
                 break
@@ -123,9 +137,11 @@ class PolymarketActivitySource:
                     body = response.read().decode("utf-8")
                     return json.loads(body) if body else []
             except HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                if exc.code == 400 and _is_historical_activity_limit_error(detail):
+                    raise HistoricalActivityLimitReached(detail) from exc
                 retry_after = _retry_after_seconds(exc)
                 if exc.code not in {408, 429, 500, 502, 503, 504} or attempt >= self.retries:
-                    detail = exc.read().decode("utf-8", errors="replace")
                     raise RuntimeError(f"Polymarket activity request failed HTTP {exc.code}: {detail[:200]}") from exc
                 delay = retry_after if retry_after is not None else self.retry_backoff_seconds * (2**attempt)
                 LOGGER.warning("Polymarket activity rate/transport error HTTP %s; retrying in %.2fs", exc.code, delay)
@@ -440,6 +456,10 @@ def _retry_after_seconds(exc: HTTPError) -> float | None:
         return max(0.0, float(value))
     except ValueError:
         return None
+
+
+def _is_historical_activity_limit_error(detail: str) -> bool:
+    return "max historical activity offset" in str(detail or "").lower()
 
 
 def _utc_now() -> str:

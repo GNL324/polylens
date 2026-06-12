@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from io import BytesIO
 from urllib.error import HTTPError
 
 from src.analysis.wallet_activity import (
@@ -119,6 +120,60 @@ def test_pagination_and_retry_logic(monkeypatch):
     assert len(rows) == 3
     assert len(calls) == 3
     assert "offset=2" in calls[-1]
+
+
+def test_pagination_stops_at_polymarket_max_historical_offset(monkeypatch):
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps([_raw(transactionHash=f"0x{len(calls)}-{i}") for i in range(500)]).encode()
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        return Response()
+
+    monkeypatch.setattr("src.analysis.wallet_activity.urlopen", fake_urlopen)
+    source = PolymarketActivitySource(page_size=500, max_historical_offset=3000)
+    rows = source.fetch_activity(WALLET)
+
+    assert len(rows) == 3500
+    assert len(calls) == 7
+    assert "offset=3000" in calls[-1]
+
+
+def test_http_400_max_historical_offset_preserves_partial_rows(monkeypatch):
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps([_raw(transactionHash="0x1"), _raw(transactionHash="0x2")]).encode()
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        if "offset=0" in request.full_url:
+            return Response()
+        body = BytesIO(b'{"error":"max historical activity offset of 3000 exceeded"}')
+        raise HTTPError(request.full_url, 400, "bad request", {}, body)
+
+    monkeypatch.setattr("src.analysis.wallet_activity.urlopen", fake_urlopen)
+    source = PolymarketActivitySource(page_size=2, max_historical_offset=10, retries=0)
+    rows = source.fetch_activity(WALLET)
+
+    assert len(rows) == 2
+    assert len(calls) == 2
 
 
 def test_graceful_export_failure_returns_empty_export(tmp_path):
