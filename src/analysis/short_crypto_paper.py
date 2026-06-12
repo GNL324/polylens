@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import sqlite3
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+LOGGER = logging.getLogger(__name__)
 
 from src.adapters.kalshi import KalshiClient
 from src.adapters.polymarket import PolymarketClient
@@ -853,16 +856,28 @@ def market_lead_time(row: dict[str, Any], *, now_ts: float | None = None, max_le
     now_ts = now_ts if now_ts is not None else time.time()
     start_ts = _market_start_ts(row)
     end_ts = _ts(row.get("endDate") or row.get("end_date") or row.get("endDateIso"))
-    lead_time = None if start_ts is None else (start_ts - now_ts) / 60.0
+
+    # Fail closed: reject markets with missing start time
+    if start_ts is None:
+        title = row.get("question") or row.get("title") or row.get("slug") or "unknown"
+        LOGGER.warning("Rejecting market %s: missing start time", title)
+        return {
+            "market_start_time": None,
+            "market_end_time": _iso(end_ts) if end_ts is not None else None,
+            "lead_time_minutes": None,
+            "reason": "missing_start_time",
+        }
+
+    lead_time = (start_ts - now_ts) / 60.0
     reason = None
     if end_ts is not None and end_ts <= now_ts:
         reason = "market_expired"
-    elif start_ts is not None and start_ts < now_ts:
+    elif start_ts < now_ts:
         reason = "market_already_started"
-    elif lead_time is not None and lead_time > float(max_lead_time_minutes):
+    elif lead_time > float(max_lead_time_minutes):
         reason = "future_market"
     return {
-        "market_start_time": _iso(start_ts) if start_ts is not None else None,
+        "market_start_time": _iso(start_ts),
         "market_end_time": _iso(end_ts) if end_ts is not None else None,
         "lead_time_minutes": lead_time,
         "reason": reason,

@@ -447,3 +447,58 @@ def _poly_row(start_ts, end_ts):
         "startTime": _iso(start_ts),
         "endDate": _iso(end_ts),
     }
+
+def test_market_missing_start_time_is_rejected():
+    now = time.time()
+    # Market with end time but no start time
+    row = {
+        "question": "Bitcoin Up or Down",
+        "slug": "btc-updown-5m-test",
+        "endDate": _iso(now + 10 * 60),
+    }
+    timing = market_lead_time(row, now_ts=now)
+    assert timing["reason"] == "missing_start_time"
+    assert timing["lead_time_minutes"] is None
+    assert timing["market_start_time"] is None
+    assert timing["market_end_time"] is not None
+
+
+def test_market_missing_end_time_but_has_start_time():
+    now = time.time()
+    # Market with start time but no end time - should be evaluated normally
+    row = {
+        "question": "Bitcoin Up or Down",
+        "slug": "btc-updown-5m-test",
+        "startTime": _iso(now + 5 * 60),
+    }
+    timing = market_lead_time(row, now_ts=now)
+    # Should not be rejected for missing_start_time
+    assert timing["reason"] is None
+    assert 4.9 <= timing["lead_time_minutes"] <= 5.1
+    assert timing["market_start_time"] is not None
+    assert timing["market_end_time"] is None
+
+
+def test_market_missing_both_start_and_end_time_is_rejected():
+    now = time.time()
+    # Market with neither start nor end time
+    row = {
+        "question": "Bitcoin Up or Down",
+        "slug": "btc-updown-5m-test",
+    }
+    timing = market_lead_time(row, now_ts=now)
+    assert timing["reason"] == "missing_start_time"
+    assert timing["lead_time_minutes"] is None
+    assert timing["market_start_time"] is None
+    assert timing["market_end_time"] is None
+
+
+def test_market_normal_valid_market_still_accepted():
+    now = time.time()
+    # Normal market with both start and end times
+    row = _poly_row(now + 5 * 60, now + 10 * 60)
+    timing = market_lead_time(row, now_ts=now)
+    assert timing["reason"] is None
+    assert 4.9 <= timing["lead_time_minutes"] <= 5.1
+    assert timing["market_start_time"] is not None
+    assert timing["market_end_time"] is not None
