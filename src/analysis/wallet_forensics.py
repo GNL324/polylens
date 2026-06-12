@@ -89,6 +89,7 @@ class WalletForensicsReport:
             "average_sum_price",
             "btc_volume",
             "eth_volume",
+            "sol_volume",
         ):
             if key in self.metrics:
                 lines.append(f"  {key}: {self.metrics[key]}")
@@ -114,7 +115,7 @@ def _normalize_outcome(value: Any, record: dict[str, Any] | None = None) -> str:
 
 
 def _outcome_from_index(record: dict[str, Any]) -> str:
-    raw_index = record.get("outcomeIndex")
+    raw_index = record.get("outcomeIndex") if record.get("outcomeIndex") is not None else record.get("outcome_index")
     if raw_index in (None, ""):
         return ""
     try:
@@ -123,14 +124,17 @@ def _outcome_from_index(record: dict[str, Any]) -> str:
         return ""
     if index in INVALID_OUTCOME_INDEX or index not in (0, 1):
         return ""
-    title = str(record.get("title") or record.get("slug") or "").lower()
+    title = str(record.get("title") or record.get("market_title") or record.get("slug") or record.get("market_slug") or "").lower()
     if "up or down" in title or "up/down" in title or "updown" in title:
         return "up" if index == 0 else "down"
     return "yes" if index == 0 else "no"
 
 
 def _normalize_action(record: dict[str, Any]) -> str | None:
-    activity_type = str(record.get("type") or "").upper()
+    explicit_action = str(record.get("action") or "").strip().lower()
+    if explicit_action in {"buy", "sell", "redeem", "merge"}:
+        return explicit_action
+    activity_type = str(record.get("type") or record.get("event_type") or "").upper()
     if activity_type == "TRADE":
         side = str(record.get("side") or "").strip().lower()
         if side in {"buy", "sell"}:
@@ -144,20 +148,29 @@ def _normalize_action(record: dict[str, Any]) -> str | None:
 
 
 def _market_key(record: dict[str, Any]) -> str:
-    for key in ("conditionId", "slug", "title"):
+    for key in ("conditionId", "condition_id", "market_id", "slug", "market_slug", "title", "market_title"):
         value = str(record.get(key) or "").strip()
         if value:
             return value
     return "unknown"
 
 
-def infer_asset(title: str, slug: str = "") -> str:
+def infer_asset(title: str, slug: str = "", explicit_asset: str = "") -> str:
+    explicit = str(explicit_asset or "").strip().upper()
+    if explicit in {"BTC", "ETH", "SOL"}:
+        return explicit
     text = f"{title} {slug}".upper()
-    if "BTC" in text or "BITCOIN" in text:
+    if re_search_asset(text, ("BTC", "BITCOIN")):
         return "BTC"
-    if "ETH" in text or "ETHEREUM" in text:
+    if re_search_asset(text, ("ETH", "ETHEREUM")):
         return "ETH"
+    if re_search_asset(text, ("SOL", "SOLANA")):
+        return "SOL"
     return "OTHER"
+
+
+def re_search_asset(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
 
 
 def _price_cents(record: dict[str, Any]) -> float:
@@ -165,6 +178,8 @@ def _price_cents(record: dict[str, Any]) -> float:
 
 
 def _amount_usd(record: dict[str, Any]) -> float:
+    if record.get("amount") is not None and record.get("amount") != "":
+        return round(_safe_float(record.get("amount")), 6)
     if record.get("usdcSize") is not None and record.get("usdcSize") != "":
         return round(_safe_float(record.get("usdcSize")), 6)
     size = _safe_float(record.get("size"))
@@ -177,16 +192,16 @@ def parse_activity_record(record: dict[str, Any], wallet_address: str) -> Wallet
     if action is None:
         return None
     market_id = _market_key(record)
-    title = str(record.get("title") or record.get("slug") or market_id or "unknown")
-    slug = str(record.get("slug") or "")
-    outcome = _normalize_outcome(record.get("outcome"), record)
-    shares = _safe_float(record.get("size"))
+    title = str(record.get("title") or record.get("market_title") or record.get("slug") or record.get("market_slug") or market_id or "unknown")
+    slug = str(record.get("slug") or record.get("market_slug") or "")
+    outcome = _normalize_outcome(record.get("outcome") or record.get("side"), record)
+    shares = _safe_float(record.get("size") if record.get("size") is not None else record.get("shares"))
     amount_usd = _amount_usd(record)
     timestamp = _safe_float(record.get("timestamp"))
     return WalletActivity(
         wallet_address=wallet_address,
         market_title=title,
-        asset=infer_asset(title, slug),
+        asset=infer_asset(title, slug, explicit_asset=str(record.get("asset") or "")),
         side=outcome,
         action=action,
         price_cents=_price_cents(record),
@@ -214,7 +229,7 @@ def _extract_activity_rows(payload: Any) -> list[Any]:
     if isinstance(payload, list):
         return payload
     if isinstance(payload, dict):
-        for key in ("activities", "activity", "payload"):
+        for key in ("events", "activities", "activity", "payload"):
             value = payload.get(key)
             if isinstance(value, list):
                 return value
@@ -264,7 +279,7 @@ def compute_basic_metrics(activities: list[WalletActivity]) -> dict[str, Any]:
     trade_actions = {"buy", "sell"}
     counts = {"buy": 0, "sell": 0, "redeem": 0, "merge": 0}
     volumes = {"buy": 0.0, "sell": 0.0, "redeem": 0.0, "merge": 0.0}
-    asset_volumes = {"BTC": 0.0, "ETH": 0.0, "OTHER": 0.0}
+    asset_volumes = {"BTC": 0.0, "ETH": 0.0, "SOL": 0.0, "OTHER": 0.0}
     market_outcomes: dict[str, set[str]] = defaultdict(set)
     market_volume: dict[str, float] = defaultdict(float)
 
@@ -302,6 +317,7 @@ def compute_basic_metrics(activities: list[WalletActivity]) -> dict[str, Any]:
         "merge_volume": round(volumes["merge"], 2),
         "btc_volume": round(asset_volumes["BTC"], 2),
         "eth_volume": round(asset_volumes["ETH"], 2),
+        "sol_volume": round(asset_volumes["SOL"], 2),
         "other_volume": round(asset_volumes["OTHER"], 2),
         "markets_traded": markets_traded,
         "overlap_markets": sorted(overlap_markets),

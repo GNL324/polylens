@@ -42,7 +42,21 @@ from src.analysis.sportsbook_matching import match_sportsbook_lines
 from src.analysis.synthetic_field import debug_synthetic_field as build_debug_synthetic_field
 from src.analysis.timing import summarize_timing
 from src.analysis.volume import summarize_volume
+from src.analysis.wallet_activity import (
+    DEFAULT_WALLET_ACTIVITY_DB,
+    export_wallet_activity as build_wallet_activity_export,
+    write_wallet_activity_export,
+)
 from src.analysis.wallet_forensics import build_wallet_forensics_report
+from src.analysis.trader_registry import (
+    list_traders,
+    top_traders,
+    trader_summary,
+    registry_stats,
+    save_wallet_report,
+    load_wallet_report,
+    calculate_watch_score,
+)
 from src.analysis.watch_mode import watch_live_arbitrage
 from src.reports.wallet_report import WalletReport
 from src.storage.kalshi_market_data import DEFAULT_KALSHI_DATA_DB
@@ -190,6 +204,118 @@ def wallet_forensics_cli(wallet: str | None = None, input_json: str | None = Non
     else:
         print(f"Wallet forensics error: {payload.get('error')}")
     return payload
+
+
+def export_wallet_activity_cli(
+    wallet: str,
+    output: str | None = None,
+    limit: int | None = None,
+    as_json: bool = False,
+    db_path: str = DEFAULT_WALLET_ACTIVITY_DB,
+) -> dict[str, Any]:
+    export = build_wallet_activity_export(wallet=wallet, limit=limit, db_path=db_path, store=True)
+    payload = export.to_dict()
+    if output:
+        write_wallet_activity_export(export, output)
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(output if output else f"wallet={payload['wallet']} events={payload['event_count']} source={payload['source']}")
+    return payload
+
+
+def analyze_trader_cli(
+    wallet: str,
+    limit: int | None = None,
+    as_json: bool = False,
+    output: str | None = None,
+    db_path: str = DEFAULT_WALLET_ACTIVITY_DB,
+    traders_db_path: str = "data/traders.db",
+) -> dict[str, Any]:
+    activity_export = build_wallet_activity_export(wallet=wallet, limit=limit, db_path=db_path, store=True)
+    output_path = output or f"data/wallets/{wallet.lower()}_activity.json"
+    write_wallet_activity_export(activity_export, output_path)
+    report = build_wallet_forensics_report(output_path, wallet=wallet)
+    report_payload = report.to_dict()
+    watch_score = calculate_watch_score(report.classification, report.confidence, report.metrics, report.signals)
+    report_payload["watch_score"] = watch_score
+    save_wallet_report(report_payload, watch_score=watch_score, db_path=traders_db_path)
+    result = {
+        "wallet": report.wallet,
+        "classification": report.classification,
+        "confidence": report.confidence,
+        "watch_score": watch_score,
+        "event_count": activity_export.event_count,
+        "activity_export": output_path,
+    }
+    print(json.dumps(result, indent=2, sort_keys=True) if as_json else json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_registry_summary_cli(
+    classification: str | None = None,
+    min_watch_score: int = 0,
+    limit: int = 100,
+    as_json: bool = False,
+    db_path: str = "data/traders.db",
+) -> dict[str, Any]:
+    from src.analysis.trader_registry import registry_stats, list_traders
+    
+    stats = registry_stats(db_path)
+    traders = list_traders(
+        classification=classification,
+        min_watch_score=min_watch_score,
+        limit=limit,
+        db_path=db_path,
+    )
+    
+    result = {
+        "total_traders": stats["total_traders"],
+        "by_classification": stats["by_classification"],
+        "top_watch_scores": stats["top_watch_scores"],
+        "traders": [t.to_dict() for t in traders],
+    }
+    
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Trader Registry Summary")
+        print(f"========================")
+        print(f"Total Traders: {stats['total_traders']}")
+        print(f"")
+        print(f"By Classification:")
+        for c in stats["by_classification"]:
+            print(f"  {c['classification']}: {c['count']} traders (avg watch score: {c['avg_watch_score']})")
+        print(f"")
+        print(f"Top Watch Scores:")
+        for t in stats["top_watch_scores"]:
+            print(f"  {t['wallet'][:12]}... ({t['classification']}): {t['watch_score']}")
+    return result
+
+
+def trader_leaderboard_cli(
+    limit: int = 20,
+    classification: str | None = None,
+    as_json: bool = False,
+    db_path: str = "data/traders.db",
+) -> dict[str, Any]:
+    from src.analysis.trader_registry import top_traders
+    
+    traders = top_traders(limit=limit, classification=classification, db_path=db_path)
+    
+    result = {
+        "traders": [t.to_dict() for t in traders],
+    }
+    
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        title = "Trader Leaderboard" + (f" ({classification})" if classification else "")
+        print(title)
+        print("=" * len(title))
+        for i, t in enumerate(traders, 1):
+            print(f"{i:3d}. {t.wallet} | {t.classification} | confidence={t.confidence:.2f} | watch_score={t.watch_score}")
+    return result
 
 
 def compare_kalshi(wallet: str) -> WalletReport:
@@ -2042,6 +2168,35 @@ def main() -> None:
     wallet_forensics_parser.add_argument("--input-json", required=True, help="path to exported Polymarket activity JSON")
     wallet_forensics_parser.add_argument("--json", action="store_true", help="emit forensics report as JSON")
 
+
+    wallet_activity_parser = sub.add_parser("export-wallet-activity", help="export normalized Polymarket wallet activity")
+    wallet_activity_parser.add_argument("--wallet", required=True)
+    wallet_activity_parser.add_argument("--output")
+    wallet_activity_parser.add_argument("--limit", type=int)
+    wallet_activity_parser.add_argument("--db-path", default=DEFAULT_WALLET_ACTIVITY_DB)
+    wallet_activity_parser.add_argument("--json", action="store_true")
+
+    analyze_trader_parser = sub.add_parser("analyze-trader", help="export wallet activity, run wallet forensics, and update trader registry")
+    analyze_trader_parser.add_argument("--wallet", required=True)
+    analyze_trader_parser.add_argument("--limit", type=int)
+    analyze_trader_parser.add_argument("--output")
+    analyze_trader_parser.add_argument("--db-path", default=DEFAULT_WALLET_ACTIVITY_DB)
+    analyze_trader_parser.add_argument("--traders-db-path", default="data/traders.db")
+    analyze_trader_parser.add_argument("--json", action="store_true")
+
+    trader_registry_summary_parser = sub.add_parser("trader-registry-summary", help="summary of tracked trader wallets")
+    trader_registry_summary_parser.add_argument("--classification", choices=["market_maker", "arbitrage_trader", "quantitative_directional", "mixed", "unknown"])
+    trader_registry_summary_parser.add_argument("--min-watch-score", type=int, default=0)
+    trader_registry_summary_parser.add_argument("--limit", type=int, default=100)
+    trader_registry_summary_parser.add_argument("--db-path", default="data/traders.db")
+    trader_registry_summary_parser.add_argument("--json", action="store_true")
+
+    trader_leaderboard_parser = sub.add_parser("trader-leaderboard", help="top traders ranked by watch score")
+    trader_leaderboard_parser.add_argument("--limit", type=int, default=20)
+    trader_leaderboard_parser.add_argument("--classification", choices=["market_maker", "arbitrage_trader", "quantitative_directional", "mixed", "unknown"])
+    trader_leaderboard_parser.add_argument("--db-path", default="data/traders.db")
+    trader_leaderboard_parser.add_argument("--json", action="store_true")
+
     compare_parser = sub.add_parser("compare-kalshi")
     compare_parser.add_argument("wallet")
 
@@ -2507,6 +2662,25 @@ def main() -> None:
         export_wallet(args.wallet, include_kalshi=args.include_kalshi or args.include_pricing, include_pricing=args.include_pricing)
     elif args.command == "wallet-forensics":
         wallet_forensics_cli(wallet=args.wallet, input_json=args.input_json, as_json=args.json)
+    elif args.command == "export-wallet-activity":
+        export_wallet_activity_cli(wallet=args.wallet, output=args.output, limit=args.limit, as_json=args.json, db_path=args.db_path)
+    elif args.command == "analyze-trader":
+        analyze_trader_cli(wallet=args.wallet, limit=args.limit, as_json=args.json, output=args.output, db_path=args.db_path, traders_db_path=args.traders_db_path)
+    elif args.command == "trader-registry-summary":
+        trader_registry_summary_cli(
+            classification=args.classification,
+            min_watch_score=args.min_watch_score,
+            limit=args.limit,
+            as_json=args.json,
+            db_path=args.db_path,
+        )
+    elif args.command == "trader-leaderboard":
+        trader_leaderboard_cli(
+            limit=args.limit,
+            classification=args.classification,
+            as_json=args.json,
+            db_path=args.db_path,
+        )
     elif args.command == "compare-kalshi":
         compare_kalshi(args.wallet)
     elif args.command == "scan-arb":
