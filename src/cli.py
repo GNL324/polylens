@@ -2423,6 +2423,12 @@ def main() -> None:
     strategy_feedback_parser.add_argument("--max-adjustment", type=float, default=0.10)
     strategy_feedback_parser.add_argument("--json", action="store_true")
 
+    strategy_recommendations_parser = sub.add_parser("strategy-recommendations")
+    strategy_recommendations_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
+    strategy_recommendations_parser.add_argument("--min-trades", type=int, default=25)
+    strategy_recommendations_parser.add_argument("--max-adjustment", type=float, default=0.10)
+    strategy_recommendations_parser.add_argument("--json", action="store_true")
+
     short_crypto_feedback_loop_parser = sub.add_parser("short-crypto-feedback-loop")
     short_crypto_feedback_loop_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
     short_crypto_feedback_loop_parser.add_argument("--min-trades", type=int, default=25)
@@ -2667,6 +2673,18 @@ def main() -> None:
         from src.analysis.strategy_feedback import strategy_feedback_report
 
         result = strategy_feedback_report(
+            args.db_path,
+            min_trades=args.min_trades,
+            max_adjustment=args.max_adjustment,
+        )
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(result)
+    elif args.command == "strategy-recommendations":
+        from src.analysis.strategy_recommendations import strategy_recommendations_report
+
+        result = strategy_recommendations_report(
             args.db_path,
             min_trades=args.min_trades,
             max_adjustment=args.max_adjustment,

@@ -4,6 +4,7 @@ from typing import Any
 
 from src.analysis.short_crypto_paper import DEFAULT_DB_PATH, performance_report, settle_due
 from src.analysis.strategy_feedback import MAX_ADJUSTMENT, MIN_TRADES, strategy_feedback_report
+from src.analysis.strategy_recommendations import strategy_recommendations_report
 
 
 def short_crypto_feedback_loop(
@@ -19,6 +20,11 @@ def short_crypto_feedback_loop(
         min_trades=min_trades,
         max_adjustment=max_adjustment,
     )
+    recommendations = strategy_recommendations_report(
+        db_path,
+        min_trades=min_trades,
+        max_adjustment=max_adjustment,
+    )
     status = "ok" if feedback.get("status") == "ok" else str(feedback.get("status") or "ok")
     return {
         "status": status,
@@ -26,4 +32,5 @@ def short_crypto_feedback_loop(
         "settlement": settlement,
         "paper_report": paper_report,
         "strategy_feedback": feedback,
+        "strategy_recommendations": recommendations,
     }

@@ -29,9 +29,19 @@ def test_feedback_loop_reuses_existing_components(monkeypatch) -> None:
         calls.append(("strategy_feedback_report", (db_path, min_trades, max_adjustment)))
         return {"status": "ok", "strategies": [{"strategy_label": "baseline"}]}
 
+    def fake_strategy_recommendations_report(
+        db_path: str,
+        *,
+        min_trades: int,
+        max_adjustment: float,
+    ) -> dict[str, object]:
+        calls.append(("strategy_recommendations_report", (db_path, min_trades, max_adjustment)))
+        return {"status": "ok", "recommendations": [{"strategy_label": "baseline", "recommendation": "hold"}]}
+
     monkeypatch.setattr(loop, "settle_due", fake_settle_due)
     monkeypatch.setattr(loop, "performance_report", fake_performance_report)
     monkeypatch.setattr(loop, "strategy_feedback_report", fake_strategy_feedback_report)
+    monkeypatch.setattr(loop, "strategy_recommendations_report", fake_strategy_recommendations_report)
 
     result = short_crypto_feedback_loop("paper.db", min_trades=7, max_adjustment=0.05)
 
@@ -39,6 +49,7 @@ def test_feedback_loop_reuses_existing_components(monkeypatch) -> None:
         ("settle_due", "paper.db"),
         ("performance_report", "paper.db"),
         ("strategy_feedback_report", ("paper.db", 7, 0.05)),
+        ("strategy_recommendations_report", ("paper.db", 7, 0.05)),
     ]
     assert result == {
         "status": "ok",
@@ -46,6 +57,7 @@ def test_feedback_loop_reuses_existing_components(monkeypatch) -> None:
         "settlement": {"settled": 1},
         "paper_report": {"closed_trades": 2},
         "strategy_feedback": {"status": "ok", "strategies": [{"strategy_label": "baseline"}]},
+        "strategy_recommendations": {"status": "ok", "recommendations": [{"strategy_label": "baseline", "recommendation": "hold"}]},
     }
 
 
@@ -56,6 +68,11 @@ def test_feedback_loop_propagates_feedback_status(monkeypatch) -> None:
         loop,
         "strategy_feedback_report",
         lambda db_path, *, min_trades, max_adjustment: {"status": "missing_tables", "strategies": []},
+    )
+    monkeypatch.setattr(
+        loop,
+        "strategy_recommendations_report",
+        lambda db_path, *, min_trades, max_adjustment: {"status": "missing_tables", "recommendations": []},
     )
 
     result = short_crypto_feedback_loop("paper.db")
@@ -95,3 +112,6 @@ def test_feedback_loop_cli_json(tmp_path: Path) -> None:
     assert payload["strategy_feedback"]["min_trades"] == 1
     assert payload["strategy_feedback"]["max_adjustment"] == 0.05
     assert payload["strategy_feedback"]["strategies"] == []
+    assert payload["strategy_recommendations"]["min_trades"] == 1
+    assert payload["strategy_recommendations"]["max_adjustment"] == 0.05
+    assert payload["strategy_recommendations"]["recommendations"] == []
