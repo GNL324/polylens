@@ -48,6 +48,7 @@ from src.analysis.wallet_activity import (
     write_wallet_activity_export,
 )
 from src.analysis.wallet_forensics import build_wallet_forensics_report
+from src.analysis.trader_discovery import discovery_report as build_trader_discovery_report
 from src.analysis.trader_scanner import DEFAULT_WATCHLIST_PATH, scan_wallets as scan_trader_wallets
 from src.analysis.trader_registry import (
     list_traders,
@@ -264,6 +265,28 @@ def scan_top_traders_cli(
         watchlist=watchlist,
         limit=limit,
         include_registry=wallet is None,
+    )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def discover_traders_cli(
+    wallet: str | None = None,
+    activity_export: str | None = None,
+    watchlist: str = DEFAULT_WATCHLIST_PATH,
+    limit: int | None = None,
+    scan: bool = False,
+    as_json: bool = False,
+) -> dict[str, Any]:
+    result = build_trader_discovery_report(
+        wallet=wallet,
+        activity_export=activity_export,
+        watchlist=watchlist,
+        limit=limit,
+        scan=scan,
     )
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
@@ -2210,6 +2233,14 @@ def main() -> None:
     scan_top_traders_parser.add_argument("--limit", type=int)
     scan_top_traders_parser.add_argument("--json", action="store_true")
 
+    discover_traders_parser = sub.add_parser("discover-traders", help="discover candidate trader wallets for intelligence scanning")
+    discover_traders_parser.add_argument("--wallet")
+    discover_traders_parser.add_argument("--activity-export")
+    discover_traders_parser.add_argument("--watchlist", default=DEFAULT_WATCHLIST_PATH)
+    discover_traders_parser.add_argument("--limit", type=int)
+    discover_traders_parser.add_argument("--scan", action="store_true")
+    discover_traders_parser.add_argument("--json", action="store_true")
+
     trader_registry_summary_parser = sub.add_parser("trader-registry-summary", help="summary of tracked trader wallets")
     trader_registry_summary_parser.add_argument("--classification", choices=["market_maker", "arbitrage_trader", "quantitative_directional", "mixed", "unknown"])
     trader_registry_summary_parser.add_argument("--min-watch-score", type=int, default=0)
@@ -2694,6 +2725,8 @@ def main() -> None:
         analyze_trader_cli(wallet=args.wallet, limit=args.limit, as_json=args.json, output=args.output, db_path=args.db_path, traders_db_path=args.traders_db_path)
     elif args.command == "scan-top-traders":
         scan_top_traders_cli(wallet=args.wallet, watchlist=args.watchlist, limit=args.limit, as_json=args.json)
+    elif args.command == "discover-traders":
+        discover_traders_cli(wallet=args.wallet, activity_export=args.activity_export, watchlist=args.watchlist, limit=args.limit, scan=args.scan, as_json=args.json)
     elif args.command == "trader-registry-summary":
         trader_registry_summary_cli(
             classification=args.classification,
