@@ -53,6 +53,7 @@ from src.analysis.trader_scanner import DEFAULT_WATCHLIST_PATH, scan_wallets as 
 from src.analysis.trader_alpha import rank_trader_alpha, trader_alpha_report
 from src.analysis.trader_network import build_trader_network, network_summary
 from src.analysis.trader_profiler import profile_traders
+from src.analysis.trader_insights import build_trader_insight_report
 from src.analysis.trader_registry import (
     list_traders,
     top_traders,
@@ -344,6 +345,19 @@ def profile_traders_cli(
         focus_wallet=wallet if top_connected else None,
     )
     result = {"profiles": profiles}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_insight_report_cli(
+    wallet: str,
+    limit: int = 25,
+    as_json: bool = False,
+) -> dict[str, Any]:
+    result = build_trader_insight_report(wallet, limit=limit)
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -2315,6 +2329,11 @@ def main() -> None:
     profile_traders_parser.add_argument("--limit", type=int, default=25)
     profile_traders_parser.add_argument("--json", action="store_true")
 
+    trader_insight_parser = sub.add_parser("trader-insight-report", help="combined trader discovery, network, alpha, and profiling intelligence report")
+    trader_insight_parser.add_argument("--wallet", required=True)
+    trader_insight_parser.add_argument("--limit", type=int, default=25)
+    trader_insight_parser.add_argument("--json", action="store_true")
+
     trader_registry_summary_parser = sub.add_parser("trader-registry-summary", help="summary of tracked trader wallets")
     trader_registry_summary_parser.add_argument("--classification", choices=["market_maker", "arbitrage_trader", "quantitative_directional", "mixed", "unknown"])
     trader_registry_summary_parser.add_argument("--min-watch-score", type=int, default=0)
@@ -2813,6 +2832,8 @@ def main() -> None:
             limit=args.limit,
             as_json=args.json,
         )
+    elif args.command == "trader-insight-report":
+        trader_insight_report_cli(wallet=args.wallet, limit=args.limit, as_json=args.json)
     elif args.command == "trader-registry-summary":
         trader_registry_summary_cli(
             classification=args.classification,
