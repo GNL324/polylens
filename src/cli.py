@@ -50,6 +50,7 @@ from src.analysis.wallet_activity import (
 from src.analysis.wallet_forensics import build_wallet_forensics_report
 from src.analysis.trader_discovery import discovery_report as build_trader_discovery_report
 from src.analysis.trader_scanner import DEFAULT_WATCHLIST_PATH, scan_wallets as scan_trader_wallets
+from src.analysis.trader_alpha import rank_trader_alpha, trader_alpha_report
 from src.analysis.trader_registry import (
     list_traders,
     top_traders,
@@ -288,6 +289,22 @@ def discover_traders_cli(
         limit=limit,
         scan=scan,
     )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_alpha_report_cli(
+    wallet: str | None = None,
+    limit: int = 25,
+    as_json: bool = False,
+) -> dict[str, Any]:
+    if wallet:
+        result: dict[str, Any] = trader_alpha_report(wallet)
+    else:
+        result = {"traders": rank_trader_alpha(limit=limit)}
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -2241,6 +2258,11 @@ def main() -> None:
     discover_traders_parser.add_argument("--scan", action="store_true")
     discover_traders_parser.add_argument("--json", action="store_true")
 
+    trader_alpha_parser = sub.add_parser("trader-alpha-report", help="rank trader registry entries by alpha study value")
+    trader_alpha_parser.add_argument("--wallet")
+    trader_alpha_parser.add_argument("--limit", type=int, default=25)
+    trader_alpha_parser.add_argument("--json", action="store_true")
+
     trader_registry_summary_parser = sub.add_parser("trader-registry-summary", help="summary of tracked trader wallets")
     trader_registry_summary_parser.add_argument("--classification", choices=["market_maker", "arbitrage_trader", "quantitative_directional", "mixed", "unknown"])
     trader_registry_summary_parser.add_argument("--min-watch-score", type=int, default=0)
@@ -2727,6 +2749,8 @@ def main() -> None:
         scan_top_traders_cli(wallet=args.wallet, watchlist=args.watchlist, limit=args.limit, as_json=args.json)
     elif args.command == "discover-traders":
         discover_traders_cli(wallet=args.wallet, activity_export=args.activity_export, watchlist=args.watchlist, limit=args.limit, scan=args.scan, as_json=args.json)
+    elif args.command == "trader-alpha-report":
+        trader_alpha_report_cli(wallet=args.wallet, limit=args.limit, as_json=args.json)
     elif args.command == "trader-registry-summary":
         trader_registry_summary_cli(
             classification=args.classification,
