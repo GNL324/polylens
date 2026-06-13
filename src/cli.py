@@ -54,6 +54,9 @@ from src.analysis.trader_alpha import rank_trader_alpha, trader_alpha_report
 from src.analysis.trader_network import build_trader_network, network_summary
 from src.analysis.trader_profiler import profile_traders
 from src.analysis.trader_insights import build_trader_insight_report
+from src.analysis.trader_replay import build_trader_replay
+from src.analysis.trader_dna import build_trader_dna_report
+from src.analysis.trader_families import build_trader_family_report
 from src.analysis.trader_registry import (
     list_traders,
     top_traders,
@@ -363,6 +366,71 @@ def trader_insight_report_cli(
     else:
         print(json.dumps(result, indent=2, sort_keys=True))
     return result
+
+
+def trader_replay_cli(
+    wallet: str,
+    summary: bool = False,
+    recent: int | None = None,
+    as_json: bool = True,
+    wallet_export_dir: str = "data/wallets",
+) -> dict[str, Any]:
+    report = build_trader_replay(
+        wallet,
+        wallet_export_dir=wallet_export_dir,
+        recent_limit=recent,
+        include_timeline=not summary,
+    )
+    payload = report.to_dict(include_timeline=not summary)
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    return payload
+
+
+def trader_dna_report_cli(
+    wallet: str,
+    limit: int = 25,
+    as_json: bool = True,
+    traders_db_path: str = "data/traders.db",
+    discovery_db_path: str = "data/trader_discovery.db",
+    wallet_export_dir: str = "data/wallets",
+) -> dict[str, Any]:
+    report = build_trader_dna_report(
+        wallet,
+        limit=limit,
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+        wallet_export_dir=wallet_export_dir,
+    )
+    if as_json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    return report
+
+
+def trader_family_report_cli(
+    family_id: str | None = None,
+    limit: int = 25,
+    as_json: bool = True,
+    traders_db_path: str = "data/traders.db",
+    discovery_db_path: str = "data/trader_discovery.db",
+    wallet_export_dir: str = "data/wallets",
+) -> dict[str, Any]:
+    report = build_trader_family_report(
+        family_id=family_id,
+        limit=limit,
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+        wallet_export_dir=wallet_export_dir,
+    )
+    if as_json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    return report
 
 
 def trader_registry_summary_cli(
@@ -2334,6 +2402,29 @@ def main() -> None:
     trader_insight_parser.add_argument("--limit", type=int, default=25)
     trader_insight_parser.add_argument("--json", action="store_true")
 
+    trader_replay_parser = sub.add_parser("trader-replay", help="chronological behavioral replay from wallet activity exports")
+    trader_replay_parser.add_argument("--wallet", required=True)
+    trader_replay_parser.add_argument("--summary", action="store_true", help="omit timeline and return behavioral summary only")
+    trader_replay_parser.add_argument("--recent", type=int, help="limit timeline to the most recent N events")
+    trader_replay_parser.add_argument("--wallet-export-dir", default="data/wallets")
+    trader_replay_parser.add_argument("--json", action="store_true")
+
+    trader_dna_parser = sub.add_parser("trader-dna-report", help="trader similarity analysis from replay, profile, alpha, and network DNA")
+    trader_dna_parser.add_argument("--wallet", required=True)
+    trader_dna_parser.add_argument("--limit", type=int, default=25)
+    trader_dna_parser.add_argument("--traders-db-path", default="data/traders.db")
+    trader_dna_parser.add_argument("--discovery-db-path", default="data/trader_discovery.db")
+    trader_dna_parser.add_argument("--wallet-export-dir", default="data/wallets")
+    trader_dna_parser.add_argument("--json", action="store_true")
+
+    trader_family_parser = sub.add_parser("trader-family-report", help="group-level trader family intelligence from DNA, network, and profile signals")
+    trader_family_parser.add_argument("--family", help="return a single family report by id, e.g. family_01")
+    trader_family_parser.add_argument("--limit", type=int, default=25)
+    trader_family_parser.add_argument("--traders-db-path", default="data/traders.db")
+    trader_family_parser.add_argument("--discovery-db-path", default="data/trader_discovery.db")
+    trader_family_parser.add_argument("--wallet-export-dir", default="data/wallets")
+    trader_family_parser.add_argument("--json", action="store_true")
+
     trader_registry_summary_parser = sub.add_parser("trader-registry-summary", help="summary of tracked trader wallets")
     trader_registry_summary_parser.add_argument("--classification", choices=["market_maker", "arbitrage_trader", "quantitative_directional", "mixed", "unknown"])
     trader_registry_summary_parser.add_argument("--min-watch-score", type=int, default=0)
@@ -2838,6 +2929,32 @@ def main() -> None:
         )
     elif args.command == "trader-insight-report":
         trader_insight_report_cli(wallet=args.wallet, limit=args.limit, as_json=args.json)
+    elif args.command == "trader-replay":
+        trader_replay_cli(
+            wallet=args.wallet,
+            summary=args.summary,
+            recent=args.recent,
+            as_json=True,
+            wallet_export_dir=args.wallet_export_dir,
+        )
+    elif args.command == "trader-dna-report":
+        trader_dna_report_cli(
+            wallet=args.wallet,
+            limit=args.limit,
+            as_json=True,
+            traders_db_path=args.traders_db_path,
+            discovery_db_path=args.discovery_db_path,
+            wallet_export_dir=args.wallet_export_dir,
+        )
+    elif args.command == "trader-family-report":
+        trader_family_report_cli(
+            family_id=args.family,
+            limit=args.limit,
+            as_json=True,
+            traders_db_path=args.traders_db_path,
+            discovery_db_path=args.discovery_db_path,
+            wallet_export_dir=args.wallet_export_dir,
+        )
     elif args.command == "trader-registry-summary":
         trader_registry_summary_cli(
             classification=args.classification,
