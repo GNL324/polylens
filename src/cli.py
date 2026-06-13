@@ -51,6 +51,7 @@ from src.analysis.wallet_forensics import build_wallet_forensics_report
 from src.analysis.trader_discovery import discovery_report as build_trader_discovery_report
 from src.analysis.trader_scanner import DEFAULT_WATCHLIST_PATH, scan_wallets as scan_trader_wallets
 from src.analysis.trader_alpha import rank_trader_alpha, trader_alpha_report
+from src.analysis.trader_backtest import build_trader_backtest_report
 from src.analysis.trader_network import build_trader_network, network_summary
 from src.analysis.trader_profiler import profile_traders
 from src.analysis.trader_insights import build_trader_insight_report
@@ -311,6 +312,21 @@ def trader_alpha_report_cli(
         result: dict[str, Any] = trader_alpha_report(wallet)
     else:
         result = {"traders": rank_trader_alpha(limit=limit)}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_backtest_cli(
+    wallet: str,
+    limit: int | None = None,
+    include_trades: bool = False,
+    as_json: bool = False,
+) -> dict[str, Any]:
+    report = build_trader_backtest_report(wallet=wallet, limit=limit)
+    result = report.to_dict(include_trades=include_trades)
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -2384,6 +2400,12 @@ def main() -> None:
     trader_alpha_parser.add_argument("--limit", type=int, default=25)
     trader_alpha_parser.add_argument("--json", action="store_true")
 
+    trader_backtest_parser = sub.add_parser("trader-backtest", help="read-only historical trader PnL reconstruction from wallet activity")
+    trader_backtest_parser.add_argument("--wallet", required=True)
+    trader_backtest_parser.add_argument("--limit", type=int)
+    trader_backtest_parser.add_argument("--include-trades", action="store_true")
+    trader_backtest_parser.add_argument("--json", action="store_true")
+
     trader_network_parser = sub.add_parser("trader-network-report", help="analyze trader relationships from shared market evidence")
     trader_network_parser.add_argument("--wallet")
     trader_network_parser.add_argument("--depth", type=int)
@@ -2917,6 +2939,8 @@ def main() -> None:
         discover_traders_cli(wallet=args.wallet, activity_export=args.activity_export, watchlist=args.watchlist, limit=args.limit, scan=args.scan, as_json=args.json)
     elif args.command == "trader-alpha-report":
         trader_alpha_report_cli(wallet=args.wallet, limit=args.limit, as_json=args.json)
+    elif args.command == "trader-backtest":
+        trader_backtest_cli(wallet=args.wallet, limit=args.limit, include_trades=args.include_trades, as_json=args.json)
     elif args.command == "trader-network-report":
         trader_network_report_cli(wallet=args.wallet, depth=args.depth, limit=args.limit, as_json=args.json)
     elif args.command == "profile-traders":
