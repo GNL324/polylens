@@ -58,6 +58,14 @@ from src.analysis.paper_copy_trader import (
     run_paper_copy_trader,
     watch_trader as watch_paper_copy_trader,
 )
+from src.analysis.paper_trading_engine import (
+    DEFAULT_PAPER_TRADING_DB,
+    PaperTradingConfig,
+    equity_report as build_paper_equity_report,
+    open_positions_report as build_paper_open_positions_report,
+    performance_report as build_paper_performance_report,
+    run_paper_trading_engine,
+)
 from src.analysis.trader_network import build_trader_network, network_summary
 from src.analysis.trader_profiler import profile_traders
 from src.analysis.trader_insights import build_trader_insight_report
@@ -356,6 +364,50 @@ def paper_copy_trader_cli(
         result = paper_copy_report(db_path=db_path)
     else:
         result = {"accepted": False, "error": "choose one of --watch, --run, or --report"}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def paper_trading_engine_cli(
+    run: bool = False,
+    limit: int = 25,
+    as_json: bool = False,
+    db_path: str = DEFAULT_PAPER_TRADING_DB,
+) -> dict[str, Any]:
+    if run:
+        result = run_paper_trading_engine(db_path=db_path, config=PaperTradingConfig(opportunity_limit=limit))
+    else:
+        result = {"accepted": False, "error": "use --run to execute one paper engine cycle"}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def paper_performance_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
+    result = build_paper_performance_report(db_path=db_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def paper_equity_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
+    result = build_paper_equity_report(db_path=db_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def paper_open_positions_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
+    result = build_paper_open_positions_report(db_path=db_path)
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -2443,6 +2495,24 @@ def main() -> None:
     paper_copy_parser.add_argument("--db-path", default=DEFAULT_PAPER_COPY_DB)
     paper_copy_parser.add_argument("--json", action="store_true")
 
+    paper_engine_parser = sub.add_parser("paper-trading-engine", help="run one autonomous paper-trading engine cycle")
+    paper_engine_parser.add_argument("--run", action="store_true")
+    paper_engine_parser.add_argument("--limit", type=int, default=25)
+    paper_engine_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    paper_engine_parser.add_argument("--json", action="store_true")
+
+    paper_performance_parser = sub.add_parser("paper-performance-report", help="report autonomous paper trading performance")
+    paper_performance_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    paper_performance_parser.add_argument("--json", action="store_true")
+
+    paper_equity_parser = sub.add_parser("paper-equity-report", help="report autonomous paper trading equity curve")
+    paper_equity_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    paper_equity_parser.add_argument("--json", action="store_true")
+
+    paper_open_parser = sub.add_parser("paper-open-positions", help="list autonomous paper trading open positions")
+    paper_open_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    paper_open_parser.add_argument("--json", action="store_true")
+
     trader_network_parser = sub.add_parser("trader-network-report", help="analyze trader relationships from shared market evidence")
     trader_network_parser.add_argument("--wallet")
     trader_network_parser.add_argument("--depth", type=int)
@@ -2980,6 +3050,14 @@ def main() -> None:
         trader_backtest_cli(wallet=args.wallet, limit=args.limit, include_trades=args.include_trades, as_json=args.json)
     elif args.command == "paper-copy-trader":
         paper_copy_trader_cli(watch=args.watch, run=args.run, report=args.report, limit=args.limit, as_json=args.json, db_path=args.db_path)
+    elif args.command == "paper-trading-engine":
+        paper_trading_engine_cli(run=args.run, limit=args.limit, as_json=args.json, db_path=args.db_path)
+    elif args.command == "paper-performance-report":
+        paper_performance_report_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "paper-equity-report":
+        paper_equity_report_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "paper-open-positions":
+        paper_open_positions_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "trader-network-report":
         trader_network_report_cli(wallet=args.wallet, depth=args.depth, limit=args.limit, as_json=args.json)
     elif args.command == "profile-traders":
