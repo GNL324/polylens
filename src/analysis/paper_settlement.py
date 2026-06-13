@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB, init_paper_trading_db, record_equity_snapshot
+from src.analysis.settlement_sources import resolve_opportunity_outcome
 from src.sqlite_utils import closing_connection
 
 
@@ -103,6 +104,13 @@ def paper_settlement_report(db_path: str | Path = DEFAULT_PAPER_TRADING_DB) -> d
 
 
 def evaluate_position_for_settlement(position: Any, raw: dict[str, Any]) -> dict[str, Any]:
+    sourced = resolve_opportunity_outcome(str(position["opportunity_id"]))
+    if sourced.get("resolved"):
+        return {
+            "resolved": True,
+            "exit_price": _bounded_price(_float(sourced.get("settlement_price"))),
+            "reason": f"settlement_source:{sourced.get('source')}",
+        }
     status = str(_first(raw, "market_status", "status", "state") or "").strip().lower()
     explicit = _first_float(raw, "settlement_price", "exit_price")
     if explicit is not None:

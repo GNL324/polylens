@@ -70,6 +70,7 @@ from src.analysis.paper_trading_engine import (
 from src.analysis.paper_analytics import build_paper_analytics_report
 from src.analysis.paper_position_audit import build_paper_position_audit
 from src.analysis.paper_settlement import paper_settlement_report, run_paper_settlement
+from src.analysis.settlement_sources import settlement_source_audit as build_settlement_source_audit
 from src.analysis.paper_trading_service import (
     DEFAULT_PAPER_TRADING_LOG,
     paper_trading_health as build_paper_trading_health,
@@ -476,6 +477,15 @@ def paper_settlement_run_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER
 
 def paper_settlement_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
     result = paper_settlement_report(db_path=db_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def settlement_source_audit_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
+    result = build_settlement_source_audit(paper_db_path=db_path)
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -2616,6 +2626,10 @@ def main() -> None:
     paper_settlement_report_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
     paper_settlement_report_parser.add_argument("--json", action="store_true")
 
+    settlement_source_audit_parser = sub.add_parser("settlement-source-audit", help="audit read-only settlement source coverage")
+    settlement_source_audit_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    settlement_source_audit_parser.add_argument("--json", action="store_true")
+
     opportunity_feed_parser = sub.add_parser("opportunity-feed-status", help="diagnose unified opportunity feed sources")
     opportunity_feed_parser.add_argument("--json", action="store_true")
 
@@ -3176,6 +3190,8 @@ def main() -> None:
         paper_settlement_run_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "paper-settlement-report":
         paper_settlement_report_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "settlement-source-audit":
+        settlement_source_audit_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "opportunity-feed-status":
         opportunity_feed_status_cli(as_json=args.json)
     elif args.command == "trader-network-report":
