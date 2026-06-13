@@ -68,6 +68,8 @@ from src.analysis.paper_trading_engine import (
     run_paper_trading_engine,
 )
 from src.analysis.paper_analytics import build_paper_analytics_report
+from src.analysis.paper_position_audit import build_paper_position_audit
+from src.analysis.paper_settlement import paper_settlement_report, run_paper_settlement
 from src.analysis.paper_trading_service import (
     DEFAULT_PAPER_TRADING_LOG,
     paper_trading_health as build_paper_trading_health,
@@ -447,6 +449,33 @@ def paper_open_positions_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER
 
 def paper_analytics_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
     result = build_paper_analytics_report(db_path=db_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def paper_position_audit_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
+    result = build_paper_position_audit(db_path=db_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def paper_settlement_run_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
+    result = run_paper_settlement(db_path=db_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def paper_settlement_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
+    result = paper_settlement_report(db_path=db_path)
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -2575,6 +2604,18 @@ def main() -> None:
     paper_analytics_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
     paper_analytics_parser.add_argument("--json", action="store_true")
 
+    paper_position_audit_parser = sub.add_parser("paper-position-audit", help="audit autonomous paper position lifecycle")
+    paper_position_audit_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    paper_position_audit_parser.add_argument("--json", action="store_true")
+
+    paper_settlement_run_parser = sub.add_parser("paper-settlement-run", help="evaluate and settle autonomous paper positions")
+    paper_settlement_run_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    paper_settlement_run_parser.add_argument("--json", action="store_true")
+
+    paper_settlement_report_parser = sub.add_parser("paper-settlement-report", help="report recent paper settlement evaluations")
+    paper_settlement_report_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    paper_settlement_report_parser.add_argument("--json", action="store_true")
+
     opportunity_feed_parser = sub.add_parser("opportunity-feed-status", help="diagnose unified opportunity feed sources")
     opportunity_feed_parser.add_argument("--json", action="store_true")
 
@@ -3129,6 +3170,12 @@ def main() -> None:
         paper_open_positions_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "paper-analytics-report":
         paper_analytics_report_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "paper-position-audit":
+        paper_position_audit_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "paper-settlement-run":
+        paper_settlement_run_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "paper-settlement-report":
+        paper_settlement_report_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "opportunity-feed-status":
         opportunity_feed_status_cli(as_json=args.json)
     elif args.command == "trader-network-report":
