@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Polylens autonomous paper trading service every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=polylens-paper-trading.service
+
+[Install]
+WantedBy=timers.target

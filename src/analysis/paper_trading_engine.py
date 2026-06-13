@@ -9,7 +9,7 @@ from pathlib import Path
 from statistics import mean, pstdev
 from typing import Any, Callable
 
-from src.analysis.opportunity_ranker import rank_opportunities
+from src.analysis.opportunity_feed import get_paper_trading_opportunities
 from src.sqlite_utils import closing_connection
 
 DEFAULT_PAPER_TRADING_DB = "data/paper_trading.db"
@@ -129,8 +129,7 @@ def init_paper_trading_db(db_path: str | Path = DEFAULT_PAPER_TRADING_DB) -> Non
 
 
 def collect_opportunities(limit: int = 25) -> list[dict[str, Any]]:
-    report = rank_opportunities(limit=limit)
-    return list(report.get("ranked_opportunities") or [])
+    return get_paper_trading_opportunities(limit=limit)
 
 
 def run_paper_trading_engine(

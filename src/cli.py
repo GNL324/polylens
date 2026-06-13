@@ -35,6 +35,7 @@ from src.analysis.markets import summarize_markets
 from src.analysis.match_diagnostics import explain_market_matches
 from src.analysis.odds_normalization import normalize_futures_events, normalize_odds_events
 from src.analysis.opportunity_ranker import rank_opportunities
+from src.analysis.opportunity_feed import opportunity_feed_status as build_opportunity_feed_status
 from src.analysis.pnl import summarize_pnl
 from src.analysis.prop_arbitrage import scan_prop_arbitrage
 from src.analysis.prop_normalization import normalize_player_props
@@ -65,6 +66,11 @@ from src.analysis.paper_trading_engine import (
     open_positions_report as build_paper_open_positions_report,
     performance_report as build_paper_performance_report,
     run_paper_trading_engine,
+)
+from src.analysis.paper_trading_service import (
+    DEFAULT_PAPER_TRADING_LOG,
+    paper_trading_health as build_paper_trading_health,
+    run_paper_trading_service,
 )
 from src.analysis.trader_network import build_trader_network, network_summary
 from src.analysis.trader_profiler import profile_traders
@@ -388,6 +394,29 @@ def paper_trading_engine_cli(
     return result
 
 
+def paper_trading_service_cli(
+    limit: int = 25,
+    as_json: bool = False,
+    db_path: str = DEFAULT_PAPER_TRADING_DB,
+    log_path: str = DEFAULT_PAPER_TRADING_LOG,
+) -> dict[str, Any]:
+    result = run_paper_trading_service(db_path=db_path, log_path=log_path, limit=limit)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def paper_trading_health_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
+    result = build_paper_trading_health(db_path=db_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
 def paper_performance_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
     result = build_paper_performance_report(db_path=db_path)
     if as_json:
@@ -408,6 +437,15 @@ def paper_equity_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_
 
 def paper_open_positions_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
     result = build_paper_open_positions_report(db_path=db_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def opportunity_feed_status_cli(as_json: bool = False) -> dict[str, Any]:
+    result = build_opportunity_feed_status()
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -2501,6 +2539,16 @@ def main() -> None:
     paper_engine_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
     paper_engine_parser.add_argument("--json", action="store_true")
 
+    paper_service_parser = sub.add_parser("paper-trading-service", help="run one scheduled autonomous paper-trading service cycle")
+    paper_service_parser.add_argument("--limit", type=int, default=25)
+    paper_service_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    paper_service_parser.add_argument("--log-path", default=DEFAULT_PAPER_TRADING_LOG)
+    paper_service_parser.add_argument("--json", action="store_true")
+
+    paper_health_parser = sub.add_parser("paper-trading-health", help="report autonomous paper trading service health")
+    paper_health_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    paper_health_parser.add_argument("--json", action="store_true")
+
     paper_performance_parser = sub.add_parser("paper-performance-report", help="report autonomous paper trading performance")
     paper_performance_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
     paper_performance_parser.add_argument("--json", action="store_true")
@@ -2512,6 +2560,9 @@ def main() -> None:
     paper_open_parser = sub.add_parser("paper-open-positions", help="list autonomous paper trading open positions")
     paper_open_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
     paper_open_parser.add_argument("--json", action="store_true")
+
+    opportunity_feed_parser = sub.add_parser("opportunity-feed-status", help="diagnose unified opportunity feed sources")
+    opportunity_feed_parser.add_argument("--json", action="store_true")
 
     trader_network_parser = sub.add_parser("trader-network-report", help="analyze trader relationships from shared market evidence")
     trader_network_parser.add_argument("--wallet")
@@ -3052,12 +3103,18 @@ def main() -> None:
         paper_copy_trader_cli(watch=args.watch, run=args.run, report=args.report, limit=args.limit, as_json=args.json, db_path=args.db_path)
     elif args.command == "paper-trading-engine":
         paper_trading_engine_cli(run=args.run, limit=args.limit, as_json=args.json, db_path=args.db_path)
+    elif args.command == "paper-trading-service":
+        paper_trading_service_cli(limit=args.limit, as_json=args.json, db_path=args.db_path, log_path=args.log_path)
+    elif args.command == "paper-trading-health":
+        paper_trading_health_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "paper-performance-report":
         paper_performance_report_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "paper-equity-report":
         paper_equity_report_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "paper-open-positions":
         paper_open_positions_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "opportunity-feed-status":
+        opportunity_feed_status_cli(as_json=args.json)
     elif args.command == "trader-network-report":
         trader_network_report_cli(wallet=args.wallet, depth=args.depth, limit=args.limit, as_json=args.json)
     elif args.command == "profile-traders":
