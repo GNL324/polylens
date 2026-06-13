@@ -37,6 +37,18 @@ class TraderDiscoveryCandidate:
         return asdict(self)
 
 
+@dataclass
+class TraderDiscoveryRelationship:
+    source_wallet: str
+    target_wallet: str
+    evidence_count: int
+    discovery_source: str
+    markets_seen: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 def discover_from_wallet(
     wallet: str,
     limit: int | None = None,
@@ -117,6 +129,8 @@ def discover_candidates_from_activity_export(
     candidates = score_counterparty_candidates(payload, source_wallet=source_wallet, source="counterparty")
     for candidate in candidates:
         save_discovery_candidate(candidate, db_path=db_path)
+    if source_wallet:
+        save_discovery_relationships(source_wallet, candidates, db_path=db_path)
     return _limit_candidates(candidates, limit)
 
 
@@ -141,6 +155,7 @@ def discover_candidates_from_wallet(
     merged = _merge_candidates(candidates)
     for candidate in merged:
         save_discovery_candidate(candidate, db_path=db_path)
+    save_discovery_relationships(wallet, merged, db_path=db_path)
     return _limit_candidates(merged, limit)
 
 
@@ -218,13 +233,20 @@ def score_counterparty_candidates(payload: Any, source_wallet: str = "", source:
 def save_discovery_candidate(candidate: TraderDiscoveryCandidate, db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB) -> None:
     _init_discovery_db(db_path)
     now = _now_iso()
+    markets_seen_json = json.dumps(sorted(set(candidate.markets_seen)), sort_keys=True)
     with closing_connection(Path(db_path)) as conn:
-        existing = conn.execute("SELECT first_seen, discovery_score, evidence_count FROM discovered_wallets WHERE wallet = ?", (candidate.wallet,)).fetchone()
+        existing = conn.execute(
+            "SELECT first_seen, discovery_score, evidence_count, markets_seen_json FROM discovered_wallets WHERE wallet = ?",
+            (candidate.wallet,),
+        ).fetchone()
         if existing:
+            merged_markets = sorted(
+                set(json.loads(existing["markets_seen_json"] or "[]")) | set(candidate.markets_seen)
+            )
             conn.execute(
                 """
                 UPDATE discovered_wallets
-                SET last_seen = ?, discovery_score = ?, discovery_source = ?, evidence_count = ?
+                SET last_seen = ?, discovery_score = ?, discovery_source = ?, evidence_count = ?, markets_seen_json = ?
                 WHERE wallet = ?
                 """,
                 (
@@ -232,6 +254,7 @@ def save_discovery_candidate(candidate: TraderDiscoveryCandidate, db_path: str |
                     max(int(existing["discovery_score"]), candidate.discovery_score),
                     candidate.source,
                     max(int(existing["evidence_count"]), candidate.evidence_count),
+                    json.dumps(merged_markets, sort_keys=True),
                     candidate.wallet,
                 ),
             )
@@ -239,17 +262,120 @@ def save_discovery_candidate(candidate: TraderDiscoveryCandidate, db_path: str |
             conn.execute(
                 """
                 INSERT INTO discovered_wallets
-                (wallet, first_seen, last_seen, discovery_score, discovery_source, evidence_count)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (wallet, first_seen, last_seen, discovery_score, discovery_source, evidence_count, markets_seen_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (candidate.wallet, now, now, candidate.discovery_score, candidate.source, candidate.evidence_count),
+                (
+                    candidate.wallet,
+                    now,
+                    now,
+                    candidate.discovery_score,
+                    candidate.source,
+                    candidate.evidence_count,
+                    markets_seen_json,
+                ),
             )
+
+
+def save_discovery_relationships(
+    source_wallet: str,
+    candidates: list[TraderDiscoveryCandidate],
+    db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB,
+) -> None:
+    source_wallet = str(source_wallet or "").strip().lower()
+    if not source_wallet:
+        return
+    _init_discovery_db(db_path)
+    now = _now_iso()
+    with closing_connection(Path(db_path)) as conn:
+        for candidate in candidates:
+            target_wallet = str(candidate.wallet or "").strip().lower()
+            if not target_wallet or target_wallet == source_wallet:
+                continue
+            markets_seen_json = json.dumps(sorted(set(candidate.markets_seen)), sort_keys=True)
+            existing = conn.execute(
+                """
+                SELECT evidence_count, markets_seen_json
+                FROM discovery_relationships
+                WHERE source_wallet = ? AND target_wallet = ?
+                """,
+                (source_wallet, target_wallet),
+            ).fetchone()
+            if existing:
+                merged_markets = sorted(
+                    set(json.loads(existing["markets_seen_json"] or "[]")) | set(candidate.markets_seen)
+                )
+                conn.execute(
+                    """
+                    UPDATE discovery_relationships
+                    SET last_seen = ?, evidence_count = ?, discovery_source = ?, markets_seen_json = ?
+                    WHERE source_wallet = ? AND target_wallet = ?
+                    """,
+                    (
+                        now,
+                        max(int(existing["evidence_count"]), candidate.evidence_count),
+                        candidate.source,
+                        json.dumps(merged_markets, sort_keys=True),
+                        source_wallet,
+                        target_wallet,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO discovery_relationships
+                    (source_wallet, target_wallet, evidence_count, discovery_source, markets_seen_json, first_seen, last_seen)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        source_wallet,
+                        target_wallet,
+                        candidate.evidence_count,
+                        candidate.source,
+                        markets_seen_json,
+                        now,
+                        now,
+                    ),
+                )
+
+
+def load_discovery_relationships(
+    source_wallet: str | None = None,
+    limit: int | None = None,
+    db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB,
+) -> list[TraderDiscoveryRelationship]:
+    _init_discovery_db(db_path)
+    query = """
+        SELECT source_wallet, target_wallet, evidence_count, discovery_source, markets_seen_json
+        FROM discovery_relationships
+    """
+    params: list[Any] = []
+    if source_wallet:
+        wallet = str(source_wallet).strip().lower()
+        query += " WHERE source_wallet = ? OR target_wallet = ?"
+        params.extend([wallet, wallet])
+    query += " ORDER BY evidence_count DESC, source_wallet ASC, target_wallet ASC"
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(int(limit))
+    with closing_connection(Path(db_path)) as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [
+        TraderDiscoveryRelationship(
+            source_wallet=row["source_wallet"],
+            target_wallet=row["target_wallet"],
+            evidence_count=int(row["evidence_count"]),
+            discovery_source=row["discovery_source"],
+            markets_seen=json.loads(row["markets_seen_json"] or "[]"),
+        )
+        for row in rows
+    ]
 
 
 def load_discovered_wallets(db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB, limit: int | None = None) -> list[TraderDiscoveryCandidate]:
     _init_discovery_db(db_path)
     query = """
-        SELECT wallet, discovery_source, discovery_score, evidence_count
+        SELECT wallet, discovery_source, discovery_score, evidence_count, markets_seen_json
         FROM discovered_wallets
         ORDER BY discovery_score DESC, evidence_count DESC, wallet ASC
     """
@@ -265,7 +391,7 @@ def load_discovered_wallets(db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB, l
             source=row["discovery_source"],
             discovery_score=int(row["discovery_score"]),
             evidence_count=int(row["evidence_count"]),
-            markets_seen=[],
+            markets_seen=json.loads(row["markets_seen_json"] or "[]"),
         )
         for row in rows
     ]
@@ -323,12 +449,29 @@ def _init_discovery_db(db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB) -> Non
                 last_seen TEXT NOT NULL,
                 discovery_score INTEGER NOT NULL,
                 discovery_source TEXT NOT NULL,
-                evidence_count INTEGER NOT NULL
+                evidence_count INTEGER NOT NULL,
+                markets_seen_json TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE TABLE IF NOT EXISTS discovery_relationships (
+                source_wallet TEXT NOT NULL,
+                target_wallet TEXT NOT NULL,
+                evidence_count INTEGER NOT NULL,
+                discovery_source TEXT NOT NULL,
+                markets_seen_json TEXT NOT NULL DEFAULT '[]',
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                PRIMARY KEY (source_wallet, target_wallet)
             );
             CREATE INDEX IF NOT EXISTS idx_discovered_wallets_wallet ON discovered_wallets(wallet);
             CREATE INDEX IF NOT EXISTS idx_discovered_wallets_score ON discovered_wallets(discovery_score DESC);
+            CREATE INDEX IF NOT EXISTS idx_discovery_relationships_source ON discovery_relationships(source_wallet);
+            CREATE INDEX IF NOT EXISTS idx_discovery_relationships_target ON discovery_relationships(target_wallet);
+            CREATE INDEX IF NOT EXISTS idx_discovery_relationships_evidence ON discovery_relationships(evidence_count DESC);
             """
         )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(discovered_wallets)").fetchall()}
+        if "markets_seen_json" not in columns:
+            conn.execute("ALTER TABLE discovered_wallets ADD COLUMN markets_seen_json TEXT NOT NULL DEFAULT '[]'")
 
 
 def _candidates_from_registry(db_path: str | Path) -> list[TraderDiscoveryCandidate]:

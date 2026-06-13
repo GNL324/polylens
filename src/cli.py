@@ -51,6 +51,7 @@ from src.analysis.wallet_forensics import build_wallet_forensics_report
 from src.analysis.trader_discovery import discovery_report as build_trader_discovery_report
 from src.analysis.trader_scanner import DEFAULT_WATCHLIST_PATH, scan_wallets as scan_trader_wallets
 from src.analysis.trader_alpha import rank_trader_alpha, trader_alpha_report
+from src.analysis.trader_network import build_trader_network, network_summary
 from src.analysis.trader_registry import (
     list_traders,
     top_traders,
@@ -305,6 +306,21 @@ def trader_alpha_report_cli(
         result: dict[str, Any] = trader_alpha_report(wallet)
     else:
         result = {"traders": rank_trader_alpha(limit=limit)}
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_network_report_cli(
+    wallet: str | None = None,
+    depth: int | None = None,
+    limit: int = 25,
+    as_json: bool = False,
+) -> dict[str, Any]:
+    network = build_trader_network(wallet=wallet, depth=depth)
+    result = network_summary(network, limit=limit, focus_wallet=wallet)
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -2263,6 +2279,12 @@ def main() -> None:
     trader_alpha_parser.add_argument("--limit", type=int, default=25)
     trader_alpha_parser.add_argument("--json", action="store_true")
 
+    trader_network_parser = sub.add_parser("trader-network-report", help="analyze trader relationships from shared market evidence")
+    trader_network_parser.add_argument("--wallet")
+    trader_network_parser.add_argument("--depth", type=int)
+    trader_network_parser.add_argument("--limit", type=int, default=25)
+    trader_network_parser.add_argument("--json", action="store_true")
+
     trader_registry_summary_parser = sub.add_parser("trader-registry-summary", help="summary of tracked trader wallets")
     trader_registry_summary_parser.add_argument("--classification", choices=["market_maker", "arbitrage_trader", "quantitative_directional", "mixed", "unknown"])
     trader_registry_summary_parser.add_argument("--min-watch-score", type=int, default=0)
@@ -2751,6 +2773,8 @@ def main() -> None:
         discover_traders_cli(wallet=args.wallet, activity_export=args.activity_export, watchlist=args.watchlist, limit=args.limit, scan=args.scan, as_json=args.json)
     elif args.command == "trader-alpha-report":
         trader_alpha_report_cli(wallet=args.wallet, limit=args.limit, as_json=args.json)
+    elif args.command == "trader-network-report":
+        trader_network_report_cli(wallet=args.wallet, depth=args.depth, limit=args.limit, as_json=args.json)
     elif args.command == "trader-registry-summary":
         trader_registry_summary_cli(
             classification=args.classification,
