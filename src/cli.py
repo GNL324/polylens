@@ -52,6 +52,12 @@ from src.analysis.trader_discovery import discovery_report as build_trader_disco
 from src.analysis.trader_scanner import DEFAULT_WATCHLIST_PATH, scan_wallets as scan_trader_wallets
 from src.analysis.trader_alpha import rank_trader_alpha, trader_alpha_report
 from src.analysis.trader_backtest import build_trader_backtest_report
+from src.analysis.paper_copy_trader import (
+    DEFAULT_PAPER_COPY_DB,
+    paper_copy_report,
+    run_paper_copy_trader,
+    watch_trader as watch_paper_copy_trader,
+)
 from src.analysis.trader_network import build_trader_network, network_summary
 from src.analysis.trader_profiler import profile_traders
 from src.analysis.trader_insights import build_trader_insight_report
@@ -327,6 +333,29 @@ def trader_backtest_cli(
 ) -> dict[str, Any]:
     report = build_trader_backtest_report(wallet=wallet, limit=limit)
     result = report.to_dict(include_trades=include_trades)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def paper_copy_trader_cli(
+    watch: str | None = None,
+    run: bool = False,
+    report: bool = False,
+    limit: int | None = None,
+    as_json: bool = False,
+    db_path: str = DEFAULT_PAPER_COPY_DB,
+) -> dict[str, Any]:
+    if watch:
+        result = watch_paper_copy_trader(watch, db_path=db_path)
+    elif run:
+        result = run_paper_copy_trader(db_path=db_path, limit=limit)
+    elif report:
+        result = paper_copy_report(db_path=db_path)
+    else:
+        result = {"accepted": False, "error": "choose one of --watch, --run, or --report"}
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -2406,6 +2435,14 @@ def main() -> None:
     trader_backtest_parser.add_argument("--include-trades", action="store_true")
     trader_backtest_parser.add_argument("--json", action="store_true")
 
+    paper_copy_parser = sub.add_parser("paper-copy-trader", help="paper simulate copying watched trader activity")
+    paper_copy_parser.add_argument("--watch")
+    paper_copy_parser.add_argument("--run", action="store_true")
+    paper_copy_parser.add_argument("--report", action="store_true")
+    paper_copy_parser.add_argument("--limit", type=int)
+    paper_copy_parser.add_argument("--db-path", default=DEFAULT_PAPER_COPY_DB)
+    paper_copy_parser.add_argument("--json", action="store_true")
+
     trader_network_parser = sub.add_parser("trader-network-report", help="analyze trader relationships from shared market evidence")
     trader_network_parser.add_argument("--wallet")
     trader_network_parser.add_argument("--depth", type=int)
@@ -2941,6 +2978,8 @@ def main() -> None:
         trader_alpha_report_cli(wallet=args.wallet, limit=args.limit, as_json=args.json)
     elif args.command == "trader-backtest":
         trader_backtest_cli(wallet=args.wallet, limit=args.limit, include_trades=args.include_trades, as_json=args.json)
+    elif args.command == "paper-copy-trader":
+        paper_copy_trader_cli(watch=args.watch, run=args.run, report=args.report, limit=args.limit, as_json=args.json, db_path=args.db_path)
     elif args.command == "trader-network-report":
         trader_network_report_cli(wallet=args.wallet, depth=args.depth, limit=args.limit, as_json=args.json)
     elif args.command == "profile-traders":
