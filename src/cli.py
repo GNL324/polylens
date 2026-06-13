@@ -2804,6 +2804,10 @@ def main() -> None:
     web_dashboard_parser.add_argument("--host", default="127.0.0.1")
     web_dashboard_parser.add_argument("--port", type=int, default=8787)
 
+    trader_dashboard_parser = sub.add_parser("trader-dashboard", help="run the Trader Intelligence Center NiceGUI dashboard")
+    trader_dashboard_parser.add_argument("--host", default="127.0.0.1")
+    trader_dashboard_parser.add_argument("--port", type=int, default=8788)
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -3124,6 +3128,10 @@ def main() -> None:
         from src.web.app import run_web_dashboard
 
         run_web_dashboard(host=args.host, port=args.port)
+    elif args.command == "trader-dashboard":
+        from src.web.trader_dashboard import run_trader_dashboard
+
+        run_trader_dashboard(host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
