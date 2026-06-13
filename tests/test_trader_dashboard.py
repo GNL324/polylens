@@ -15,13 +15,20 @@ from src.web.trader_dashboard import (
     create_trader_dashboard,
     generate_insight_report,
     load_alpha_leaderboard,
+    load_bridge_traders,
     load_connected_traders,
     load_network_explorer_rows,
+    load_overview_kpis,
+    load_overview_recommendations,
+    load_profile_categories,
+    load_registry_summary,
+    refresh_insights_action,
     run_discovery_action,
     run_profiling_action,
     run_trader_dashboard,
     trader_home_summary,
 )
+from src.web.trader_dashboard_styles import OVERVIEW_TABLE_LIMIT
 
 WALLET_A = "0x" + "a" * 40
 WALLET_B = "0x" + "b" * 40
@@ -107,6 +114,31 @@ def test_trader_home_summary(tmp_path):
     assert summary["profiles_generated"] == 2
 
 
+def test_registry_summary_loading(tmp_path):
+    traders_db, discovery_db, export_dir = _seed_dashboard_fixtures(tmp_path)
+
+    summary = load_registry_summary(traders_db_path=traders_db)
+
+    assert summary["traders_profiled"] == 2
+    assert summary["alpha_reports"] == 2
+    assert summary["market_makers"] == 1
+
+
+def test_overview_kpis_loading(tmp_path):
+    traders_db, discovery_db, export_dir = _seed_dashboard_fixtures(tmp_path)
+
+    kpis = load_overview_kpis(
+        seed_wallet=WALLET_SOURCE,
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        wallet_export_dir=export_dir,
+    )
+
+    assert kpis["top_alpha"] > 0
+    assert kpis["traders_profiled"] == 2
+    assert kpis["discovery_candidates"] == 2
+
+
 def test_alpha_leaderboard_loading(tmp_path):
     traders_db, discovery_db, export_dir = _seed_dashboard_fixtures(tmp_path)
 
@@ -120,6 +152,7 @@ def test_alpha_leaderboard_loading(tmp_path):
     assert rows[0]["alpha"] >= rows[-1]["alpha"]
     assert "profile" in rows[0]
     assert "classification" in rows[0]
+    assert "..." in rows[0]["wallet"]
 
 
 def test_connected_traders_loading(tmp_path):
@@ -138,6 +171,20 @@ def test_connected_traders_loading(tmp_path):
     assert "profile" in rows[0]
 
 
+def test_bridge_traders_loading(tmp_path):
+    traders_db, discovery_db, export_dir = _seed_dashboard_fixtures(tmp_path)
+
+    rows = load_bridge_traders(
+        seed_wallet=WALLET_SOURCE,
+        limit=5,
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        wallet_export_dir=export_dir,
+    )
+
+    assert isinstance(rows, list)
+
+
 def test_network_explorer_rows(tmp_path):
     traders_db, discovery_db, export_dir = _seed_dashboard_fixtures(tmp_path)
 
@@ -151,6 +198,40 @@ def test_network_explorer_rows(tmp_path):
 
     assert rows
     assert {"wallet", "degree", "centrality", "cluster", "alpha"} <= set(rows[0])
+
+
+def test_profile_categories_loading(tmp_path):
+    traders_db, discovery_db, export_dir = _seed_dashboard_fixtures(tmp_path)
+
+    categories = load_profile_categories(
+        seed_wallet=WALLET_SOURCE,
+        limit=5,
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        wallet_export_dir=export_dir,
+    )
+
+    assert set(categories) == {
+        "btc_specialists",
+        "directional_traders",
+        "market_makers",
+        "arbitrage_traders",
+    }
+
+
+def test_overview_recommendations_loading(tmp_path):
+    traders_db, discovery_db, export_dir = _seed_dashboard_fixtures(tmp_path)
+
+    rows = load_overview_recommendations(
+        seed_wallet=WALLET_SOURCE,
+        limit=OVERVIEW_TABLE_LIMIT,
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        wallet_export_dir=export_dir,
+    )
+
+    assert rows
+    assert {"wallet", "reason", "alpha", "shared_markets"} <= set(rows[0])
 
 
 def test_wallet_search_analysis(tmp_path):
@@ -184,6 +265,21 @@ def test_insight_report_generation(tmp_path):
     assert report["seed_wallet"] == WALLET_SOURCE
     assert report["recommended_traders"]
     assert report["recommended_traders"][0]["reason"]
+
+
+def test_refresh_insights_action(tmp_path):
+    traders_db, discovery_db, export_dir = _seed_dashboard_fixtures(tmp_path)
+
+    refreshed = refresh_insights_action(
+        WALLET_SOURCE,
+        limit=3,
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        wallet_export_dir=export_dir,
+    )
+
+    assert refreshed["seed_wallet"] == WALLET_SOURCE
+    assert refreshed["recommended_traders"]
 
 
 def test_refresh_actions(tmp_path, monkeypatch):
@@ -299,9 +395,4 @@ def test_trader_dashboard_cli_defaults(monkeypatch):
 
 
 def test_trader_nav_items_cover_required_pages():
-    assert "Home" in TRADER_NAV_ITEMS
-    assert "Wallet Search" in TRADER_NAV_ITEMS
-    assert "Alpha Leaderboard" in TRADER_NAV_ITEMS
-    assert "Connected Traders" in TRADER_NAV_ITEMS
-    assert "Insight Reports" in TRADER_NAV_ITEMS
-    assert "Network Explorer" in TRADER_NAV_ITEMS
+    assert TRADER_NAV_ITEMS == ("Overview", "Network", "Profiles", "Insights")
