@@ -1,0 +1,913 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Read-only, paper-only trader intelligence analytics for Polylens signal validation, gates, recommendations, and paper bridge intents.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": [],
+      "title": "Overview KPIs",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 5, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT total_signals AS value FROM v_trader_signal_kpis",
+          "refId": "A"
+        }
+      ],
+      "title": "Total Signals",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 5, "x": 5, "y": 1 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT validated_signals AS value FROM v_trader_signal_kpis",
+          "refId": "A"
+        }
+      ],
+      "title": "Validated Signals",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 5, "x": 10, "y": 1 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT proven_families AS value FROM v_trader_signal_kpis",
+          "refId": "A"
+        }
+      ],
+      "title": "Proven Families",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 5, "x": 15, "y": 1 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT blocked_recommendations AS value FROM v_trader_signal_kpis",
+          "refId": "A"
+        }
+      ],
+      "title": "Blocked Recommendations",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT paper_intents AS value FROM v_trader_signal_kpis",
+          "refId": "A"
+        }
+      ],
+      "title": "Paper Intents",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "panels": [],
+      "title": "Signal Families",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "accuracy" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "rolling_7_day_accuracy" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "rolling_30_day_accuracy" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "gate_status" },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  { "options": { "proven": { "color": "green", "index": 0, "text": "proven" } }, "type": "value" },
+                  { "options": { "weak": { "color": "orange", "index": 1, "text": "weak" } }, "type": "value" },
+                  { "options": { "unproven": { "color": "red", "index": 2, "text": "unproven" } }, "type": "value" }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 6 },
+      "id": 6,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT signal_type, validation_count, accuracy, rolling_7_day_accuracy, rolling_30_day_accuracy, confidence_score, gate_status, gate_passes, avg_roi_proxy FROM v_signal_family_performance ORDER BY signal_type",
+          "refId": "A"
+        }
+      ],
+      "title": "Signal Family Performance",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 102,
+      "panels": [],
+      "title": "Validation Analytics",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisBorderShow": false, "fillOpacity": 80, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineWidth": 1 },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "id": 7,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.8,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT signal_type, accuracy FROM v_signal_family_performance ORDER BY signal_type",
+          "refId": "A"
+        }
+      ],
+      "title": "Accuracy by Signal Type",
+      "type": "barchart"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisBorderShow": false, "fillOpacity": 80, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineWidth": 1 }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "id": 8,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.8,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT signal_type, avg_roi_proxy AS roi_proxy FROM v_signal_family_performance ORDER BY signal_type",
+          "refId": "A"
+        }
+      ],
+      "title": "ROI Proxy by Signal Type",
+      "type": "barchart"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "percentunit"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "validation_count" },
+            "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "none" }]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
+      "id": 9,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "time_series",
+          "rawSql": "SELECT datetime(validation_date) AS time, accuracy, validation_count FROM v_validation_trend ORDER BY validation_date",
+          "refId": "A"
+        }
+      ],
+      "title": "Validation Trend",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "id": 103,
+      "panels": [],
+      "title": "Gates",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 32 },
+      "id": 10,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT proven_count AS value FROM v_gate_status_summary",
+          "refId": "A"
+        }
+      ],
+      "title": "Proven",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 32 },
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT weak_count AS value FROM v_gate_status_summary",
+          "refId": "A"
+        }
+      ],
+      "title": "Weak",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 32 },
+      "id": 12,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT unproven_count AS value FROM v_gate_status_summary",
+          "refId": "A"
+        }
+      ],
+      "title": "Unproven",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "yellow", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 32 },
+      "id": 13,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT blocked_count AS value FROM v_gate_status_summary",
+          "refId": "A"
+        }
+      ],
+      "title": "Blocked Families",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 36 },
+      "id": 14,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT signal_type, validation_count, accuracy, confidence_score, gate_status FROM v_signal_family_performance WHERE gate_status IN ('weak', 'unproven') ORDER BY validation_count DESC, signal_type",
+          "refId": "A"
+        }
+      ],
+      "title": "Blocked Family Table",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "id": 104,
+      "panels": [],
+      "title": "Recommendations",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 44 },
+      "id": 15,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT promoted_count AS value FROM v_recommendation_pipeline",
+          "refId": "A"
+        }
+      ],
+      "title": "Promoted",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 44 },
+      "id": 16,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT blocked_count AS value FROM v_recommendation_pipeline",
+          "refId": "A"
+        }
+      ],
+      "title": "Blocked",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 44 },
+      "id": 17,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT total_recommendations AS value FROM v_recommendation_pipeline",
+          "refId": "A"
+        }
+      ],
+      "title": "Total Recommendations",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 48 },
+      "id": 18,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT recommendation_key, wallet, market_id, recommendation_type, signal_type, score, gate_status, historical_accuracy, validation_count, is_blocked, created_at FROM v_latest_recommendations ORDER BY created_at DESC LIMIT 25",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest Recommendations",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 56 },
+      "id": 105,
+      "panels": [],
+      "title": "Paper Bridge",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 57 },
+      "id": 19,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT candidate_count AS value FROM v_paper_intent_pipeline",
+          "refId": "A"
+        }
+      ],
+      "title": "Candidate Intents",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 57 },
+      "id": 20,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT simulated_count AS value FROM v_paper_intent_pipeline",
+          "refId": "A"
+        }
+      ],
+      "title": "Simulated Intents",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 57 },
+      "id": 21,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT blocked_count AS value FROM v_paper_intent_pipeline",
+          "refId": "A"
+        }
+      ],
+      "title": "Blocked Intents",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 61 },
+      "id": 22,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT intent_key, trader_address, market_id, side, signal_type, status, score, gate_status, notional_usd, reason, created_at FROM v_latest_paper_intents ORDER BY created_at DESC LIMIT 25",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest Intents",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 69 },
+      "id": 106,
+      "panels": [],
+      "title": "Traders",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "accuracy" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 70 },
+      "id": 23,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT trader_address, validation_count, correct_count, accuracy, avg_roi_proxy, trader_tier FROM v_trader_leaderboard WHERE trader_tier = 'top' ORDER BY accuracy DESC, validation_count DESC LIMIT 15",
+          "refId": "A"
+        }
+      ],
+      "title": "Top Traders",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "accuracy" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 70 },
+      "id": 24,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT trader_address, validation_count, correct_count, accuracy, avg_roi_proxy, trader_tier FROM v_trader_leaderboard WHERE trader_tier = 'weak' ORDER BY accuracy ASC, validation_count DESC LIMIT 15",
+          "refId": "A"
+        }
+      ],
+      "title": "Weak Traders",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "accuracy" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 78 },
+      "id": 25,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "format": "table",
+          "rawSql": "SELECT trader_address, validation_count, correct_count, incorrect_count, accuracy, avg_roi_proxy, trader_tier FROM v_trader_leaderboard ORDER BY accuracy DESC, validation_count DESC LIMIT 25",
+          "refId": "A"
+        }
+      ],
+      "title": "Accuracy Rankings",
+      "type": "table"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["polylens", "trader-intelligence", "paper-only", "read-only"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Polylens SQLite",
+        "multi": false,
+        "name": "DS_POLYLENS_SQLITE",
+        "options": [],
+        "query": "frser-sqlite-datasource",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-30d", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Polylens Trader Intelligence",
+  "uid": "polylens-trader-intelligence",
+  "version": 1,
+  "weekStart": ""
+}

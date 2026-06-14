@@ -100,6 +100,7 @@ from src.analysis.trader_signal_paper_bridge import (
     run_trader_signal_paper_bridge,
     trader_signal_paper_bridge_report,
 )
+from src.analysis.trader_signal_dashboard_views import trader_signal_dashboard_views_report
 from src.analysis.trader_signal_validation import (
     trader_signal_validation_report,
     validate_trader_signals_from_path,
@@ -579,6 +580,15 @@ def trader_signal_paper_bridge_report_cli(
     db_path: str = DEFAULT_TRADER_SIGNAL_DB,
 ) -> dict[str, Any]:
     result = trader_signal_paper_bridge_report(db_path=db_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_signal_dashboard_views_cli(
+    as_json: bool = False,
+    db_path: str = DEFAULT_TRADER_SIGNAL_DB,
+) -> dict[str, Any]:
+    result = trader_signal_dashboard_views_report(db_path=db_path)
     print(json.dumps(result, indent=2, sort_keys=True))
     return result
 
@@ -3397,6 +3407,13 @@ def main() -> None:
     trader_signal_paper_bridge_report_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
     trader_signal_paper_bridge_report_parser.add_argument("--json", action="store_true")
 
+    trader_signal_dashboard_views_parser = sub.add_parser(
+        "trader-signal-dashboard-views",
+        help="create read-only SQLite views for the trader intelligence Grafana dashboard",
+    )
+    trader_signal_dashboard_views_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    trader_signal_dashboard_views_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -3819,6 +3836,8 @@ def main() -> None:
         )
     elif args.command == "trader-signal-paper-bridge-report":
         trader_signal_paper_bridge_report_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "trader-signal-dashboard-views":
+        trader_signal_dashboard_views_cli(as_json=args.json, db_path=args.db_path)
 
 
 if __name__ == "__main__":
