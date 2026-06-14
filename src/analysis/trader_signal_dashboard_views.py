@@ -15,13 +15,19 @@ MIN_ACCURACY = DEFAULT_MINIMUM_ACCURACY
 DASHBOARD_VIEWS: tuple[str, ...] = (
     "v_signal_family_performance",
     "v_gate_status_summary",
+    "v_gate_confidence",
     "v_trader_signal_kpis",
+    "v_dashboard_overview",
     "v_recommendation_pipeline",
     "v_paper_intent_pipeline",
     "v_trader_leaderboard",
     "v_latest_recommendations",
     "v_latest_paper_intents",
     "v_validation_trend",
+    "v_signal_performance_trend",
+    "v_recommendation_trend",
+    "v_intent_trend",
+    "v_database_health",
 )
 
 _VIEW_SQL: dict[str, str] = {
@@ -100,6 +106,70 @@ _VIEW_SQL: dict[str, str] = {
             COALESCE(SUM(CASE WHEN gate_status = 'weak' THEN 1 ELSE 0 END), 0) AS weak_count,
             COALESCE(SUM(CASE WHEN gate_status IN ('unproven', 'weak') THEN 1 ELSE 0 END), 0) AS blocked_count
         FROM v_signal_family_performance
+    """,
+    "v_gate_confidence": """
+        CREATE VIEW v_gate_confidence AS
+        SELECT
+            signal_type,
+            validation_count,
+            accuracy,
+            confidence_score,
+            gate_status,
+            gate_passes,
+            rolling_7_day_accuracy,
+            rolling_30_day_accuracy,
+            RANK() OVER (
+                ORDER BY confidence_score DESC, validation_count DESC, signal_type ASC
+            ) AS confidence_rank
+        FROM v_signal_family_performance
+        ORDER BY confidence_rank ASC, signal_type ASC
+    """,
+    "v_dashboard_overview": f"""
+        CREATE VIEW v_dashboard_overview AS
+        SELECT
+            COALESCE((SELECT COUNT(*) FROM trader_signals), 0) AS total_signals,
+            COALESCE(
+                (SELECT ROUND(AVG(correct), 6) FROM trader_signal_validation),
+                0.0
+            ) AS validation_accuracy,
+            COALESCE(
+                (
+                    SELECT COUNT(*)
+                    FROM v_signal_family_performance
+                    WHERE gate_status = 'proven'
+                ),
+                0
+            ) AS proven_families,
+            COALESCE(
+                (
+                    SELECT COUNT(*)
+                    FROM trader_signal_recommendations
+                    WHERE recommendation_type = 'blocked'
+                ),
+                0
+            ) AS blocked_recommendations,
+            COALESCE(
+                (
+                    SELECT COUNT(*)
+                    FROM trader_signal_paper_intents
+                    WHERE status = 'simulated'
+                ),
+                0
+            ) AS simulated_paper_intents,
+            COALESCE((SELECT COUNT(*) FROM trader_signal_validation), 0) AS validated_signals,
+            COALESCE((SELECT COUNT(*) FROM trader_signal_recommendations), 0) AS total_recommendations,
+            COALESCE(
+                (
+                    SELECT ROUND(SUM(notional_usd), 4)
+                    FROM trader_signal_paper_intents
+                    WHERE status = 'simulated'
+                ),
+                0.0
+            ) AS simulated_notional_usd,
+            {MIN_VALIDATIONS} AS minimum_validations,
+            {MIN_ACCURACY} AS minimum_accuracy,
+            1 AS read_only,
+            1 AS paper_only
     """,
     "v_trader_signal_kpis": f"""
         CREATE VIEW v_trader_signal_kpis AS
@@ -290,6 +360,68 @@ _VIEW_SQL: dict[str, str] = {
         FROM trader_signal_validation
         GROUP BY validation_date
         ORDER BY validation_date ASC
+    """,
+    "v_signal_performance_trend": """
+        CREATE VIEW v_signal_performance_trend AS
+        SELECT
+            COALESCE(
+                date(replace(replace(created_at, 'T', ' '), 'Z', '')),
+                date('1970-01-01')
+            ) AS trend_date,
+            signal_type,
+            COUNT(*) AS signal_count,
+            ROUND(AVG(score), 4) AS avg_score
+        FROM trader_signals
+        GROUP BY trend_date, signal_type
+        ORDER BY trend_date ASC, signal_type ASC
+    """,
+    "v_recommendation_trend": """
+        CREATE VIEW v_recommendation_trend AS
+        SELECT
+            COALESCE(
+                date(replace(replace(created_at, 'T', ' '), 'Z', '')),
+                date('1970-01-01')
+            ) AS trend_date,
+            COUNT(*) AS recommendation_count,
+            SUM(CASE WHEN recommendation_type = 'blocked' THEN 1 ELSE 0 END) AS blocked_count,
+            SUM(CASE WHEN recommendation_type != 'blocked' THEN 1 ELSE 0 END) AS promoted_count
+        FROM trader_signal_recommendations
+        GROUP BY trend_date
+        ORDER BY trend_date ASC
+    """,
+    "v_intent_trend": """
+        CREATE VIEW v_intent_trend AS
+        SELECT
+            COALESCE(
+                date(replace(replace(created_at, 'T', ' '), 'Z', '')),
+                date('1970-01-01')
+            ) AS trend_date,
+            COUNT(*) AS intent_count,
+            SUM(CASE WHEN status = 'candidate' THEN 1 ELSE 0 END) AS candidate_count,
+            SUM(CASE WHEN status = 'simulated' THEN 1 ELSE 0 END) AS simulated_count,
+            SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked_count,
+            ROUND(COALESCE(SUM(notional_usd), 0.0), 4) AS total_notional_usd,
+            ROUND(
+                COALESCE(SUM(CASE WHEN status = 'simulated' THEN notional_usd ELSE 0 END), 0.0),
+                4
+            ) AS simulated_notional_usd
+        FROM trader_signal_paper_intents
+        GROUP BY trend_date
+        ORDER BY trend_date ASC
+    """,
+    "v_database_health": """
+        CREATE VIEW v_database_health AS
+        SELECT
+            COALESCE((SELECT COUNT(*) FROM trader_signals), 0) AS signal_rows,
+            COALESCE((SELECT COUNT(*) FROM trader_signal_validation), 0) AS validation_rows,
+            COALESCE((SELECT COUNT(*) FROM trader_signal_recommendations), 0) AS recommendation_rows,
+            COALESCE((SELECT COUNT(*) FROM trader_signal_paper_intents), 0) AS intent_rows,
+            (SELECT MAX(created_at) FROM trader_signals) AS latest_signal_at,
+            (SELECT MAX(validation_timestamp) FROM trader_signal_validation) AS latest_validation_at,
+            (SELECT MAX(created_at) FROM trader_signal_recommendations) AS latest_recommendation_at,
+            (SELECT MAX(created_at) FROM trader_signal_paper_intents) AS latest_intent_at,
+            1 AS read_only,
+            1 AS paper_only
     """,
 }
 

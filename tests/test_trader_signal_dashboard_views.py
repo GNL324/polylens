@@ -112,6 +112,13 @@ def test_kpi_view_stability_on_empty_db(tmp_path):
     assert row["read_only"] == 1
     assert row["paper_only"] == 1
 
+    overview = dict(_query_view(db_path, "v_dashboard_overview")[0])
+    assert overview["total_signals"] == 0
+    assert overview["validation_accuracy"] == 0.0
+    assert overview["simulated_paper_intents"] == 0
+    assert overview["read_only"] == 1
+    assert overview["paper_only"] == 1
+
 
 def test_gate_view_stability_on_empty_db(tmp_path):
     db_path = tmp_path / "empty.db"
@@ -206,3 +213,68 @@ def test_trader_signal_dashboard_views_report_shape(tmp_path):
     assert result["views_created"] == list(DASHBOARD_VIEWS)
     assert result["read_only"] is True
     assert result["paper_only"] is True
+
+
+TREND_VIEWS = (
+    "v_signal_performance_trend",
+    "v_recommendation_trend",
+    "v_intent_trend",
+    "v_validation_trend",
+)
+
+TREND_SCHEMAS = {
+    "v_signal_performance_trend": {"trend_date", "signal_type", "signal_count", "avg_score"},
+    "v_recommendation_trend": {"trend_date", "recommendation_count", "blocked_count", "promoted_count"},
+    "v_intent_trend": {
+        "trend_date",
+        "intent_count",
+        "candidate_count",
+        "simulated_count",
+        "blocked_count",
+        "total_notional_usd",
+        "simulated_notional_usd",
+    },
+    "v_validation_trend": {
+        "validation_date",
+        "validation_count",
+        "correct_count",
+        "accuracy",
+        "avg_roi_proxy",
+    },
+}
+
+
+def test_trend_views_return_stable_schema_on_empty_db(tmp_path):
+    db_path = tmp_path / "empty.db"
+    init_trader_signal_dashboard_views(db_path)
+
+    for view_name in TREND_VIEWS:
+        with closing_connection(db_path) as conn:
+            columns = {
+                row[1]
+                for row in conn.execute(f"PRAGMA table_info({view_name})").fetchall()
+            }
+        assert columns == TREND_SCHEMAS[view_name]
+
+
+def test_gate_confidence_view_on_empty_db(tmp_path):
+    db_path = tmp_path / "empty.db"
+    init_trader_signal_dashboard_views(db_path)
+
+    rows = [dict(row) for row in _query_view(db_path, "v_gate_confidence")]
+    assert len(rows) == 5
+    assert all(row["confidence_score"] == 0.0 for row in rows)
+    assert all(row["gate_status"] == "unproven" for row in rows)
+
+
+def test_database_health_view_on_empty_db(tmp_path):
+    db_path = tmp_path / "empty.db"
+    init_trader_signal_dashboard_views(db_path)
+
+    health = dict(_query_view(db_path, "v_database_health")[0])
+    assert health["signal_rows"] == 0
+    assert health["validation_rows"] == 0
+    assert health["recommendation_rows"] == 0
+    assert health["intent_rows"] == 0
+    assert health["read_only"] == 1
+    assert health["paper_only"] == 1

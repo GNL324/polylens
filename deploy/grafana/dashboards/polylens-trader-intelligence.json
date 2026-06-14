@@ -1,21 +1,8 @@
 {
   "annotations": {
-    "list": [
-      {
-        "builtIn": 1,
-        "datasource": {
-          "type": "grafana",
-          "uid": "-- Grafana --"
-        },
-        "enable": true,
-        "hide": true,
-        "iconColor": "rgba(0, 211, 255, 1)",
-        "name": "Annotations & Alerts",
-        "type": "dashboard"
-      }
-    ]
+    "list": []
   },
-  "description": "Read-only, paper-only trader intelligence analytics for Polylens signal validation, gates, recommendations, and paper bridge intents.",
+  "description": "Institutional-grade read-only trader intelligence dashboard for Polylens paper analytics.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -24,129 +11,317 @@
   "liveNow": false,
   "panels": [
     {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "",
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "code": {
+          "language": "html",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "# Polylens Trader Intelligence\n**Read-only \u00b7 Paper-only \u00b7 Institutional Analytics**\n\nOperator dashboard for signal validation, gate control, recommendation flow, and paper portfolio monitoring. No live execution paths are connected.",
+        "mode": "markdown"
+      },
+      "pluginVersion": "11.0.0",
+      "title": "",
+      "type": "text",
+      "transparent": true
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      },
       "id": 100,
       "panels": [],
-      "title": "Overview KPIs",
+      "title": "ROW 1 \u2014 Executive Overview",
       "type": "row"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "All persisted trader signals across families.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
           "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3B82F6",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 5, "x": 0, "y": 1 },
-      "id": 1,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 0,
+        "y": 4
       },
-      "pluginVersion": "10.4.0",
+      "id": 10,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
-          "rawSql": "SELECT total_signals AS value FROM v_trader_signal_kpis",
+          "rawSql": "SELECT total_signals AS value FROM v_dashboard_overview",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
+          "format": "time_series",
+          "rawSql": "SELECT datetime(trend_date) AS time, SUM(signal_count) AS value FROM v_signal_performance_trend GROUP BY trend_date ORDER BY trend_date",
+          "refId": "B"
         }
       ],
       "title": "Total Signals",
       "type": "stat"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Overall resolved validation accuracy across all signal families.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#EF4444",
+                "value": null
+              },
+              {
+                "color": "#F59E0B",
+                "value": 0.45
+              },
+              {
+                "color": "#10B981",
+                "value": 0.55
+              }
+            ]
+          },
+          "unit": "percentunit"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 5, "x": 5, "y": 1 },
-      "id": 2,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 5,
+        "y": 4
       },
+      "id": 11,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
-          "rawSql": "SELECT validated_signals AS value FROM v_trader_signal_kpis",
+          "rawSql": "SELECT validation_accuracy AS value FROM v_dashboard_overview",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
+          "format": "time_series",
+          "rawSql": "SELECT datetime(validation_date) AS time, accuracy AS value FROM v_validation_trend ORDER BY validation_date",
+          "refId": "B"
         }
       ],
-      "title": "Validated Signals",
+      "title": "Validation Accuracy",
       "type": "stat"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Signal families meeting validation count and accuracy gate thresholds.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#8B5CF6",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 5, "x": 10, "y": 1 },
-      "id": 3,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 10,
+        "y": 4
       },
+      "id": 12,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
-          "rawSql": "SELECT proven_families AS value FROM v_trader_signal_kpis",
+          "rawSql": "SELECT proven_families AS value FROM v_dashboard_overview",
           "refId": "A"
         }
       ],
-      "title": "Proven Families",
+      "title": "Proven Signal Families",
       "type": "stat"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Recommendations blocked by validation gates or eligibility rules.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#F59E0B",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 5, "x": 15, "y": 1 },
-      "id": 4,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 15,
+        "y": 4
       },
+      "id": 13,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
-          "rawSql": "SELECT blocked_recommendations AS value FROM v_trader_signal_kpis",
+          "rawSql": "SELECT blocked_recommendations AS value FROM v_dashboard_overview",
           "refId": "A"
         }
       ],
@@ -154,530 +329,944 @@
       "type": "stat"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Paper bridge intents in simulated status \u2014 analytics only, no order placement.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#10B981",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
-      "id": 5,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 19,
+        "y": 4
       },
+      "id": 14,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
-          "rawSql": "SELECT paper_intents AS value FROM v_trader_signal_kpis",
+          "rawSql": "SELECT simulated_paper_intents AS value FROM v_dashboard_overview",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
+          "format": "time_series",
+          "rawSql": "SELECT datetime(trend_date) AS time, simulated_count AS value FROM v_intent_trend ORDER BY trend_date",
+          "refId": "B"
         }
       ],
-      "title": "Paper Intents",
+      "title": "Simulated Paper Intents",
       "type": "stat"
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
       "id": 101,
       "panels": [],
-      "title": "Signal Families",
+      "title": "ROW 2 \u2014 Signal Performance",
       "type": "row"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Historical accuracy by signal family: early_entry, conviction, exit, consensus, contrarian.",
       "fieldConfig": {
         "defaults": {
-          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
-        },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "accuracy" },
-            "properties": [{ "id": "unit", "value": "percentunit" }]
+          "color": {
+            "mode": "palette-classic"
           },
-          {
-            "matcher": { "id": "byName", "options": "rolling_7_day_accuracy" },
-            "properties": [{ "id": "unit", "value": "percentunit" }]
-          },
-          {
-            "matcher": { "id": "byName", "options": "rolling_30_day_accuracy" },
-            "properties": [{ "id": "unit", "value": "percentunit" }]
-          },
-          {
-            "matcher": { "id": "byName", "options": "gate_status" },
-            "properties": [
-              {
-                "id": "mappings",
-                "value": [
-                  { "options": { "proven": { "color": "green", "index": 0, "text": "proven" } }, "type": "value" },
-                  { "options": { "weak": { "color": "orange", "index": 1, "text": "weak" } }, "type": "value" },
-                  { "options": { "unproven": { "color": "red", "index": 2, "text": "unproven" } }, "type": "value" }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 6 },
-      "id": 6,
-      "options": {
-        "cellHeight": "sm",
-        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
-        "showHeader": true
-      },
-      "targets": [
-        {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
-          "format": "table",
-          "rawSql": "SELECT signal_type, validation_count, accuracy, rolling_7_day_accuracy, rolling_30_day_accuracy, confidence_score, gate_status, gate_passes, avg_roi_proxy FROM v_signal_family_performance ORDER BY signal_type",
-          "refId": "A"
-        }
-      ],
-      "title": "Signal Family Performance",
-      "type": "table"
-    },
-    {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
-      "id": 102,
-      "panels": [],
-      "title": "Validation Analytics",
-      "type": "row"
-    },
-    {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "axisBorderShow": false, "fillOpacity": 80, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineWidth": 1 },
-          "unit": "percentunit"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
-      "id": 7,
-      "options": {
-        "barRadius": 0,
-        "barWidth": 0.8,
-        "fullHighlight": false,
-        "groupWidth": 0.7,
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "orientation": "auto",
-        "showValue": "auto",
-        "stacking": "none",
-        "tooltip": { "mode": "single", "sort": "none" },
-        "xTickLabelRotation": 0,
-        "xTickLabelSpacing": 0
-      },
-      "targets": [
-        {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
-          "format": "table",
-          "rawSql": "SELECT signal_type, accuracy FROM v_signal_family_performance ORDER BY signal_type",
-          "refId": "A"
-        }
-      ],
-      "title": "Accuracy by Signal Type",
-      "type": "barchart"
-    },
-    {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "axisBorderShow": false, "fillOpacity": 80, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineWidth": 1 }
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
-      "id": 8,
-      "options": {
-        "barRadius": 0,
-        "barWidth": 0.8,
-        "fullHighlight": false,
-        "groupWidth": 0.7,
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "orientation": "auto",
-        "showValue": "auto",
-        "stacking": "none",
-        "tooltip": { "mode": "single", "sort": "none" },
-        "xTickLabelRotation": 0,
-        "xTickLabelSpacing": 0
-      },
-      "targets": [
-        {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
-          "format": "table",
-          "rawSql": "SELECT signal_type, avg_roi_proxy AS roi_proxy FROM v_signal_family_performance ORDER BY signal_type",
-          "refId": "A"
-        }
-      ],
-      "title": "ROI Proxy by Signal Type",
-      "type": "barchart"
-    },
-    {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "showPoints": "auto",
-            "spanNulls": false
+            "fillOpacity": 85,
+            "gradientMode": "hue",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1
           },
           "unit": "percentunit"
         },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "validation_count" },
-            "properties": [{ "id": "custom.axisPlacement", "value": "right" }, { "id": "unit", "value": "none" }]
-          }
-        ]
+        "overrides": []
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
-      "id": 9,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 10
+      },
+      "id": 20,
       "options": {
-        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "none" }
+        "barRadius": 0.08,
+        "barWidth": 0.7,
+        "fullHighlight": false,
+        "groupWidth": 0.75,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0
       },
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
-          "format": "time_series",
-          "rawSql": "SELECT datetime(validation_date) AS time, accuracy, validation_count FROM v_validation_trend ORDER BY validation_date",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
+          "format": "table",
+          "rawSql": "SELECT signal_type, accuracy FROM v_signal_family_performance ORDER BY accuracy DESC",
           "refId": "A"
         }
       ],
-      "title": "Validation Trend",
-      "type": "timeseries"
+      "title": "Signal Family Accuracy",
+      "type": "barchart"
     },
     {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
-      "id": 103,
-      "panels": [],
-      "title": "Gates",
-      "type": "row"
-    },
-    {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Average ROI proxy by family for institutional performance comparison.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "fillOpacity": 85,
+            "gradientMode": "hue",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1
+          },
+          "unit": "short"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 32 },
-      "id": 10,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 10
+      },
+      "id": 21,
       "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+        "barRadius": 0.08,
+        "barWidth": 0.7,
+        "fullHighlight": false,
+        "groupWidth": 0.75,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0
       },
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
+          "format": "table",
+          "rawSql": "SELECT signal_type, avg_roi_proxy AS roi_proxy FROM v_signal_family_performance ORDER BY avg_roi_proxy DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Signal Family ROI Proxy",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Sample depth per family \u2014 gate promotion requires sufficient validation history.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "fillOpacity": 85,
+            "gradientMode": "hue",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 10
+      },
+      "id": 22,
+      "options": {
+        "barRadius": 0.08,
+        "barWidth": 0.7,
+        "fullHighlight": false,
+        "groupWidth": 0.75,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "none",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
+          "format": "table",
+          "rawSql": "SELECT signal_type, validation_count FROM v_signal_family_performance ORDER BY validation_count DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Validation Count by Family",
+      "type": "barchart"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 102,
+      "panels": [],
+      "title": "ROW 3 \u2014 Gate Control Center",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Families cleared for paper bridge promotion.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#10B981",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 19
+      },
+      "id": 30,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
           "rawSql": "SELECT proven_count AS value FROM v_gate_status_summary",
           "refId": "A"
         }
       ],
-      "title": "Proven",
+      "title": "Proven Families",
       "type": "stat"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Families with enough samples but below accuracy threshold.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#F59E0B",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 32 },
-      "id": 11,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 19
       },
+      "id": 31,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
           "rawSql": "SELECT weak_count AS value FROM v_gate_status_summary",
           "refId": "A"
         }
       ],
-      "title": "Weak",
+      "title": "Weak Families",
       "type": "stat"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Families lacking minimum validation depth.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#EF4444",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 32 },
-      "id": 12,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 19
       },
+      "id": 32,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
           "rawSql": "SELECT unproven_count AS value FROM v_gate_status_summary",
           "refId": "A"
         }
       ],
-      "title": "Unproven",
+      "title": "Unproven Families",
       "type": "stat"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Highest-confidence proven or developing family score (0-100).",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "yellow", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#EF4444",
+                "value": null
+              },
+              {
+                "color": "#F59E0B",
+                "value": 35
+              },
+              {
+                "color": "#10B981",
+                "value": 55
+              }
+            ]
+          },
+          "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 32 },
-      "id": 13,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 19
+      },
+      "id": 33,
       "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
+        "minVizHeight": 75,
+        "minVizWidth": 75,
         "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "auto"
       },
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
-          "rawSql": "SELECT blocked_count AS value FROM v_gate_status_summary",
+          "rawSql": "SELECT confidence_score AS value FROM v_gate_confidence ORDER BY confidence_rank ASC LIMIT 1",
           "refId": "A"
         }
       ],
-      "title": "Blocked Families",
-      "type": "stat"
+      "title": "Top Gate Confidence",
+      "type": "gauge"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Ranked gate confidence table for operator review and family prioritization.",
       "fieldConfig": {
         "defaults": {
-          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": []
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "accuracy"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rolling_7_day_accuracy"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rolling_30_day_accuracy"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          }
+        ]
       },
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 36 },
-      "id": 14,
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "id": 34,
       "options": {
         "cellHeight": "sm",
-        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
-        "showHeader": true
+        "footer": {
+          "countRows": false,
+          "enablePagination": true,
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
       },
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
-          "rawSql": "SELECT signal_type, validation_count, accuracy, confidence_score, gate_status FROM v_signal_family_performance WHERE gate_status IN ('weak', 'unproven') ORDER BY validation_count DESC, signal_type",
+          "rawSql": "SELECT confidence_rank, signal_type, gate_status, validation_count, accuracy, confidence_score, rolling_7_day_accuracy, rolling_30_day_accuracy FROM v_gate_confidence ORDER BY confidence_rank",
           "refId": "A"
         }
       ],
-      "title": "Blocked Family Table",
+      "title": "Gate Confidence Rankings",
       "type": "table"
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
-      "id": 104,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "id": 103,
       "panels": [],
-      "title": "Recommendations",
+      "title": "ROW 4 \u2014 Recommendation Pipeline",
       "type": "row"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "End-to-end read-only flow from signal generation through paper intent simulation.",
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "id": 40,
+      "options": {
+        "code": {
+          "language": "html",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "\n<div style=\"display:flex;align-items:center;justify-content:space-between;padding:12px 8px;font-size:15px;font-weight:600;letter-spacing:0.02em;\">\n  <span style=\"color:#3B82F6;\">Signals</span><span>\u2192</span>\n  <span style=\"color:#8B5CF6;\">Recommendations</span><span>\u2192</span>\n  <span style=\"color:#10B981;\">Validation</span><span>\u2192</span>\n  <span style=\"color:#F59E0B;\">Gates</span><span>\u2192</span>\n  <span style=\"color:#06B6D4;\">Paper Bridge</span>\n</div>\n",
+        "mode": "markdown"
+      },
+      "pluginVersion": "11.0.0",
+      "title": "Pipeline Flow",
+      "type": "text",
+      "transparent": true
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Recommendations passing gate and eligibility checks.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#10B981",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 44 },
-      "id": 15,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 33
       },
+      "id": 41,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
           "rawSql": "SELECT promoted_count AS value FROM v_recommendation_pipeline",
           "refId": "A"
         }
       ],
-      "title": "Promoted",
+      "title": "Promoted Recommendations",
       "type": "stat"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Recommendations halted by gate status or policy.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#F59E0B",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 44 },
-      "id": 16,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 33
       },
+      "id": 42,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
           "rawSql": "SELECT blocked_count AS value FROM v_recommendation_pipeline",
           "refId": "A"
         }
       ],
-      "title": "Blocked",
+      "title": "Blocked Recommendations",
       "type": "stat"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Daily promoted vs blocked recommendation volume.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 44 },
-      "id": 17,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 33
       },
-      "targets": [
-        {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
-          "format": "table",
-          "rawSql": "SELECT total_recommendations AS value FROM v_recommendation_pipeline",
-          "refId": "A"
-        }
-      ],
-      "title": "Total Recommendations",
-      "type": "stat"
-    },
-    {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
-      "fieldConfig": {
-        "defaults": {
-          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+      "id": 43,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
         },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 48 },
-      "id": 18,
-      "options": {
-        "cellHeight": "sm",
-        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
-        "showHeader": true
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
-          "format": "table",
-          "rawSql": "SELECT recommendation_key, wallet, market_id, recommendation_type, signal_type, score, gate_status, historical_accuracy, validation_count, is_blocked, created_at FROM v_latest_recommendations ORDER BY created_at DESC LIMIT 25",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
+          "format": "time_series",
+          "rawSql": "SELECT datetime(trend_date) AS time, promoted_count, blocked_count, recommendation_count FROM v_recommendation_trend ORDER BY trend_date",
           "refId": "A"
         }
       ],
-      "title": "Latest Recommendations",
-      "type": "table"
+      "title": "Recommendation Trend",
+      "type": "timeseries"
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 56 },
-      "id": 105,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "id": 104,
       "panels": [],
-      "title": "Paper Bridge",
+      "title": "ROW 5 \u2014 Paper Portfolio",
       "type": "row"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Watch-list paper intents awaiting operator review.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3B82F6",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 57 },
-      "id": 19,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 42
       },
+      "id": 50,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
           "rawSql": "SELECT candidate_count AS value FROM v_paper_intent_pipeline",
           "refId": "A"
@@ -687,27 +1276,60 @@
       "type": "stat"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Simulated paper-copy intents from proven paper_entry recommendations.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#10B981",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 57 },
-      "id": 20,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 42
       },
+      "id": 51,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
           "rawSql": "SELECT simulated_count AS value FROM v_paper_intent_pipeline",
           "refId": "A"
@@ -717,27 +1339,60 @@
       "type": "stat"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Intents blocked by gates, score thresholds, or eligibility.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#EF4444",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 57 },
-      "id": 21,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 42
       },
+      "id": 52,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
           "rawSql": "SELECT blocked_count AS value FROM v_paper_intent_pipeline",
           "refId": "A"
@@ -747,68 +1402,127 @@
       "type": "stat"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Latest paper intents with notional sizing, signal source, and gate rationale.",
       "fieldConfig": {
         "defaults": {
-          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": []
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 61 },
-      "id": 22,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "id": 53,
       "options": {
         "cellHeight": "sm",
-        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
-        "showHeader": true
+        "footer": {
+          "countRows": false,
+          "enablePagination": true,
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
       },
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
-          "rawSql": "SELECT intent_key, trader_address, market_id, side, signal_type, status, score, gate_status, notional_usd, reason, created_at FROM v_latest_paper_intents ORDER BY created_at DESC LIMIT 25",
+          "rawSql": "SELECT trader_address AS signal_source, signal_type, status, notional_usd, gate_status, gate_reason, side, market_id, score, created_at FROM v_latest_paper_intents ORDER BY created_at DESC LIMIT 20",
           "refId": "A"
         }
       ],
-      "title": "Latest Intents",
+      "title": "Paper Intent Book",
       "type": "table"
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 69 },
-      "id": 106,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 54
+      },
+      "id": 105,
       "panels": [],
-      "title": "Traders",
+      "title": "ROW 6 \u2014 Trader Intelligence",
       "type": "row"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "",
       "fieldConfig": {
         "defaults": {
-          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": []
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "accuracy" },
-            "properties": [{ "id": "unit", "value": "percentunit" }]
+            "matcher": {
+              "id": "byName",
+              "options": "accuracy"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 70 },
-      "id": 23,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 55
+      },
+      "id": 60,
       "options": {
         "cellHeight": "sm",
-        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
-        "showHeader": true
+        "footer": {
+          "countRows": false,
+          "enablePagination": true,
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
       },
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
-          "rawSql": "SELECT trader_address, validation_count, correct_count, accuracy, avg_roi_proxy, trader_tier FROM v_trader_leaderboard WHERE trader_tier = 'top' ORDER BY accuracy DESC, validation_count DESC LIMIT 15",
+          "rawSql": "SELECT trader_address, validation_count, accuracy, avg_roi_proxy, trader_tier FROM v_trader_leaderboard WHERE trader_tier = 'top' ORDER BY accuracy DESC LIMIT 12",
           "refId": "A"
         }
       ],
@@ -816,32 +1530,63 @@
       "type": "table"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "",
       "fieldConfig": {
         "defaults": {
-          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": []
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "accuracy" },
-            "properties": [{ "id": "unit", "value": "percentunit" }]
+            "matcher": {
+              "id": "byName",
+              "options": "accuracy"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 70 },
-      "id": 24,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 55
+      },
+      "id": 61,
       "options": {
         "cellHeight": "sm",
-        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
-        "showHeader": true
+        "footer": {
+          "countRows": false,
+          "enablePagination": true,
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
       },
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
-          "rawSql": "SELECT trader_address, validation_count, correct_count, accuracy, avg_roi_proxy, trader_tier FROM v_trader_leaderboard WHERE trader_tier = 'weak' ORDER BY accuracy ASC, validation_count DESC LIMIT 15",
+          "rawSql": "SELECT trader_address, validation_count, accuracy, avg_roi_proxy, trader_tier FROM v_trader_leaderboard WHERE trader_tier = 'weak' ORDER BY accuracy ASC LIMIT 12",
           "refId": "A"
         }
       ],
@@ -849,42 +1594,393 @@
       "type": "table"
     },
     {
-      "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "",
       "fieldConfig": {
         "defaults": {
-          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": []
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "accuracy" },
-            "properties": [{ "id": "unit", "value": "percentunit" }]
+            "matcher": {
+              "id": "byName",
+              "options": "accuracy"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 78 },
-      "id": 25,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 63
+      },
+      "id": 62,
       "options": {
         "cellHeight": "sm",
-        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
-        "showHeader": true
+        "footer": {
+          "countRows": false,
+          "enablePagination": true,
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
       },
       "targets": [
         {
-          "datasource": { "type": "frser-sqlite-datasource", "uid": "${DS_POLYLENS_SQLITE}" },
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
           "format": "table",
-          "rawSql": "SELECT trader_address, validation_count, correct_count, incorrect_count, accuracy, avg_roi_proxy, trader_tier FROM v_trader_leaderboard ORDER BY accuracy DESC, validation_count DESC LIMIT 25",
+          "rawSql": "SELECT trader_address, validation_count, correct_count, accuracy, avg_roi_proxy, trader_tier FROM v_trader_leaderboard ORDER BY accuracy DESC, validation_count DESC LIMIT 20",
           "refId": "A"
         }
       ],
-      "title": "Accuracy Rankings",
+      "title": "Accuracy Leaderboard",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "accuracy"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 63
+      },
+      "id": 63,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "enablePagination": true,
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
+          "format": "table",
+          "rawSql": "SELECT trader_address, validation_count, correct_count, incorrect_count, accuracy, trader_tier FROM v_trader_leaderboard ORDER BY validation_count DESC, accuracy DESC LIMIT 20",
+          "refId": "A"
+        }
+      ],
+      "title": "Validation Count Leaderboard",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 71
+      },
+      "id": 106,
+      "panels": [],
+      "title": "ROW 7 \u2014 Audit & Health",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Daily validation accuracy and sample volume.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 72
+      },
+      "id": 70,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
+          "format": "time_series",
+          "rawSql": "SELECT datetime(validation_date) AS time, accuracy, validation_count FROM v_validation_trend ORDER BY validation_date",
+          "refId": "A"
+        }
+      ],
+      "title": "Validation Trend",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Daily signal generation volume across all families.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 72
+      },
+      "id": 71,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
+          "format": "time_series",
+          "rawSql": "SELECT datetime(trend_date) AS time, SUM(signal_count) AS signal_count FROM v_signal_performance_trend GROUP BY trend_date ORDER BY trend_date",
+          "refId": "A"
+        }
+      ],
+      "title": "Signal Trend",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Audit view of recommendation pipeline throughput.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 79
+      },
+      "id": 72,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
+          "format": "time_series",
+          "rawSql": "SELECT datetime(trend_date) AS time, recommendation_count, promoted_count, blocked_count FROM v_recommendation_trend ORDER BY trend_date",
+          "refId": "A"
+        }
+      ],
+      "title": "Recommendation Trend (Audit)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "${DS_POLYLENS_SQLITE}"
+      },
+      "description": "Datastore freshness and row counts for operator health checks.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 79
+      },
+      "id": 73,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "enablePagination": true,
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "${DS_POLYLENS_SQLITE}"
+          },
+          "format": "table",
+          "rawSql": "SELECT signal_rows, validation_rows, recommendation_rows, intent_rows, latest_signal_at, latest_validation_at, latest_recommendation_at, latest_intent_at, read_only, paper_only FROM v_database_health",
+          "refId": "A"
+        }
+      ],
+      "title": "Database Health",
       "type": "table"
     }
   ],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["polylens", "trader-intelligence", "paper-only", "read-only"],
+  "tags": [
+    "polylens",
+    "trader-intelligence",
+    "institutional",
+    "paper-only",
+    "read-only"
+  ],
   "templating": {
     "list": [
       {
@@ -903,11 +1999,22 @@
       }
     ]
   },
-  "time": { "from": "now-30d", "to": "now" },
-  "timepicker": {},
+  "time": {
+    "from": "now-90d",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
   "timezone": "browser",
   "title": "Polylens Trader Intelligence",
   "uid": "polylens-trader-intelligence",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
