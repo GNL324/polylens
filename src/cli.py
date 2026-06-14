@@ -95,6 +95,11 @@ from src.analysis.trader_signal_engine import (
     update_signal_performance,
 )
 from src.analysis.trader_signal_gates import trader_signal_gates_report
+from src.analysis.trader_signal_paper_bridge import (
+    PaperBridgeConfig,
+    run_trader_signal_paper_bridge,
+    trader_signal_paper_bridge_report,
+)
 from src.analysis.trader_signal_validation import (
     trader_signal_validation_report,
     validate_trader_signals_from_path,
@@ -487,6 +492,7 @@ def trader_signal_recommendations_cli(
 
 def trader_signal_report_cli(
     include_recommendations: bool = False,
+    include_paper_bridge_summary: bool = False,
     as_json: bool = False,
     db_path: str = DEFAULT_TRADER_SIGNAL_DB,
     limit: int = 20,
@@ -495,6 +501,7 @@ def trader_signal_report_cli(
         db_path=db_path,
         include_recommendations=include_recommendations,
         recommendation_limit=limit,
+        include_paper_bridge_summary=include_paper_bridge_summary,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return result
@@ -544,6 +551,34 @@ def trader_signal_validation_report_cli(
 
 def trader_signal_gates_cli(as_json: bool = False, db_path: str = DEFAULT_TRADER_SIGNAL_DB) -> dict[str, Any]:
     result = trader_signal_gates_report(db_path=db_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_signal_paper_bridge_cli(
+    as_json: bool = False,
+    db_path: str = DEFAULT_TRADER_SIGNAL_DB,
+    minimum_score: float = 60.0,
+    notional_usd: float = 10.0,
+    limit: int = 20,
+) -> dict[str, Any]:
+    result = run_trader_signal_paper_bridge(
+        db_path=db_path,
+        config=PaperBridgeConfig(
+            minimum_score=minimum_score,
+            notional_usd=notional_usd,
+            limit=limit,
+        ),
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_signal_paper_bridge_report_cli(
+    as_json: bool = False,
+    db_path: str = DEFAULT_TRADER_SIGNAL_DB,
+) -> dict[str, Any]:
+    result = trader_signal_paper_bridge_report(db_path=db_path)
     print(json.dumps(result, indent=2, sort_keys=True))
     return result
 
@@ -3307,6 +3342,7 @@ def main() -> None:
 
     trader_signal_report_parser = sub.add_parser("trader-signal-report", help="trader signal summary report")
     trader_signal_report_parser.add_argument("--include-recommendations", action="store_true")
+    trader_signal_report_parser.add_argument("--include-paper-bridge-summary", action="store_true")
     trader_signal_report_parser.add_argument("--limit", type=int, default=20)
     trader_signal_report_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
     trader_signal_report_parser.add_argument("--json", action="store_true")
@@ -3343,6 +3379,23 @@ def main() -> None:
     )
     trader_signal_gates_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
     trader_signal_gates_parser.add_argument("--json", action="store_true")
+
+    trader_signal_paper_bridge_parser = sub.add_parser(
+        "trader-signal-paper-bridge",
+        help="convert gated trader recommendations into paper-only copy intents",
+    )
+    trader_signal_paper_bridge_parser.add_argument("--minimum-score", type=float, default=60.0)
+    trader_signal_paper_bridge_parser.add_argument("--notional-usd", type=float, default=10.0)
+    trader_signal_paper_bridge_parser.add_argument("--limit", type=int, default=20)
+    trader_signal_paper_bridge_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    trader_signal_paper_bridge_parser.add_argument("--json", action="store_true")
+
+    trader_signal_paper_bridge_report_parser = sub.add_parser(
+        "trader-signal-paper-bridge-report",
+        help="report persisted trader signal paper bridge intents",
+    )
+    trader_signal_paper_bridge_report_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    trader_signal_paper_bridge_report_parser.add_argument("--json", action="store_true")
 
     args = parser.parse_args()
 
@@ -3735,6 +3788,7 @@ def main() -> None:
     elif args.command == "trader-signal-report":
         trader_signal_report_cli(
             include_recommendations=args.include_recommendations,
+            include_paper_bridge_summary=args.include_paper_bridge_summary,
             as_json=args.json,
             db_path=args.db_path,
             limit=args.limit,
@@ -3755,6 +3809,16 @@ def main() -> None:
         trader_signal_validation_report_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "trader-signal-gates":
         trader_signal_gates_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "trader-signal-paper-bridge":
+        trader_signal_paper_bridge_cli(
+            as_json=args.json,
+            db_path=args.db_path,
+            minimum_score=args.minimum_score,
+            notional_usd=args.notional_usd,
+            limit=args.limit,
+        )
+    elif args.command == "trader-signal-paper-bridge-report":
+        trader_signal_paper_bridge_report_cli(as_json=args.json, db_path=args.db_path)
 
 
 if __name__ == "__main__":

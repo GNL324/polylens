@@ -692,6 +692,7 @@ def trader_signal_report(
     db_path: str | Path = DEFAULT_TRADER_SIGNAL_DB,
     include_recommendations: bool = False,
     recommendation_limit: int = 20,
+    include_paper_bridge_summary: bool = False,
 ) -> dict[str, Any]:
     init_trader_signal_db(db_path)
     score_trader_signals(db_path=db_path)
@@ -762,6 +763,10 @@ def trader_signal_report(
         from src.analysis.trader_signal_gates import trader_signal_gates_report
 
         report["gate_summary"] = trader_signal_gates_report(db_path=db_path)["gate_summary"]
+    if include_paper_bridge_summary:
+        from src.analysis.trader_signal_paper_bridge import trader_signal_paper_bridge_summary
+
+        report["paper_bridge_summary"] = trader_signal_paper_bridge_summary(db_path=db_path)
     return report
 
 
