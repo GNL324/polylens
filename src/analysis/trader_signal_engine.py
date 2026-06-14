@@ -105,24 +105,123 @@ def init_trader_signal_db(db_path: str | Path = DEFAULT_TRADER_SIGNAL_DB) -> Non
         )
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _first_present(row: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        value = row.get(key)
+        if value is not None and str(value).strip() != "":
+            return value
+    return None
+
+
+def _parse_timestamp(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return 0.0
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    iso = text.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _normalize_action(row: dict[str, Any]) -> str:
+    explicit = str(_first_present(row, ("action", "side_effect")) or "").strip().lower()
+    if explicit in {"buy", "sell", "redeem", "merge"}:
+        return explicit
+    activity_type = str(_first_present(row, ("type", "event_type")) or "").upper()
+    if activity_type == "TRADE":
+        side = str(row.get("side") or "").strip().lower()
+        if side in {"buy", "sell"}:
+            return side
+        return ""
+    if activity_type == "REDEEM":
+        return "redeem"
+    if activity_type == "MERGE":
+        return "merge"
+    return ""
+
+
+def _market_id(row: dict[str, Any]) -> str:
+    value = _first_present(
+        row,
+        ("market_id", "condition_id", "conditionId", "market", "slug", "market_slug", "eventSlug", "event_slug"),
+    )
+    if value:
+        return str(value).strip()
+    title = str(_first_present(row, ("market_title", "title")) or "").strip()
+    return title or "unknown"
+
+
+def _normalize_side(row: dict[str, Any]) -> str:
+    for key in ("outcome", "position", "token_side"):
+        value = str(row.get(key) or "").strip().lower().rstrip(".")
+        if value in {"up", "down", "yes", "no"}:
+            return value
+        if value and value not in {"buy", "sell"}:
+            return value
+    raw_side = str(row.get("side") or "").strip().lower()
+    if raw_side in {"up", "down", "yes", "no"}:
+        return raw_side
+    return "unknown"
+
+
+def _infer_asset(row: dict[str, Any], title: str, slug: str) -> str:
+    explicit = str(row.get("asset") or "").strip().upper()
+    if explicit in {"BTC", "ETH", "SOL"}:
+        return explicit
+    text = f"{title} {slug}".upper()
+    for asset, terms in (("BTC", ("BTC", "BITCOIN")), ("ETH", ("ETH", "ETHEREUM")), ("SOL", ("SOL", "SOLANA"))):
+        if any(term in text for term in terms):
+            return asset
+    return str(row.get("asset") or "OTHER")
+
+
+def _extract_activity_rows(payload: Any) -> tuple[list[Any], str]:
+    default_wallet = ""
+    if isinstance(payload, list):
+        return payload, default_wallet
+    if isinstance(payload, dict):
+        default_wallet = _normalize_wallet(
+            str(_first_present(payload, ("wallet", "wallet_address")) or "")
+        )
+        for key in ("events", "activities", "activity"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value, default_wallet
+    raise ValueError("activity JSON must be a list of events or an export object with events or activities")
+
+
 def load_activity_json(path: str | Path) -> list[dict[str, Any]]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if isinstance(payload, list):
-        return [_normalize_event(row) for row in payload if isinstance(row, dict)]
-    if isinstance(payload, dict):
-        events = payload.get("events")
-        if isinstance(events, list):
-            wallet = _normalize_wallet(str(payload.get("wallet") or ""))
-            normalized: list[dict[str, Any]] = []
-            for row in events:
-                if not isinstance(row, dict):
-                    continue
-                event = _normalize_event(row)
-                if wallet and not event.get("wallet"):
-                    event["wallet"] = wallet
-                normalized.append(event)
-            return normalized
-    raise ValueError("activity JSON must be a list of events or an export object with events")
+    rows, default_wallet = _extract_activity_rows(payload)
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        event = _normalize_event(row, default_wallet=default_wallet)
+        if event.get("action"):
+            normalized.append(event)
+    return normalized
 
 
 def load_outcomes_json(path: str | Path | None) -> list[dict[str, Any]]:
@@ -138,24 +237,43 @@ def load_outcomes_json(path: str | Path | None) -> list[dict[str, Any]]:
     raise ValueError("outcomes JSON must be a list or an object with outcomes")
 
 
-def _normalize_event(row: dict[str, Any]) -> dict[str, Any]:
-    wallet = _normalize_wallet(str(row.get("wallet") or ""))
-    action = str(row.get("action") or row.get("event_type") or "").strip().lower()
+def _normalize_event(row: dict[str, Any], *, default_wallet: str = "") -> dict[str, Any]:
+    wallet = _normalize_wallet(
+        str(_first_present(row, ("wallet", "proxyWallet", "proxy_wallet")) or default_wallet or "")
+    )
+    action = _normalize_action(row)
+    timestamp = _parse_timestamp(_first_present(row, ("timestamp", "created_at", "time", "datetime")))
+    market_id = _market_id(row)
+    slug = str(_first_present(row, ("market_slug", "slug", "eventSlug", "event_slug")) or "")
+    market_title = str(
+        _first_present(row, ("market_title", "title")) or slug or market_id or "unknown"
+    )
+    price = _safe_float(_first_present(row, ("price", "avg_price", "average_price")))
+    shares = _safe_float(_first_present(row, ("shares", "size", "quantity", "volume")))
+    amount = _safe_float(_first_present(row, ("amount", "usdcSize", "usdc_size")))
+    if amount <= 0 and shares > 0 and price > 0:
+        amount = round(shares * price, 6)
+    side = _normalize_side(row)
+    asset = _infer_asset(row, market_title, slug)
+    tx_hash = str(
+        _first_present(row, ("tx_hash", "transactionHash", "transaction_hash", "hash"))
+        or f"{wallet}:{timestamp}:{action}:{market_id}:{side}"
+    )
     return {
         "wallet": wallet,
-        "timestamp": float(row.get("timestamp") or 0.0),
-        "event_type": str(row.get("event_type") or action),
-        "market_id": str(row.get("market_id") or row.get("condition_id") or ""),
-        "condition_id": str(row.get("condition_id") or row.get("market_id") or ""),
-        "market_slug": str(row.get("market_slug") or ""),
-        "market_title": str(row.get("market_title") or row.get("market_slug") or row.get("market_id") or ""),
-        "asset": str(row.get("asset") or "OTHER"),
-        "side": str(row.get("side") or "unknown"),
+        "timestamp": timestamp,
+        "event_type": str(_first_present(row, ("event_type", "type")) or action),
+        "market_id": market_id,
+        "condition_id": str(_first_present(row, ("condition_id", "conditionId", "market_id")) or market_id),
+        "market_slug": slug,
+        "market_title": market_title,
+        "asset": asset,
+        "side": side,
         "action": action,
-        "shares": float(row.get("shares") or 0.0),
-        "price": float(row.get("price") or 0.0),
-        "amount": float(row.get("amount") or 0.0),
-        "tx_hash": str(row.get("tx_hash") or f"{wallet}:{row.get('timestamp')}:{action}"),
+        "shares": shares,
+        "price": price,
+        "amount": amount,
+        "tx_hash": tx_hash,
         "raw": row.get("raw") if isinstance(row.get("raw"), dict) else row,
     }
 
@@ -176,11 +294,16 @@ def generate_signals_from_activity(events: list[dict[str, Any]]) -> list[dict[st
     if not events:
         return []
 
-    buy_amounts = [float(event["amount"]) for event in events if event.get("action") == "buy" and float(event.get("amount") or 0) > 0]
+    buy_amounts = [
+        float(event["amount"])
+        for event in events
+        if event.get("action") == "buy" and float(event.get("amount") or 0) > 0
+    ]
     median_buy = statistics.median(buy_amounts) if buy_amounts else 0.0
     first_buy_by_market: set[str] = set()
     market_buyers: dict[str, set[str]] = {}
     signals: list[dict[str, Any]] = []
+    exit_actions = {"sell", "redeem", "merge"}
 
     for event in sorted(events, key=lambda row: (float(row.get("timestamp") or 0), row.get("tx_hash") or "")):
         action = event.get("action")
@@ -188,21 +311,30 @@ def generate_signals_from_activity(events: list[dict[str, Any]]) -> list[dict[st
         wallet = str(event.get("wallet") or "")
         price = float(event.get("price") or 0.0)
         amount = float(event.get("amount") or 0.0)
+        shares = float(event.get("shares") or 0.0)
+        size_metric = amount if amount > 0 else shares
 
-        if action == "buy" and market_id:
+        if action == "buy" and market_id and market_id != "unknown":
             market_buyers.setdefault(market_id, set()).add(wallet)
             if market_id not in first_buy_by_market:
                 first_buy_by_market.add(market_id)
                 signals.append(_build_signal(event, "early_entry", "first buy in market for wallet activity export"))
             if median_buy > 0 and amount >= median_buy * 2:
                 signals.append(_build_signal(event, "conviction", "buy size at or above 2x median buy amount"))
-            elif amount >= 100:
-                signals.append(_build_signal(event, "conviction", "large notional buy"))
+            elif size_metric >= 100:
+                signals.append(_build_signal(event, "conviction", "large buy or position size"))
+            elif size_metric >= 50:
+                signals.append(_build_signal(event, "conviction", "elevated buy or position size"))
             if price >= 0.65:
                 signals.append(_build_signal(event, "contrarian", "buy at elevated price"))
-        elif action == "sell":
-            signals.append(_build_signal(event, "exit", "wallet reduced or exited exposure"))
-            if price <= 0.35:
+        elif action in exit_actions:
+            reason = {
+                "sell": "wallet reduced or exited exposure",
+                "redeem": "wallet redeemed resolved position",
+                "merge": "wallet merged paired positions",
+            }[action]
+            signals.append(_build_signal(event, "exit", reason))
+            if action == "sell" and price <= 0.35:
                 signals.append(_build_signal(event, "contrarian", "sell at depressed price"))
 
     for market_id, wallets in market_buyers.items():

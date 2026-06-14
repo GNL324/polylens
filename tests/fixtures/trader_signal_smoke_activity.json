@@ -1,0 +1,41 @@
+{
+  "wallet": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "events": [
+    {
+      "market_id": "btc-updown-smoke-1",
+      "market_title": "Bitcoin Up or Down - Smoke Test",
+      "asset": "BTC",
+      "side": "up",
+      "action": "buy",
+      "price": 0.42,
+      "size": 25,
+      "amount": 10.5,
+      "timestamp": "2026-06-14T18:00:00Z",
+      "tx_hash": "0xsmoke-buy-1"
+    },
+    {
+      "market_id": "btc-updown-smoke-1",
+      "market_title": "Bitcoin Up or Down - Smoke Test",
+      "asset": "BTC",
+      "side": "up",
+      "action": "buy",
+      "price": 0.44,
+      "size": 150,
+      "amount": 66.0,
+      "timestamp": "2026-06-14T18:05:00Z",
+      "tx_hash": "0xsmoke-buy-2"
+    },
+    {
+      "market_id": "btc-updown-smoke-1",
+      "market_title": "Bitcoin Up or Down - Smoke Test",
+      "asset": "BTC",
+      "side": "up",
+      "action": "sell",
+      "price": 0.58,
+      "size": 80,
+      "amount": 46.4,
+      "timestamp": "2026-06-14T18:10:00Z",
+      "tx_hash": "0xsmoke-sell-1"
+    }
+  ]
+}
