@@ -10,7 +10,7 @@ from src.sqlite_utils import closing_connection
 
 DEFAULT_TRADER_SIGNAL_DB = "data/trader_signals.db"
 SIGNAL_TYPES = ("early_entry", "conviction", "exit", "consensus", "contrarian")
-RECOMMENDATION_TYPES = ("watch", "paper_entry", "paper_exit", "avoid")
+RECOMMENDATION_TYPES = ("watch", "paper_entry", "paper_exit", "avoid", "blocked")
 SIGNAL_TYPE_WEIGHTS = {
     "early_entry": 60.0,
     "conviction": 70.0,
@@ -524,8 +524,17 @@ def generate_trader_signal_recommendations(
     db_path: str | Path = DEFAULT_TRADER_SIGNAL_DB,
     limit: int = 20,
 ) -> dict[str, Any]:
+    from src.analysis.trader_signal_gates import (
+        apply_gate_to_recommendation,
+        load_signal_family_stats,
+        split_recommendations_by_gate,
+        trader_signal_gates_report,
+    )
+    from src.analysis.trader_signal_validation import init_trader_signal_validation_db
+
     init_trader_signal_db(db_path)
     score_trader_signals(db_path=db_path)
+    family_stats = load_signal_family_stats(db_path=db_path)
     with closing_connection(db_path) as conn:
         rows = conn.execute(
             """
@@ -548,24 +557,30 @@ def generate_trader_signal_recommendations(
         key = (str(row["wallet"]), str(row["market_id"]))
         grouped.setdefault(key, []).append(recommendation_type)
         draft.append(
-            {
-                "recommendation_key": f"{row['signal_key']}:{recommendation_type}",
-                "wallet": row["wallet"],
-                "market_id": row["market_id"],
-                "market_title": row["market_title"],
-                "asset": row["asset"],
-                "side": row["side"],
-                "recommendation_type": recommendation_type,
-                "signal_type": signal_type,
-                "score": score,
-                "reason": _recommendation_reason(recommendation_type, signal_type, score),
-                "conflict": False,
-            }
+            apply_gate_to_recommendation(
+                {
+                    "recommendation_key": f"{row['signal_key']}:{recommendation_type}",
+                    "wallet": row["wallet"],
+                    "market_id": row["market_id"],
+                    "market_title": row["market_title"],
+                    "asset": row["asset"],
+                    "side": row["side"],
+                    "recommendation_type": recommendation_type,
+                    "signal_type": signal_type,
+                    "score": score,
+                    "reason": _recommendation_reason(recommendation_type, signal_type, score),
+                    "conflict": False,
+                },
+                family_stats,
+            )
         )
 
     conflict_keys = {key for key, types in grouped.items() if "paper_entry" in types and "paper_exit" in types}
     recommendations: list[dict[str, Any]] = []
     for item in draft:
+        if item.get("recommendation_type") == "blocked":
+            recommendations.append(item)
+            continue
         key = (item["wallet"], item["market_id"])
         if key in conflict_keys:
             item = {
@@ -579,6 +594,7 @@ def generate_trader_signal_recommendations(
 
     recommendations.sort(key=lambda row: (-float(row["score"]), row["recommendation_key"]))
     recommendations = recommendations[: max(int(limit), 0)]
+    split = split_recommendations_by_gate(recommendations)
 
     inserted = 0
     with closing_connection(db_path) as conn:
@@ -611,6 +627,9 @@ def generate_trader_signal_recommendations(
             "recommendation_count": len(recommendations),
             "recommendations_persisted": inserted,
             "conflicts": len(conflict_keys),
+            "promoted_recommendations": split["promoted_recommendations"],
+            "blocked_recommendations": split["blocked_recommendations"],
+            "gate_summary": trader_signal_gates_report(db_path=db_path)["gate_summary"],
         }
     )
 
@@ -731,10 +750,18 @@ def trader_signal_report(
         }
     )
     if include_recommendations:
-        report["recommendations"] = generate_trader_signal_recommendations(
+        recommendation_result = generate_trader_signal_recommendations(
             db_path=db_path,
             limit=recommendation_limit,
-        )["recommendations"]
+        )
+        report["recommendations"] = recommendation_result["recommendations"]
+        report["promoted_recommendations"] = recommendation_result["promoted_recommendations"]
+        report["blocked_recommendations"] = recommendation_result["blocked_recommendations"]
+        report["gate_summary"] = recommendation_result["gate_summary"]
+    else:
+        from src.analysis.trader_signal_gates import trader_signal_gates_report
+
+        report["gate_summary"] = trader_signal_gates_report(db_path=db_path)["gate_summary"]
     return report
 
 

@@ -94,6 +94,7 @@ from src.analysis.trader_signal_engine import (
     trader_signal_report,
     update_signal_performance,
 )
+from src.analysis.trader_signal_gates import trader_signal_gates_report
 from src.analysis.trader_signal_validation import (
     trader_signal_validation_report,
     validate_trader_signals_from_path,
@@ -537,6 +538,12 @@ def trader_signal_validation_report_cli(
     db_path: str = DEFAULT_TRADER_SIGNAL_DB,
 ) -> dict[str, Any]:
     result = trader_signal_validation_report(db_path=db_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_signal_gates_cli(as_json: bool = False, db_path: str = DEFAULT_TRADER_SIGNAL_DB) -> dict[str, Any]:
+    result = trader_signal_gates_report(db_path=db_path)
     print(json.dumps(result, indent=2, sort_keys=True))
     return result
 
@@ -3330,6 +3337,13 @@ def main() -> None:
     trader_signal_validation_report_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
     trader_signal_validation_report_parser.add_argument("--json", action="store_true")
 
+    trader_signal_gates_parser = sub.add_parser(
+        "trader-signal-gates",
+        help="report validation gate status for trader signal families",
+    )
+    trader_signal_gates_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    trader_signal_gates_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -3739,6 +3753,8 @@ def main() -> None:
         validate_trader_signals_cli(outcomes=args.outcomes, as_json=args.json, db_path=args.db_path)
     elif args.command == "trader-signal-validation-report":
         trader_signal_validation_report_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "trader-signal-gates":
+        trader_signal_gates_cli(as_json=args.json, db_path=args.db_path)
 
 
 if __name__ == "__main__":
