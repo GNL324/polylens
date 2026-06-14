@@ -1,0 +1,21 @@
+[Unit]
+Description=Polylens read-only trader signal cycle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=noel
+WorkingDirectory=/home/noel/polylens
+EnvironmentFile=-/home/noel/polylens/deploy/env/trader-signal-cycle.env
+Environment=PYTHONPATH=/home/noel/polylens
+Environment=POLYLENS_LIVE_TRADING=false
+Environment=POLYLENS_AUTONOMOUS_CRYPTO=false
+Environment=POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false
+Environment=POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED=false
+ExecStart=/home/noel/.venv/bin/python -m src.cli trader-signal-cycle --json
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
