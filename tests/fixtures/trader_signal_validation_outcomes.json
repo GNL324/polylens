@@ -1,0 +1,33 @@
+{
+  "outcomes": [
+    {
+      "outcome_key": "btc-smoke-up-win",
+      "market_id": "btc-updown-smoke-1",
+      "wallet": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "winning_side": "up",
+      "outcome": "win",
+      "resolved_at": "2026-06-14T20:00:00Z",
+      "roi": 0.38,
+      "entry_price": 0.42,
+      "exit_price": 0.58
+    },
+    {
+      "outcome_key": "eth-market-down-win",
+      "market_id": "eth-market-1",
+      "wallet": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "winning_side": "down",
+      "outcome": "win",
+      "resolved_at": "2026-06-13T12:00:00Z",
+      "roi": 0.22
+    },
+    {
+      "outcome_key": "eth-market-entry-loss",
+      "market_id": "eth-market-1",
+      "wallet": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "winning_side": "up",
+      "outcome": "loss",
+      "resolved_at": "2026-06-12T08:00:00Z",
+      "roi": -0.15
+    }
+  ]
+}

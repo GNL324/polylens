@@ -94,6 +94,10 @@ from src.analysis.trader_signal_engine import (
     trader_signal_report,
     update_signal_performance,
 )
+from src.analysis.trader_signal_validation import (
+    trader_signal_validation_report,
+    validate_trader_signals_from_path,
+)
 from src.analysis.trader_registry import (
     list_traders,
     top_traders,
@@ -514,6 +518,25 @@ def trader_signal_cycle_cli(
 
 def trader_signal_health_cli(as_json: bool = False, db_path: str = DEFAULT_TRADER_SIGNAL_DB) -> dict[str, Any]:
     result = trader_signal_health(db_path=db_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def validate_trader_signals_cli(
+    outcomes: str,
+    as_json: bool = False,
+    db_path: str = DEFAULT_TRADER_SIGNAL_DB,
+) -> dict[str, Any]:
+    result = validate_trader_signals_from_path(outcomes, db_path=db_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_signal_validation_report_cli(
+    as_json: bool = False,
+    db_path: str = DEFAULT_TRADER_SIGNAL_DB,
+) -> dict[str, Any]:
+    result = trader_signal_validation_report(db_path=db_path)
     print(json.dumps(result, indent=2, sort_keys=True))
     return result
 
@@ -3292,6 +3315,21 @@ def main() -> None:
     trader_signal_health_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
     trader_signal_health_parser.add_argument("--json", action="store_true")
 
+    validate_trader_signals_parser = sub.add_parser(
+        "validate-trader-signals",
+        help="validate read-only trader signals and recommendations against resolved outcomes",
+    )
+    validate_trader_signals_parser.add_argument("--outcomes", required=True, help="path to resolved outcomes JSON")
+    validate_trader_signals_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    validate_trader_signals_parser.add_argument("--json", action="store_true")
+
+    trader_signal_validation_report_parser = sub.add_parser(
+        "trader-signal-validation-report",
+        help="report trader signal validation analytics",
+    )
+    trader_signal_validation_report_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    trader_signal_validation_report_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -3697,6 +3735,10 @@ def main() -> None:
         )
     elif args.command == "trader-signal-health":
         trader_signal_health_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "validate-trader-signals":
+        validate_trader_signals_cli(outcomes=args.outcomes, as_json=args.json, db_path=args.db_path)
+    elif args.command == "trader-signal-validation-report":
+        trader_signal_validation_report_cli(as_json=args.json, db_path=args.db_path)
 
 
 if __name__ == "__main__":
