@@ -82,6 +82,18 @@ from src.analysis.trader_insights import build_trader_insight_report
 from src.analysis.trader_replay import build_trader_replay
 from src.analysis.trader_dna import build_trader_dna_report
 from src.analysis.trader_families import build_trader_family_report
+from src.analysis.trader_signal_engine import (
+    DEFAULT_TRADER_SIGNAL_DB,
+    generate_and_persist_signals_from_activity_path,
+    generate_trader_signal_recommendations,
+    load_outcomes_json,
+    run_trader_signal_cycle,
+    score_trader_signals,
+    trader_signal_health,
+    trader_signal_leaderboard,
+    trader_signal_report,
+    update_signal_performance,
+)
 from src.analysis.trader_registry import (
     list_traders,
     top_traders,
@@ -418,6 +430,91 @@ def paper_trading_health_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
         print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_signals_cli(
+    activity: str,
+    as_json: bool = False,
+    db_path: str = DEFAULT_TRADER_SIGNAL_DB,
+) -> dict[str, Any]:
+    result = generate_and_persist_signals_from_activity_path(activity, db_path=db_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def score_trader_signals_cli(as_json: bool = False, db_path: str = DEFAULT_TRADER_SIGNAL_DB) -> dict[str, Any]:
+    result = score_trader_signals(db_path=db_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def update_trader_signal_performance_cli(
+    outcomes: str | None = None,
+    as_json: bool = False,
+    db_path: str = DEFAULT_TRADER_SIGNAL_DB,
+) -> dict[str, Any]:
+    rows = load_outcomes_json(outcomes) if outcomes else []
+    result = update_signal_performance(rows, db_path=db_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_signal_leaderboard_cli(
+    as_json: bool = False,
+    db_path: str = DEFAULT_TRADER_SIGNAL_DB,
+    limit: int = 20,
+) -> dict[str, Any]:
+    result = trader_signal_leaderboard(db_path=db_path, limit=limit)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_signal_recommendations_cli(
+    as_json: bool = False,
+    db_path: str = DEFAULT_TRADER_SIGNAL_DB,
+    limit: int = 20,
+) -> dict[str, Any]:
+    result = generate_trader_signal_recommendations(db_path=db_path, limit=limit)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_signal_report_cli(
+    include_recommendations: bool = False,
+    as_json: bool = False,
+    db_path: str = DEFAULT_TRADER_SIGNAL_DB,
+    limit: int = 20,
+) -> dict[str, Any]:
+    result = trader_signal_report(
+        db_path=db_path,
+        include_recommendations=include_recommendations,
+        recommendation_limit=limit,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_signal_cycle_cli(
+    activity: str | None = None,
+    outcomes: str | None = None,
+    as_json: bool = False,
+    db_path: str = DEFAULT_TRADER_SIGNAL_DB,
+    limit: int = 20,
+) -> dict[str, Any]:
+    result = run_trader_signal_cycle(
+        activity_path=activity,
+        outcomes_path=outcomes,
+        db_path=db_path,
+        recommendation_limit=limit,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def trader_signal_health_cli(as_json: bool = False, db_path: str = DEFAULT_TRADER_SIGNAL_DB) -> dict[str, Any]:
+    result = trader_signal_health(db_path=db_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
     return result
 
 
@@ -3148,6 +3245,53 @@ def main() -> None:
     trader_dashboard_parser.add_argument("--host", default="127.0.0.1")
     trader_dashboard_parser.add_argument("--port", type=int, default=8788)
 
+    trader_signals_parser = sub.add_parser("trader-signals", help="generate read-only trader signals from wallet activity JSON")
+    trader_signals_parser.add_argument("--activity", required=True, help="path to wallet activity export JSON")
+    trader_signals_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    trader_signals_parser.add_argument("--json", action="store_true")
+
+    score_trader_signals_parser = sub.add_parser("score-trader-signals", help="score persisted trader signals")
+    score_trader_signals_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    score_trader_signals_parser.add_argument("--json", action="store_true")
+
+    update_trader_signal_performance_parser = sub.add_parser(
+        "update-trader-signal-performance",
+        help="update read-only trader signal performance from optional outcomes JSON",
+    )
+    update_trader_signal_performance_parser.add_argument("--outcomes", help="path to outcomes JSON")
+    update_trader_signal_performance_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    update_trader_signal_performance_parser.add_argument("--json", action="store_true")
+
+    trader_signal_leaderboard_parser = sub.add_parser("trader-signal-leaderboard", help="trader signal wallet leaderboard")
+    trader_signal_leaderboard_parser.add_argument("--limit", type=int, default=20)
+    trader_signal_leaderboard_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    trader_signal_leaderboard_parser.add_argument("--json", action="store_true")
+
+    trader_signal_recommendations_parser = sub.add_parser(
+        "trader-signal-recommendations",
+        help="generate paper-only trader signal recommendations",
+    )
+    trader_signal_recommendations_parser.add_argument("--limit", type=int, default=20)
+    trader_signal_recommendations_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    trader_signal_recommendations_parser.add_argument("--json", action="store_true")
+
+    trader_signal_report_parser = sub.add_parser("trader-signal-report", help="trader signal summary report")
+    trader_signal_report_parser.add_argument("--include-recommendations", action="store_true")
+    trader_signal_report_parser.add_argument("--limit", type=int, default=20)
+    trader_signal_report_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    trader_signal_report_parser.add_argument("--json", action="store_true")
+
+    trader_signal_cycle_parser = sub.add_parser("trader-signal-cycle", help="run one read-only trader signal cycle")
+    trader_signal_cycle_parser.add_argument("--activity", help="path to wallet activity export JSON")
+    trader_signal_cycle_parser.add_argument("--outcomes", help="path to optional outcomes JSON")
+    trader_signal_cycle_parser.add_argument("--limit", type=int, default=20)
+    trader_signal_cycle_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    trader_signal_cycle_parser.add_argument("--json", action="store_true")
+
+    trader_signal_health_parser = sub.add_parser("trader-signal-health", help="report trader signal engine health")
+    trader_signal_health_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
+    trader_signal_health_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -3526,6 +3670,33 @@ def main() -> None:
         from src.web.trader_dashboard import run_trader_dashboard
 
         run_trader_dashboard(host=args.host, port=args.port)
+    elif args.command == "trader-signals":
+        trader_signals_cli(activity=args.activity, as_json=args.json, db_path=args.db_path)
+    elif args.command == "score-trader-signals":
+        score_trader_signals_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "update-trader-signal-performance":
+        update_trader_signal_performance_cli(outcomes=args.outcomes, as_json=args.json, db_path=args.db_path)
+    elif args.command == "trader-signal-leaderboard":
+        trader_signal_leaderboard_cli(as_json=args.json, db_path=args.db_path, limit=args.limit)
+    elif args.command == "trader-signal-recommendations":
+        trader_signal_recommendations_cli(as_json=args.json, db_path=args.db_path, limit=args.limit)
+    elif args.command == "trader-signal-report":
+        trader_signal_report_cli(
+            include_recommendations=args.include_recommendations,
+            as_json=args.json,
+            db_path=args.db_path,
+            limit=args.limit,
+        )
+    elif args.command == "trader-signal-cycle":
+        trader_signal_cycle_cli(
+            activity=args.activity,
+            outcomes=args.outcomes,
+            as_json=args.json,
+            db_path=args.db_path,
+            limit=args.limit,
+        )
+    elif args.command == "trader-signal-health":
+        trader_signal_health_cli(as_json=args.json, db_path=args.db_path)
 
 
 if __name__ == "__main__":

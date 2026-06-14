@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Polylens read-only trader signal cycle every 15 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=polylens-trader-signal-cycle.service
+
+[Install]
+WantedBy=timers.target
