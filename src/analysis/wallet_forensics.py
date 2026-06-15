@@ -249,8 +249,6 @@ def load_wallet_activities(input_json: str | Path, wallet: str | None = None) ->
     if not wallet_address:
         raise ValueError("wallet address is required (--wallet or wallet field in input JSON)")
     activities = parse_activity_payload(payload, wallet_address)
-    if not activities:
-        raise ValueError("no supported wallet activity records found in input JSON")
     return activities, wallet_address
 
 

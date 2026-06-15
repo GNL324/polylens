@@ -135,6 +135,28 @@ def test_classification_directional_fixture():
     assert report.metrics["merge_count"] == 0
 
 
+def test_load_wallet_activities_allows_empty_events(tmp_path):
+    payload_path = tmp_path / "empty_events.json"
+    payload_path.write_text(
+        json.dumps({"wallet": "0x" + "a" * 40, "events": []}),
+        encoding="utf-8",
+    )
+    activities, wallet = load_wallet_activities(payload_path)
+    assert wallet == "0x" + "a" * 40
+    assert activities == []
+
+
+def test_build_wallet_forensics_report_with_empty_events_is_unknown(tmp_path):
+    payload_path = tmp_path / "empty_events.json"
+    payload_path.write_text(
+        json.dumps({"wallet": "0x" + "b" * 40, "events": []}),
+        encoding="utf-8",
+    )
+    report = build_wallet_forensics_report(payload_path, wallet="0x" + "b" * 40)
+    assert report.classification == "unknown"
+    assert report.confidence == 0.0
+
+
 def test_load_wallet_activities_requires_wallet_when_missing(tmp_path):
     payload_path = FIXTURES / "directional_wallet.json"
     activities, wallet = load_wallet_activities(payload_path)
