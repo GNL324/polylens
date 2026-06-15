@@ -971,6 +971,79 @@ def wallet_source_stats_cli(as_json: bool = False, days: int = 7) -> dict[str, A
     return result
 
 
+def wallet_alpha_report_cli(as_json: bool = False, wallet: str = "", limit: int = 25) -> dict[str, Any]:
+    from src.intelligence.wallet_alpha_lab import WalletAlphaLab, run_wallet_alpha_lab_cycle
+
+    lab = WalletAlphaLab()
+    if wallet:
+        payload = _with_alpha_flags({"report": lab.analyze_wallet(wallet).to_dict()})
+    else:
+        payload = run_wallet_alpha_lab_cycle(limit=limit)
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        if wallet:
+            report = payload["report"]
+            print(f"{report['wallet']}: alpha={report['alpha_score']:.2f} status={report['status']}")
+        else:
+            print(f"Alpha lab cycle complete: {payload.get('rankings_count', 0)} rankings")
+    return payload
+
+
+def wallet_alpha_rankings_cli(as_json: bool = False, limit: int = 25) -> dict[str, Any]:
+    from src.intelligence.wallet_alpha_lab import WalletAlphaLab
+
+    rankings = WalletAlphaLab().rank_wallets(limit=limit)
+    payload = _with_alpha_flags({"rankings": [row.to_dict() for row in rankings]})
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        for row in rankings:
+            print(f"  #{row.alpha_rank} {row.wallet} score={row.alpha_score:.2f} grade={row.alpha_grade}")
+    return payload
+
+
+def wallet_alpha_trends_cli(as_json: bool = False, wallet: str = "", limit: int = 25) -> dict[str, Any]:
+    from src.intelligence.wallet_alpha_lab import WalletAlphaLab
+
+    trends = WalletAlphaLab().load_alpha_trends(wallet=wallet or None, limit=limit)
+    payload = _with_alpha_flags({"trends": trends})
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Alpha trends: {len(trends)}")
+    return payload
+
+
+def wallet_alpha_decay_cli(as_json: bool = False, limit: int = 25) -> dict[str, Any]:
+    from src.intelligence.wallet_signal_decay import wallet_decay_report
+
+    result = wallet_decay_report()
+    wallets = result.get("wallets", [])[:limit]
+    payload = _with_alpha_flags({**result, "wallets": wallets})
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Avg half-life: {result.get('avg_half_life_days')} decay rate: {result.get('avg_decay_rate')}")
+    return payload
+
+
+def wallet_alpha_baselines_cli(as_json: bool = False) -> dict[str, Any]:
+    from src.intelligence.wallet_baseline_analysis import wallet_baseline_analysis_report
+
+    result = wallet_baseline_analysis_report()
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Promoted vs average delta: {result.get('promoted_vs_average_roi_delta')}")
+        print(f"Signal useful: {result.get('discovered_signal_useful')}")
+    return result
+
+
+def _with_alpha_flags(payload: dict[str, Any]) -> dict[str, Any]:
+    return {"read_only": True, "paper_only": True, **payload}
+
+
 def paper_performance_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
     result = build_paper_performance_report(db_path=db_path)
     if as_json:
@@ -3898,6 +3971,27 @@ def main() -> None:
     wallet_source_stats_parser.add_argument("--days", type=int, default=7)
     wallet_source_stats_parser.add_argument("--json", action="store_true")
 
+    wallet_alpha_report_parser = sub.add_parser("wallet-alpha-report", help="wallet alpha research report")
+    wallet_alpha_report_parser.add_argument("--wallet", default="")
+    wallet_alpha_report_parser.add_argument("--limit", type=int, default=25)
+    wallet_alpha_report_parser.add_argument("--json", action="store_true")
+
+    wallet_alpha_rankings_parser = sub.add_parser("wallet-alpha-rankings", help="wallet alpha rankings")
+    wallet_alpha_rankings_parser.add_argument("--limit", type=int, default=25)
+    wallet_alpha_rankings_parser.add_argument("--json", action="store_true")
+
+    wallet_alpha_trends_parser = sub.add_parser("wallet-alpha-trends", help="wallet alpha score trends")
+    wallet_alpha_trends_parser.add_argument("--wallet", default="")
+    wallet_alpha_trends_parser.add_argument("--limit", type=int, default=25)
+    wallet_alpha_trends_parser.add_argument("--json", action="store_true")
+
+    wallet_alpha_decay_parser = sub.add_parser("wallet-alpha-decay", help="wallet signal decay analysis")
+    wallet_alpha_decay_parser.add_argument("--limit", type=int, default=25)
+    wallet_alpha_decay_parser.add_argument("--json", action="store_true")
+
+    wallet_alpha_baselines_parser = sub.add_parser("wallet-alpha-baselines", help="wallet alpha baseline comparison")
+    wallet_alpha_baselines_parser.add_argument("--json", action="store_true")
+
     wallet_watchlist_parser = sub.add_parser("wallet-watchlist", help="wallets by lifecycle state")
     wallet_watchlist_parser.add_argument("--state", default="watchlist", choices=["all", "active", "watchlist", "probation", "retired"])
     wallet_watchlist_parser.add_argument("--limit", type=int, default=25)
@@ -4390,6 +4484,16 @@ def main() -> None:
         wallet_registry_growth_cli(as_json=args.json, limit=args.limit)
     elif args.command == "wallet-source-stats":
         wallet_source_stats_cli(as_json=args.json, days=args.days)
+    elif args.command == "wallet-alpha-report":
+        wallet_alpha_report_cli(as_json=args.json, wallet=args.wallet, limit=args.limit)
+    elif args.command == "wallet-alpha-rankings":
+        wallet_alpha_rankings_cli(as_json=args.json, limit=args.limit)
+    elif args.command == "wallet-alpha-trends":
+        wallet_alpha_trends_cli(as_json=args.json, wallet=args.wallet, limit=args.limit)
+    elif args.command == "wallet-alpha-decay":
+        wallet_alpha_decay_cli(as_json=args.json, limit=args.limit)
+    elif args.command == "wallet-alpha-baselines":
+        wallet_alpha_baselines_cli(as_json=args.json)
     elif args.command == "wallet-watchlist":
         wallet_watchlist_cli(as_json=args.json, state=args.state, limit=args.limit)
     elif args.command == "wallet-discovery-analytics":
