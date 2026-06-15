@@ -21,6 +21,7 @@ from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB
 from src.analysis.wallet_activity import validate_wallet
 from src.intelligence.wallet_discovery import WalletDiscoveryEngine
 from src.intelligence.wallet_discovery_analytics import wallet_discovery_analytics_report
+from src.intelligence.wallet_performance_analytics import wallet_performance_analytics_report
 from src.intelligence.wallet_signal_analytics import wallet_signal_analytics_report
 from src.sqlite_utils import closing_connection
 from src.web.trader_dashboard_styles import OVERVIEW_TABLE_LIMIT, TRADER_NAV_ITEMS, TRADER_TERMINAL_CSS
@@ -42,6 +43,7 @@ __all__ = [
     "load_profile_categories",
     "load_registry_summary",
     "load_wallet_discovery_dashboard",
+    "load_wallet_performance_dashboard",
     "load_wallet_signal_dashboard",
     "refresh_insights_action",
     "run_discovery_action",
@@ -425,6 +427,30 @@ def load_wallet_discovery_dashboard(
     }
 
 
+def load_wallet_performance_dashboard(
+    *,
+    traders_db_path: str | Path = DEFAULT_TRADERS_DB,
+    discovery_db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB,
+    limit: int = OVERVIEW_TABLE_LIMIT,
+) -> dict[str, Any]:
+    analytics = wallet_performance_analytics_report(
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+        top_limit=limit,
+    )
+    return {
+        "analytics": analytics,
+        "top_performers": analytics.get("top_performers", [])[:limit],
+        "promotions": analytics.get("recent_promotions", [])[:limit],
+        "demotions": analytics.get("recent_demotions", [])[:limit],
+        "retired_wallets": analytics.get("recent_retirements", [])[:limit],
+        "score_drift": analytics.get("score_drift", [])[:limit],
+        "archetype_performance": analytics.get("archetype_performance", [])[:limit],
+        "roi_distribution": analytics.get("roi_distribution", {}),
+        "expectancy_distribution": analytics.get("expectancy_distribution", {}),
+    }
+
+
 def analyze_wallet_details(
     wallet: str,
     *,
@@ -634,6 +660,8 @@ def create_trader_dashboard(config: TraderDashboardConfig | None = None) -> None
                     _render_signals_page(state, settings)
                 elif page == "Discovery":
                     _render_discovery_page(state, settings)
+                elif page == "Performance":
+                    _render_performance_page(state, settings)
                 elif page == "Insights":
                     _render_insights_page(state, settings, render_center)
 
@@ -1120,6 +1148,172 @@ def _render_discovery_page(state: dict[str, Any], settings: TraderDashboardConfi
             )
         else:
             ui.label("No archetype data yet.").classes("tt-status")
+
+
+def _render_performance_page(state: dict[str, Any], settings: TraderDashboardConfig) -> None:
+    from nicegui import ui
+
+    data = load_wallet_performance_dashboard(
+        traders_db_path=settings.traders_db_path,
+        discovery_db_path=settings.discovery_db_path,
+        limit=OVERVIEW_TABLE_LIMIT,
+    )
+    analytics = data.get("analytics", {})
+
+    with ui.element("div").classes("tt-kpi-grid w-full"):
+        for key, label in (
+            ("wallet_count", "Tracked Wallets"),
+            ("promoted_wallet_performance", "Promoted Avg Score"),
+            ("retired_wallet_performance", "Retired Avg Score"),
+            ("status_distribution", "Status Mix"),
+        ):
+            with ui.element("div").classes("tt-kpi-card"):
+                ui.label(label).classes("label")
+                value = analytics.get(key, "—")
+                if isinstance(value, dict):
+                    if key == "status_distribution":
+                        value = ", ".join(f"{k}:{v}" for k, v in value.items()) or "—"
+                    else:
+                        value = value.get("avg_score", value.get("count", "—"))
+                ui.label(str(value)).classes("value")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Top Performers").classes("tt-section-title")
+        performer_rows = [
+            {
+                "wallet": _short_wallet(row.get("wallet", "")),
+                "score": row.get("score"),
+                "status": row.get("status"),
+                "trend": row.get("trend"),
+            }
+            for row in data.get("top_performers", [])
+        ]
+        if performer_rows:
+            _render_table(
+                [
+                    {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                    {"name": "score", "label": "Score", "field": "score", "align": "left"},
+                    {"name": "status", "label": "Status", "field": "status", "align": "left"},
+                    {"name": "trend", "label": "Trend", "field": "trend", "align": "left"},
+                ],
+                performer_rows,
+            )
+        else:
+            ui.label("No performance snapshots yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Recent Promotions").classes("tt-section-title")
+        promotion_rows = [
+            {
+                "wallet": _short_wallet(row.get("wallet", "")),
+                "from": row.get("previous_status"),
+                "to": row.get("new_status"),
+                "score": row.get("score"),
+            }
+            for row in data.get("promotions", [])
+        ]
+        if promotion_rows:
+            _render_table(
+                [
+                    {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                    {"name": "from", "label": "From", "field": "from", "align": "left"},
+                    {"name": "to", "label": "To", "field": "to", "align": "left"},
+                    {"name": "score", "label": "Score", "field": "score", "align": "left"},
+                ],
+                promotion_rows,
+            )
+        else:
+            ui.label("No promotions recorded yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Recent Demotions").classes("tt-section-title")
+        demotion_rows = [
+            {
+                "wallet": _short_wallet(row.get("wallet", "")),
+                "from": row.get("previous_status"),
+                "to": row.get("new_status"),
+                "score": row.get("score"),
+            }
+            for row in data.get("demotions", [])
+        ]
+        if demotion_rows:
+            _render_table(
+                [
+                    {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                    {"name": "from", "label": "From", "field": "from", "align": "left"},
+                    {"name": "to", "label": "To", "field": "to", "align": "left"},
+                    {"name": "score", "label": "Score", "field": "score", "align": "left"},
+                ],
+                demotion_rows,
+            )
+        else:
+            ui.label("No demotions recorded yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Retired Wallets").classes("tt-section-title")
+        retired_rows = [
+            {
+                "wallet": _short_wallet(row.get("wallet", "")),
+                "score": row.get("score"),
+                "reason": row.get("reason"),
+            }
+            for row in data.get("retired_wallets", [])
+        ]
+        if retired_rows:
+            _render_table(
+                [
+                    {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                    {"name": "score", "label": "Score", "field": "score", "align": "left"},
+                    {"name": "reason", "label": "Reason", "field": "reason", "align": "left"},
+                ],
+                retired_rows,
+            )
+        else:
+            ui.label("No retirements recorded yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Score Drift").classes("tt-section-title")
+        drift_rows = [
+            {
+                "wallet": _short_wallet(row.get("wallet", "")),
+                "delta": row.get("score_delta"),
+                "trend": row.get("trend"),
+            }
+            for row in data.get("score_drift", [])
+        ]
+        if drift_rows:
+            _render_table(
+                [
+                    {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                    {"name": "delta", "label": "Delta", "field": "delta", "align": "left"},
+                    {"name": "trend", "label": "Trend", "field": "trend", "align": "left"},
+                ],
+                drift_rows,
+            )
+        else:
+            ui.label("No score drift data yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Archetype Performance").classes("tt-section-title")
+        archetype_rows = [
+            {
+                "archetype": row.get("archetype"),
+                "win_rate": row.get("win_rate"),
+                "avg_roi": row.get("avg_roi"),
+            }
+            for row in data.get("archetype_performance", [])
+        ]
+        if archetype_rows:
+            _render_table(
+                [
+                    {"name": "archetype", "label": "Archetype", "field": "archetype", "align": "left"},
+                    {"name": "win_rate", "label": "Win Rate", "field": "win_rate", "align": "left"},
+                    {"name": "avg_roi", "label": "Avg ROI", "field": "avg_roi", "align": "left"},
+                ],
+                archetype_rows,
+            )
+        else:
+            ui.label("No archetype performance data yet.").classes("tt-status")
 
 
 def _render_insights_page(state: dict[str, Any], settings: TraderDashboardConfig, render_center) -> None:
