@@ -19,7 +19,9 @@ from src.analysis.paper_copy_trader import DEFAULT_PAPER_COPY_DB
 from src.analysis.trader_signal_dashboard_views import init_trader_signal_dashboard_views
 from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB
 from src.analysis.wallet_activity import validate_wallet
+from src.intelligence.wallet_alpha_lab import WalletAlphaLab
 from src.intelligence.wallet_acquisition_analytics import wallet_acquisition_analytics_report
+from src.intelligence.wallet_baseline_analysis import wallet_baseline_analysis_report
 from src.intelligence.wallet_autonomy_service import WalletAutonomyService, load_wallet_autonomy_reports
 from src.intelligence.wallet_data_acquisition import WalletDataAcquisitionEngine
 from src.intelligence.wallet_discovery import WalletDiscoveryEngine
@@ -27,6 +29,7 @@ from src.intelligence.wallet_discovery_analytics import wallet_discovery_analyti
 from src.intelligence.wallet_performance_analytics import wallet_performance_analytics_report
 from src.intelligence.wallet_service_health import wallet_service_health_summary
 from src.intelligence.wallet_signal_analytics import wallet_signal_analytics_report
+from src.intelligence.wallet_signal_decay import wallet_decay_report
 from src.sqlite_utils import closing_connection
 from src.web.trader_dashboard_styles import OVERVIEW_TABLE_LIMIT, TRADER_NAV_ITEMS, TRADER_TERMINAL_CSS
 
@@ -46,6 +49,7 @@ __all__ = [
     "load_overview_recommendations",
     "load_profile_categories",
     "load_registry_summary",
+    "load_wallet_alpha_lab_dashboard",
     "load_wallet_acquisition_dashboard",
     "load_wallet_discovery_dashboard",
     "load_wallet_performance_dashboard",
@@ -480,6 +484,37 @@ def load_wallet_acquisition_dashboard(
     }
 
 
+def load_wallet_alpha_lab_dashboard(
+    *,
+    traders_db_path: str | Path = DEFAULT_TRADERS_DB,
+    discovery_db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB,
+    limit: int = OVERVIEW_TABLE_LIMIT,
+) -> dict[str, Any]:
+    lab = WalletAlphaLab(traders_db_path=traders_db_path, discovery_db_path=discovery_db_path)
+    baselines = wallet_baseline_analysis_report(
+        traders_db_path=str(traders_db_path),
+        discovery_db_path=str(discovery_db_path),
+    )
+    decay = wallet_decay_report(traders_db_path=str(traders_db_path))
+    promotion = lab.promotion_validation()
+    return {
+        "top_alpha_wallets": lab.load_recent_rankings(limit=limit),
+        "alpha_trends": lab.load_alpha_trends(limit=limit),
+        "archetype_rankings": lab.archetype_analysis(limit=limit),
+        "decay_summary": decay,
+        "decay_wallets": decay.get("wallets", [])[:limit],
+        "promotion_validation": promotion,
+        "baselines": baselines,
+        "research_answers": {
+            "promoted_outperform_average": promotion.get("promotion_justified", False),
+            "discovered_signals_useful": baselines.get("discovered_signal_useful", False),
+            "top_alpha_archetype": (lab.archetype_analysis(limit=1) or [{}])[0].get("archetype", "unknown"),
+            "avg_signal_half_life_days": decay.get("avg_half_life_days"),
+            "system_improving": baselines.get("system_improving", False),
+        },
+    }
+
+
 def load_wallet_service_dashboard(
     *,
     traders_db_path: str | Path = DEFAULT_TRADERS_DB,
@@ -718,6 +753,8 @@ def create_trader_dashboard(config: TraderDashboardConfig | None = None) -> None
                     _render_acquisition_page(state, settings)
                 elif page == "Performance":
                     _render_performance_page(state, settings)
+                elif page == "Alpha Lab":
+                    _render_alpha_lab_page(state, settings)
                 elif page == "Service":
                     _render_service_page(state, settings)
                 elif page == "Insights":
@@ -1314,6 +1351,134 @@ def _render_acquisition_page(state: dict[str, Any], settings: TraderDashboardCon
             )
         else:
             ui.label("No source statistics yet.").classes("tt-status")
+
+
+def _render_alpha_lab_page(state: dict[str, Any], settings: TraderDashboardConfig) -> None:
+    from nicegui import ui
+
+    data = load_wallet_alpha_lab_dashboard(
+        traders_db_path=settings.traders_db_path,
+        discovery_db_path=settings.discovery_db_path,
+        limit=OVERVIEW_TABLE_LIMIT,
+    )
+    answers = data.get("research_answers", {})
+    baselines = data.get("baselines", {})
+
+    with ui.element("div").classes("tt-kpi-grid w-full"):
+        for key, label in (
+            ("promoted_outperform_average", "Promoted > Average"),
+            ("discovered_signals_useful", "Signals Useful"),
+            ("top_alpha_archetype", "Top Archetype"),
+            ("avg_signal_half_life_days", "Signal Half-Life (days)"),
+        ):
+            with ui.element("div").classes("tt-kpi-card"):
+                ui.label(label).classes("label")
+                ui.label(str(answers.get(key, "—"))).classes("value")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Top Alpha Wallets").classes("tt-section-title")
+        rows = [
+            {
+                "wallet": _short_wallet(row.get("wallet", "")),
+                "rank": row.get("alpha_rank"),
+                "score": row.get("alpha_score"),
+                "grade": row.get("alpha_grade"),
+            }
+            for row in data.get("top_alpha_wallets", [])
+        ]
+        if rows:
+            _render_table(
+                [
+                    {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                    {"name": "rank", "label": "Rank", "field": "rank", "align": "left"},
+                    {"name": "score", "label": "Alpha Score", "field": "score", "align": "left"},
+                    {"name": "grade", "label": "Grade", "field": "grade", "align": "left"},
+                ],
+                rows,
+            )
+        else:
+            ui.label("No alpha rankings yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Archetype Rankings").classes("tt-section-title")
+        archetype_rows = [
+            {
+                "archetype": row.get("archetype"),
+                "alpha": row.get("avg_alpha_score"),
+                "roi": row.get("avg_roi"),
+                "decay": row.get("avg_decay_rate"),
+            }
+            for row in data.get("archetype_rankings", [])
+        ]
+        if archetype_rows:
+            _render_table(
+                [
+                    {"name": "archetype", "label": "Archetype", "field": "archetype", "align": "left"},
+                    {"name": "alpha", "label": "Alpha", "field": "alpha", "align": "left"},
+                    {"name": "roi", "label": "ROI", "field": "roi", "align": "left"},
+                    {"name": "decay", "label": "Decay", "field": "decay", "align": "left"},
+                ],
+                archetype_rows,
+            )
+        else:
+            ui.label("No archetype data yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Signal Decay").classes("tt-section-title")
+        decay_rows = [
+            {
+                "wallet": _short_wallet(row.get("wallet", "")),
+                "half_life": row.get("signal_half_life_days"),
+                "decay_rate": row.get("decay_rate"),
+            }
+            for row in data.get("decay_wallets", [])
+        ]
+        if decay_rows:
+            _render_table(
+                [
+                    {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                    {"name": "half_life", "label": "Half-Life", "field": "half_life", "align": "left"},
+                    {"name": "decay_rate", "label": "Decay Rate", "field": "decay_rate", "align": "left"},
+                ],
+                decay_rows,
+            )
+        else:
+            ui.label("No decay data yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Promotion Effectiveness").classes("tt-section-title")
+        promo = data.get("promotion_validation", {})
+        promo_rows = [
+            {"cohort": "promoted", "avg_alpha": promo.get("promoted", {}).get("avg_alpha"), "avg_roi": promo.get("promoted", {}).get("avg_roi")},
+            {"cohort": "demoted", "avg_alpha": promo.get("demoted", {}).get("avg_alpha"), "avg_roi": promo.get("demoted", {}).get("avg_roi")},
+            {"cohort": "retired", "avg_alpha": promo.get("retired", {}).get("avg_alpha"), "avg_roi": promo.get("retired", {}).get("avg_roi")},
+        ]
+        _render_table(
+            [
+                {"name": "cohort", "label": "Cohort", "field": "cohort", "align": "left"},
+                {"name": "avg_alpha", "label": "Avg Alpha", "field": "avg_alpha", "align": "left"},
+                {"name": "avg_roi", "label": "Avg ROI", "field": "avg_roi", "align": "left"},
+            ],
+            promo_rows,
+        )
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Baseline Comparisons").classes("tt-section-title")
+        baseline_rows = [
+            {"baseline": name, "roi": stats.get("roi"), "win_rate": stats.get("win_rate")}
+            for name, stats in sorted((baselines.get("baselines") or {}).items())
+        ]
+        if baseline_rows:
+            _render_table(
+                [
+                    {"name": "baseline", "label": "Baseline", "field": "baseline", "align": "left"},
+                    {"name": "roi", "label": "ROI", "field": "roi", "align": "left"},
+                    {"name": "win_rate", "label": "Win Rate", "field": "win_rate", "align": "left"},
+                ],
+                baseline_rows,
+            )
+        else:
+            ui.label("No baseline data yet.").classes("tt-status")
 
 
 def _render_performance_page(state: dict[str, Any], settings: TraderDashboardConfig) -> None:
