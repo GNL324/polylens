@@ -22,6 +22,8 @@ def test_service_files_exist():
     assert (SYSTEMD / "polylens-prop-arb-collector.timer").exists()
     assert (SYSTEMD / "polylens-prop-arb-collector.env.example").exists()
     assert (SYSTEMD / "polylens-prop-arb-collector-preflight.sh").exists()
+    assert (SYSTEMD / "wallet-autonomy.service").exists()
+    assert (SYSTEMD / "wallet-autonomy.timer").exists()
 
 
 def test_service_command_is_correct():
@@ -144,3 +146,14 @@ def test_prop_arb_collector_env_example_requires_keys():
     assert "ODDS_API_KEY=" in text
     assert "ODDSBLAZE_API_KEY=" in text
     assert "POLYLENS_LIVE_TRADING=false" in text
+
+
+def test_wallet_autonomy_service_is_paper_only():
+    service = (SYSTEMD / "wallet-autonomy.service").read_text()
+    timer = (SYSTEMD / "wallet-autonomy.timer").read_text()
+    assert "Type=oneshot" in service
+    assert "POLYLENS_LIVE_TRADING=false" in service
+    assert "wallet-service-run" in service
+    assert "OnUnitActiveSec=5min" in timer
+    assert "Unit=wallet-autonomy.service" in timer
+    assert "trade-" not in service
