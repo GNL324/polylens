@@ -19,7 +19,7 @@ from src.intelligence.wallet_discovery_analytics import wallet_discovery_analyti
 from src.intelligence.wallet_tracker import WalletTracker
 from src.sqlite_utils import closing_connection
 
-CYCLE_NAMES = ("acquisition", "discovery", "signals", "performance", "feedback", "analytics")
+CYCLE_NAMES = ("acquisition", "discovery", "signals", "performance", "feedback", "analytics", "alpha")
 SERVICE_KEY = "__service__"
 DEFAULT_CYCLE_INTERVALS_SECONDS = {
     "acquisition": 6 * 3600,
@@ -28,6 +28,7 @@ DEFAULT_CYCLE_INTERVALS_SECONDS = {
     "performance": 3600,
     "feedback": 3600,
     "analytics": 6 * 3600,
+    "alpha": 24 * 3600,
 }
 
 
@@ -358,6 +359,18 @@ class WalletAutonomyService:
 
         return self._run_wrapped("analytics", _runner)
 
+    def run_alpha_cycle(self) -> dict[str, Any]:
+        from src.intelligence.wallet_alpha_lab import run_wallet_alpha_lab_cycle
+
+        return self._run_wrapped(
+            "alpha",
+            lambda: run_wallet_alpha_lab_cycle(
+                traders_db_path=self.traders_db_path,
+                discovery_db_path=self.discovery_db_path,
+                limit=self.config.analytics_limit,
+            ),
+        )
+
     def run_cycle(self, cycle_name: str) -> dict[str, Any]:
         runners = {
             "acquisition": self.run_acquisition_cycle,
@@ -366,6 +379,7 @@ class WalletAutonomyService:
             "performance": self.run_performance_cycle,
             "feedback": self.run_feedback_cycle,
             "analytics": self.run_analytics_cycle,
+            "alpha": self.run_alpha_cycle,
         }
         if cycle_name not in runners:
             raise ValueError(f"Unknown cycle: {cycle_name}")
