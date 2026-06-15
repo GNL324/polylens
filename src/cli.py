@@ -820,25 +820,94 @@ def wallet_watchlist_cli(as_json: bool = False, state: str = "watchlist", limit:
 
 
 def wallet_discovery_analytics_cli(as_json: bool = False, limit: int = 10) -> dict[str, Any]:
-    engine = WalletDiscoveryEngine()
-    rows = engine.load_lifecycle(state=state if state != "all" else None, limit=limit)
-    payload = {"read_only": True, "paper_only": True, "state": state, "wallets": rows}
-    if as_json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
-    else:
-        print(f"{state} wallets: {len(rows)}")
-        for row in rows:
-            print(f"  {row.get('wallet')} score={row.get('score')} rank={row.get('rank')}")
-    return payload
-
-
-def wallet_discovery_analytics_cli(as_json: bool = False, limit: int = 10) -> dict[str, Any]:
     result = wallet_discovery_analytics_report(top_limit=limit)
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
         print(f"Discovery runs: {result.get('discovery_runs')} survival_rate: {result.get('survival_rate')}")
         print(f"Top performers: {len(result.get('top_performers', []))}")
+    return result
+
+
+def wallet_service_status_cli(as_json: bool = False) -> dict[str, Any]:
+    from src.intelligence.wallet_autonomy_service import WalletAutonomyService
+
+    service = WalletAutonomyService()
+    payload = service.service_status()
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Service status: {payload.get('service', {}).get('health_status', 'unknown')}")
+        for row in payload.get("cycles", []):
+            print(f"  {row.get('cycle_name')}: {row.get('last_status')} (due={payload.get('due', {}).get(row.get('cycle_name'))})")
+    return payload
+
+
+def wallet_service_run_cli(as_json: bool = False, force: bool = False) -> dict[str, Any]:
+    from src.intelligence.wallet_autonomy_service import run_wallet_autonomy_service
+
+    result = run_wallet_autonomy_service(force=force)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Cycles run: {result.get('cycles_run', 0)} in {result.get('duration_ms', 0)}ms")
+    return result
+
+
+def wallet_service_discovery_cli(as_json: bool = False) -> dict[str, Any]:
+    from src.intelligence.wallet_autonomy_service import WalletAutonomyService
+
+    result = WalletAutonomyService().run_discovery_cycle()
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Discovery cycle: {result.get('status')} ({result.get('duration_ms')}ms)")
+    return result
+
+
+def wallet_service_signals_cli(as_json: bool = False) -> dict[str, Any]:
+    from src.intelligence.wallet_autonomy_service import WalletAutonomyService
+
+    result = WalletAutonomyService().run_signals_cycle()
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Signals cycle: {result.get('status')} ({result.get('duration_ms')}ms)")
+    return result
+
+
+def wallet_service_performance_cli(as_json: bool = False) -> dict[str, Any]:
+    from src.intelligence.wallet_autonomy_service import WalletAutonomyService
+
+    result = WalletAutonomyService().run_performance_cycle()
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Performance cycle: {result.get('status')} ({result.get('duration_ms')}ms)")
+    return result
+
+
+def wallet_service_feedback_cli(as_json: bool = False) -> dict[str, Any]:
+    from src.intelligence.wallet_autonomy_service import WalletAutonomyService
+
+    result = WalletAutonomyService().run_feedback_cycle()
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Feedback cycle: {result.get('status')} ({result.get('duration_ms')}ms)")
+    return result
+
+
+def wallet_service_health_cli(as_json: bool = False) -> dict[str, Any]:
+    from src.intelligence.wallet_service_health import wallet_service_health_summary
+
+    result = wallet_service_health_summary()
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Health: {result.get('status')} success_rate={result.get('success_rate')}")
+        if result.get("stale_cycles"):
+            print(f"  stale: {', '.join(result['stale_cycles'])}")
     return result
 
 
@@ -3728,6 +3797,28 @@ def main() -> None:
     wallet_feedback_cycle_parser.add_argument("--limit", type=int, default=50)
     wallet_feedback_cycle_parser.add_argument("--json", action="store_true")
 
+    wallet_service_status_parser = sub.add_parser("wallet-service-status", help="wallet autonomy service status")
+    wallet_service_status_parser.add_argument("--json", action="store_true")
+
+    wallet_service_run_parser = sub.add_parser("wallet-service-run", help="run due wallet autonomy cycles")
+    wallet_service_run_parser.add_argument("--force", action="store_true")
+    wallet_service_run_parser.add_argument("--json", action="store_true")
+
+    wallet_service_discovery_parser = sub.add_parser("wallet-service-discovery", help="run wallet discovery cycle")
+    wallet_service_discovery_parser.add_argument("--json", action="store_true")
+
+    wallet_service_signals_parser = sub.add_parser("wallet-service-signals", help="run wallet signals cycle")
+    wallet_service_signals_parser.add_argument("--json", action="store_true")
+
+    wallet_service_performance_parser = sub.add_parser("wallet-service-performance", help="run wallet performance cycle")
+    wallet_service_performance_parser.add_argument("--json", action="store_true")
+
+    wallet_service_feedback_parser = sub.add_parser("wallet-service-feedback", help="run wallet feedback cycle")
+    wallet_service_feedback_parser.add_argument("--json", action="store_true")
+
+    wallet_service_health_parser = sub.add_parser("wallet-service-health", help="wallet autonomy service health")
+    wallet_service_health_parser.add_argument("--json", action="store_true")
+
     wallet_watchlist_parser = sub.add_parser("wallet-watchlist", help="wallets by lifecycle state")
     wallet_watchlist_parser.add_argument("--state", default="watchlist", choices=["all", "active", "watchlist", "probation", "retired"])
     wallet_watchlist_parser.add_argument("--limit", type=int, default=25)
@@ -4196,6 +4287,20 @@ def main() -> None:
         wallet_performance_report_cli(as_json=args.json, limit=args.limit)
     elif args.command == "wallet-feedback-cycle":
         wallet_feedback_cycle_cli(as_json=args.json, limit=args.limit)
+    elif args.command == "wallet-service-status":
+        wallet_service_status_cli(as_json=args.json)
+    elif args.command == "wallet-service-run":
+        wallet_service_run_cli(as_json=args.json, force=args.force)
+    elif args.command == "wallet-service-discovery":
+        wallet_service_discovery_cli(as_json=args.json)
+    elif args.command == "wallet-service-signals":
+        wallet_service_signals_cli(as_json=args.json)
+    elif args.command == "wallet-service-performance":
+        wallet_service_performance_cli(as_json=args.json)
+    elif args.command == "wallet-service-feedback":
+        wallet_service_feedback_cli(as_json=args.json)
+    elif args.command == "wallet-service-health":
+        wallet_service_health_cli(as_json=args.json)
     elif args.command == "wallet-watchlist":
         wallet_watchlist_cli(as_json=args.json, state=args.state, limit=args.limit)
     elif args.command == "wallet-discovery-analytics":
