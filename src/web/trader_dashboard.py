@@ -19,9 +19,11 @@ from src.analysis.paper_copy_trader import DEFAULT_PAPER_COPY_DB
 from src.analysis.trader_signal_dashboard_views import init_trader_signal_dashboard_views
 from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB
 from src.analysis.wallet_activity import validate_wallet
+from src.intelligence.wallet_autonomy_service import WalletAutonomyService, load_wallet_autonomy_reports
 from src.intelligence.wallet_discovery import WalletDiscoveryEngine
 from src.intelligence.wallet_discovery_analytics import wallet_discovery_analytics_report
 from src.intelligence.wallet_performance_analytics import wallet_performance_analytics_report
+from src.intelligence.wallet_service_health import wallet_service_health_summary
 from src.intelligence.wallet_signal_analytics import wallet_signal_analytics_report
 from src.sqlite_utils import closing_connection
 from src.web.trader_dashboard_styles import OVERVIEW_TABLE_LIMIT, TRADER_NAV_ITEMS, TRADER_TERMINAL_CSS
@@ -44,6 +46,7 @@ __all__ = [
     "load_registry_summary",
     "load_wallet_discovery_dashboard",
     "load_wallet_performance_dashboard",
+    "load_wallet_service_dashboard",
     "load_wallet_signal_dashboard",
     "refresh_insights_action",
     "run_discovery_action",
@@ -451,6 +454,31 @@ def load_wallet_performance_dashboard(
     }
 
 
+def load_wallet_service_dashboard(
+    *,
+    traders_db_path: str | Path = DEFAULT_TRADERS_DB,
+    discovery_db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB,
+    limit: int = OVERVIEW_TABLE_LIMIT,
+) -> dict[str, Any]:
+    service = WalletAutonomyService(traders_db_path=traders_db_path, discovery_db_path=discovery_db_path)
+    health = wallet_service_health_summary(traders_db_path=str(traders_db_path), service=service)
+    status = service.service_status()
+    reports = load_wallet_autonomy_reports(traders_db_path=traders_db_path, limit=limit)
+    cycle_runs = service.load_cycle_runs(limit=limit)
+    cycle_map = {row["cycle_name"]: row for row in status.get("cycles", [])}
+    return {
+        "health": health,
+        "status": status,
+        "cycle_history": cycle_runs,
+        "reports": reports,
+        "discovery_status": cycle_map.get("discovery", {}),
+        "signals_status": cycle_map.get("signals", {}),
+        "performance_status": cycle_map.get("performance", {}),
+        "feedback_status": cycle_map.get("feedback", {}),
+        "analytics_status": cycle_map.get("analytics", {}),
+    }
+
+
 def analyze_wallet_details(
     wallet: str,
     *,
@@ -662,6 +690,8 @@ def create_trader_dashboard(config: TraderDashboardConfig | None = None) -> None
                     _render_discovery_page(state, settings)
                 elif page == "Performance":
                     _render_performance_page(state, settings)
+                elif page == "Service":
+                    _render_service_page(state, settings)
                 elif page == "Insights":
                     _render_insights_page(state, settings, render_center)
 
@@ -1314,6 +1344,99 @@ def _render_performance_page(state: dict[str, Any], settings: TraderDashboardCon
             )
         else:
             ui.label("No archetype performance data yet.").classes("tt-status")
+
+
+def _render_service_page(state: dict[str, Any], settings: TraderDashboardConfig) -> None:
+    from nicegui import ui
+
+    data = load_wallet_service_dashboard(
+        traders_db_path=settings.traders_db_path,
+        discovery_db_path=settings.discovery_db_path,
+        limit=OVERVIEW_TABLE_LIMIT,
+    )
+    health = data.get("health", {})
+
+    with ui.element("div").classes("tt-kpi-grid w-full"):
+        for key, label in (
+            ("status", "Service Status"),
+            ("success_rate", "Success Rate"),
+            ("avg_latency_ms", "Avg Latency (ms)"),
+            ("stale_cycles", "Stale Cycles"),
+        ):
+            with ui.element("div").classes("tt-kpi-card"):
+                ui.label(label).classes("label")
+                value = health.get(key, "—")
+                if isinstance(value, list):
+                    value = ", ".join(value) if value else "none"
+                ui.label(str(value)).classes("value")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Cycle Status").classes("tt-section-title")
+        cycle_rows = [
+            {
+                "cycle": row.get("cycle"),
+                "last_run": row.get("last_run_at"),
+                "status": row.get("last_status"),
+                "stale": row.get("stale"),
+                "duration_ms": row.get("duration_ms"),
+            }
+            for row in health.get("cycles", [])
+        ]
+        if cycle_rows:
+            _render_table(
+                [
+                    {"name": "cycle", "label": "Cycle", "field": "cycle", "align": "left"},
+                    {"name": "last_run", "label": "Last Run", "field": "last_run", "align": "left"},
+                    {"name": "status", "label": "Status", "field": "status", "align": "left"},
+                    {"name": "stale", "label": "Stale", "field": "stale", "align": "left"},
+                    {"name": "duration_ms", "label": "Duration (ms)", "field": "duration_ms", "align": "left"},
+                ],
+                cycle_rows,
+            )
+        else:
+            ui.label("No cycle history yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Recent Cycle Runs").classes("tt-section-title")
+        history_rows = [
+            {
+                "cycle": row.get("cycle_name"),
+                "finished": row.get("finished_at"),
+                "status": row.get("status"),
+                "duration_ms": row.get("duration_ms"),
+            }
+            for row in data.get("cycle_history", [])
+        ]
+        if history_rows:
+            _render_table(
+                [
+                    {"name": "cycle", "label": "Cycle", "field": "cycle", "align": "left"},
+                    {"name": "finished", "label": "Finished", "field": "finished", "align": "left"},
+                    {"name": "status", "label": "Status", "field": "status", "align": "left"},
+                    {"name": "duration_ms", "label": "Duration (ms)", "field": "duration_ms", "align": "left"},
+                ],
+                history_rows,
+            )
+        else:
+            ui.label("No runs recorded yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Subsystem Status").classes("tt-section-title")
+        subsystem_rows = [
+            {"subsystem": "Discovery", "status": data.get("discovery_status", {}).get("last_status"), "health": data.get("discovery_status", {}).get("health_status")},
+            {"subsystem": "Signals", "status": data.get("signals_status", {}).get("last_status"), "health": data.get("signals_status", {}).get("health_status")},
+            {"subsystem": "Performance", "status": data.get("performance_status", {}).get("last_status"), "health": data.get("performance_status", {}).get("health_status")},
+            {"subsystem": "Feedback", "status": data.get("feedback_status", {}).get("last_status"), "health": data.get("feedback_status", {}).get("health_status")},
+            {"subsystem": "Analytics", "status": data.get("analytics_status", {}).get("last_status"), "health": data.get("analytics_status", {}).get("health_status")},
+        ]
+        _render_table(
+            [
+                {"name": "subsystem", "label": "Subsystem", "field": "subsystem", "align": "left"},
+                {"name": "status", "label": "Last Status", "field": "status", "align": "left"},
+                {"name": "health", "label": "Health", "field": "health", "align": "left"},
+            ],
+            subsystem_rows,
+        )
 
 
 def _render_insights_page(state: dict[str, Any], settings: TraderDashboardConfig, render_center) -> None:
