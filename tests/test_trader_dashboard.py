@@ -395,7 +395,7 @@ def test_trader_dashboard_cli_defaults(monkeypatch):
 
 
 def test_trader_nav_items_cover_required_pages():
-    assert TRADER_NAV_ITEMS == ("Overview", "Network", "Profiles", "Signals", "Insights")
+    assert TRADER_NAV_ITEMS == ("Overview", "Network", "Profiles", "Signals", "Discovery", "Insights")
 
 
 def test_load_wallet_signal_dashboard_returns_pipeline(tmp_path):
@@ -410,3 +410,16 @@ def test_load_wallet_signal_dashboard_returns_pipeline(tmp_path):
     assert "pipeline" in data
     assert "top_copied_wallets" in data
     assert "archetype_performance" in data
+
+
+def test_load_wallet_discovery_dashboard_returns_sections(tmp_path):
+    from src.web.trader_dashboard import load_wallet_discovery_dashboard
+
+    data = load_wallet_discovery_dashboard(
+        traders_db_path=tmp_path / "traders.db",
+        discovery_db_path=tmp_path / "discovery.db",
+        limit=5,
+    )
+    assert "analytics" in data
+    assert "top_ranked" in data
+    assert "recent_discoveries" in data
