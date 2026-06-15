@@ -15,7 +15,11 @@ from src.analysis.trader_network import build_trader_network, network_summary
 from src.analysis.trader_profiler import derive_specialization, profile_traders, profile_wallet
 from src.analysis.trader_registry import DEFAULT_TRADERS_DB, registry_stats
 from src.analysis.trader_scanner import DEFAULT_WALLET_EXPORT_DIR
+from src.analysis.paper_copy_trader import DEFAULT_PAPER_COPY_DB
+from src.analysis.trader_signal_dashboard_views import init_trader_signal_dashboard_views
+from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB
 from src.analysis.wallet_activity import validate_wallet
+from src.intelligence.wallet_signal_analytics import wallet_signal_analytics_report
 from src.sqlite_utils import closing_connection
 from src.web.trader_dashboard_styles import OVERVIEW_TABLE_LIMIT, TRADER_NAV_ITEMS, TRADER_TERMINAL_CSS
 
@@ -35,6 +39,7 @@ __all__ = [
     "load_overview_recommendations",
     "load_profile_categories",
     "load_registry_summary",
+    "load_wallet_signal_dashboard",
     "refresh_insights_action",
     "run_discovery_action",
     "run_profiling_action",
@@ -53,6 +58,8 @@ class TraderDashboardConfig:
     traders_db_path: str | Path = DEFAULT_TRADERS_DB
     discovery_db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB
     wallet_export_dir: str | Path = DEFAULT_WALLET_EXPORT_DIR
+    signal_db_path: str | Path = DEFAULT_TRADER_SIGNAL_DB
+    paper_copy_db_path: str | Path = DEFAULT_PAPER_COPY_DB
     seed_wallet: str = ""
     leaderboard_limit: int = DEFAULT_LEADERBOARD_LIMIT
     network_limit: int = DEFAULT_NETWORK_LIMIT
@@ -340,6 +347,50 @@ def load_overview_recommendations(
     ]
 
 
+def load_wallet_signal_dashboard(
+    *,
+    traders_db_path: str | Path = DEFAULT_TRADERS_DB,
+    signal_db_path: str | Path = DEFAULT_TRADER_SIGNAL_DB,
+    paper_copy_db_path: str | Path = DEFAULT_PAPER_COPY_DB,
+    limit: int = OVERVIEW_TABLE_LIMIT,
+) -> dict[str, Any]:
+    analytics = wallet_signal_analytics_report(
+        traders_db_path=traders_db_path,
+        signal_db_path=signal_db_path,
+        paper_copy_db_path=paper_copy_db_path,
+        wallet_limit=limit,
+        top_copied_limit=limit,
+    )
+    pipeline = {
+        "total_signals": 0,
+        "total_recommendations": 0,
+        "simulated_intents": 0,
+        "candidate_intents": 0,
+        "blocked_intents": 0,
+    }
+    signal_path = Path(signal_db_path)
+    if signal_path.exists():
+        init_trader_signal_dashboard_views(signal_path)
+        with closing_connection(signal_path) as conn:
+            overview = conn.execute("SELECT * FROM v_dashboard_overview").fetchone()
+            intents = conn.execute("SELECT * FROM v_paper_intent_pipeline").fetchone()
+        if overview is not None:
+            pipeline["total_signals"] = int(overview["total_signals"] or 0)
+            pipeline["total_recommendations"] = int(overview["total_recommendations"] or 0)
+            pipeline["simulated_intents"] = int(overview["simulated_paper_intents"] or 0)
+        if intents is not None:
+            pipeline["candidate_intents"] = int(intents["candidate_count"] or 0)
+            pipeline["blocked_intents"] = int(intents["blocked_count"] or 0)
+
+    return {
+        "pipeline": pipeline,
+        "summary": analytics.get("summary", {}),
+        "top_copied_wallets": analytics.get("top_copied_wallets", [])[:limit],
+        "archetype_performance": analytics.get("archetype_performance", [])[:limit],
+        "wallet_performance": analytics.get("wallets", [])[:limit],
+    }
+
+
 def analyze_wallet_details(
     wallet: str,
     *,
@@ -545,6 +596,8 @@ def create_trader_dashboard(config: TraderDashboardConfig | None = None) -> None
                     _render_network_page(state, settings)
                 elif page == "Profiles":
                     _render_profiles_page(state, settings)
+                elif page == "Signals":
+                    _render_signals_page(state, settings)
                 elif page == "Insights":
                     _render_insights_page(state, settings, render_center)
 
@@ -808,6 +861,94 @@ def _render_profiles_page(state: dict[str, Any], settings: TraderDashboardConfig
                 )
             else:
                 ui.label("No profiles in this category yet.").classes("tt-status")
+
+
+def _render_signals_page(state: dict[str, Any], settings: TraderDashboardConfig) -> None:
+    from nicegui import ui
+
+    data = load_wallet_signal_dashboard(
+        traders_db_path=settings.traders_db_path,
+        signal_db_path=settings.signal_db_path,
+        paper_copy_db_path=settings.paper_copy_db_path,
+        limit=OVERVIEW_TABLE_LIMIT,
+    )
+    pipeline = data.get("pipeline", {})
+    summary = data.get("summary", {})
+
+    with ui.element("div").classes("tt-kpi-grid w-full"):
+        for key, label in (
+            ("total_signals", "Signals"),
+            ("total_recommendations", "Recommendations"),
+            ("simulated_intents", "Simulated Intents"),
+            ("portfolio_win_rate", "Copy Win Rate"),
+        ):
+            value = pipeline.get(key, summary.get(key, 0))
+            with ui.element("div").classes("tt-kpi-card"):
+                ui.label(label).classes("label")
+                ui.label(str(value if value is not None else "—")).classes("value")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Wallet Signal Pipeline").classes("tt-section-title")
+        _render_table(
+            [
+                {"name": "metric", "label": "Metric", "field": "metric", "align": "left"},
+                {"name": "value", "label": "Value", "field": "value", "align": "left"},
+            ],
+            [
+                {"metric": "Total signals", "value": pipeline.get("total_signals", 0)},
+                {"metric": "Recommendations", "value": pipeline.get("total_recommendations", 0)},
+                {"metric": "Simulated intents", "value": pipeline.get("simulated_intents", 0)},
+                {"metric": "Candidate intents", "value": pipeline.get("candidate_intents", 0)},
+                {"metric": "Blocked intents", "value": pipeline.get("blocked_intents", 0)},
+                {"metric": "Portfolio ROI", "value": summary.get("portfolio_roi", "—")},
+                {"metric": "Realized PnL", "value": summary.get("realized_pnl", "—")},
+            ],
+        )
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Top Copied Wallets").classes("tt-section-title")
+        copied_rows = [
+            {
+                "wallet": _short_wallet(row.get("wallet", "")),
+                "archetype": row.get("archetype", "unknown"),
+                "win_rate": row.get("win_rate", "—"),
+                "roi": row.get("roi", "—"),
+                "realized_pnl": row.get("realized_pnl", "—"),
+                "closed_positions": row.get("closed_positions", 0),
+            }
+            for row in data.get("top_copied_wallets", [])
+        ]
+        if copied_rows:
+            _render_table(
+                [
+                    {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                    {"name": "archetype", "label": "Archetype", "field": "archetype", "align": "left"},
+                    {"name": "win_rate", "label": "Win Rate", "field": "win_rate", "align": "left"},
+                    {"name": "roi", "label": "ROI", "field": "roi", "align": "left"},
+                    {"name": "realized_pnl", "label": "PnL", "field": "realized_pnl", "align": "left"},
+                    {"name": "closed_positions", "label": "Closed", "field": "closed_positions", "align": "left"},
+                ],
+                copied_rows,
+            )
+        else:
+            ui.label("No copied wallet outcomes yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Strategy Archetype Performance").classes("tt-section-title")
+        archetype_rows = data.get("archetype_performance", [])
+        if archetype_rows:
+            _render_table(
+                [
+                    {"name": "archetype", "label": "Archetype", "field": "archetype", "align": "left"},
+                    {"name": "wallet_count", "label": "Wallets", "field": "wallet_count", "align": "left"},
+                    {"name": "win_rate", "label": "Win Rate", "field": "win_rate", "align": "left"},
+                    {"name": "avg_roi", "label": "Avg ROI", "field": "avg_roi", "align": "left"},
+                    {"name": "realized_pnl", "label": "PnL", "field": "realized_pnl", "align": "left"},
+                ],
+                archetype_rows,
+            )
+        else:
+            ui.label("No archetype performance data yet.").classes("tt-status")
 
 
 def _render_insights_page(state: dict[str, Any], settings: TraderDashboardConfig, render_center) -> None:
