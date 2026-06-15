@@ -208,8 +208,30 @@ class WalletScorer:
             },
         )
 
-    def rank_wallets(self, wallets: list[str]) -> list[WalletScore]:
+    def rank_wallets(
+        self,
+        wallets: list[str],
+        *,
+        performance_boosts: dict[str, float] | None = None,
+    ) -> list[WalletScore]:
         scored = [self.score_wallet(wallet) for wallet in wallets]
+        if performance_boosts:
+            adjusted: list[WalletScore] = []
+            for row in scored:
+                boost = performance_boosts.get(row.wallet, 0.0)
+                adjusted_score = round(_clamp(row.score + boost * 100.0), 4)
+                adjusted.append(
+                    WalletScore(
+                        wallet=row.wallet,
+                        score=adjusted_score,
+                        confidence=row.confidence,
+                        rank=row.rank,
+                        category=row.category,
+                        components={**row.components, "performance_boost": round(boost * 100.0, 4)},
+                        metrics=row.metrics,
+                    )
+                )
+            scored = adjusted
         scored.sort(key=lambda row: (-row.score, -row.confidence, row.wallet))
         ranked: list[WalletScore] = []
         for index, row in enumerate(scored, start=1):

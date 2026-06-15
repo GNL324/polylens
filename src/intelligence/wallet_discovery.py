@@ -337,6 +337,51 @@ class WalletDiscoveryEngine:
         targets = wallets or [candidate.wallet for candidate in load_discovered_wallets(db_path=self.discovery_db_path, limit=self.config.discovery_limit)]
         return self._tracker.refresh_wallets(targets, limit=limit)
 
+    def _performance_boosts(self, wallets: list[str]) -> dict[str, float]:
+        try:
+            from src.intelligence.wallet_performance import WalletPerformanceEngine
+
+            engine = WalletPerformanceEngine(
+                traders_db_path=self.traders_db_path,
+                discovery_db_path=self.discovery_db_path,
+            )
+            return {wallet: engine.performance_boost(wallet) for wallet in wallets}
+        except (ImportError, OSError):
+            return {}
+
+    def apply_performance_feedback(self) -> dict[str, Any]:
+        """Adjust discovery rankings based on wallet performance outcomes."""
+        from src.intelligence.wallet_performance import WalletPerformanceEngine
+
+        engine = WalletPerformanceEngine(
+            traders_db_path=self.traders_db_path,
+            discovery_db_path=self.discovery_db_path,
+        )
+        latest = engine.latest_scores_by_wallet()
+        boosted = 0
+        penalized = 0
+        with closing_connection(self.discovery_db_path) as conn:
+            for wallet, score in latest.items():
+                boost = engine.performance_boost(wallet)
+                row = conn.execute(
+                    "SELECT discovery_score FROM discovered_wallets WHERE wallet = ?",
+                    (wallet,),
+                ).fetchone()
+                if row is None:
+                    continue
+                base = int(row["discovery_score"] or 0)
+                adjustment = int(round(boost * 100))
+                new_score = max(0, min(100, base + adjustment))
+                if adjustment > 0:
+                    boosted += 1
+                elif adjustment < 0:
+                    penalized += 1
+                conn.execute(
+                    "UPDATE discovered_wallets SET discovery_score = ? WHERE wallet = ?",
+                    (new_score, wallet),
+                )
+        return {"boosted": boosted, "penalized": penalized, "tracked_wallets": len(latest)}
+
     def score_and_rank(self, wallets: list[str] | None = None) -> list[WalletScore]:
         if wallets is None:
             discovered = [candidate.wallet for candidate in load_discovered_wallets(db_path=self.discovery_db_path, limit=self.config.discovery_limit)]
@@ -348,7 +393,8 @@ class WalletDiscoveryEngine:
                 if normalized and normalized not in seen:
                     seen.add(normalized)
                     wallets.append(normalized)
-        ranked = self._scorer.rank_wallets(wallets)
+        performance_boosts = self._performance_boosts(wallets)
+        ranked = self._scorer.rank_wallets(wallets, performance_boosts=performance_boosts)
         now = _utc_now()
         with closing_connection(self.traders_db_path) as conn:
             for row in ranked:

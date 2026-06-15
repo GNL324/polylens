@@ -198,13 +198,25 @@ class WalletTracker:
             if candidate.wallet == wallet:
                 discovery_score = int(candidate.discovery_score)
                 break
+        performance_boost = 0.0
+        try:
+            from src.intelligence.wallet_performance import WalletPerformanceEngine
+
+            performance_boost = WalletPerformanceEngine(
+                traders_db_path=self.traders_db_path,
+                discovery_db_path=self.discovery_db_path,
+                paper_copy_db_path=self.paper_copy_db_path,
+            ).performance_boost(wallet)
+        except (ImportError, OSError):
+            performance_boost = 0.0
         composite = round(
-            alpha.watch_score * 0.4 + alpha.alpha_score * 0.4 + discovery_score * 0.2,
+            alpha.watch_score * 0.4 + alpha.alpha_score * 0.4 + discovery_score * 0.2 + performance_boost * 100.0,
             4,
         )
         return {
             "wallet": wallet,
             "composite_score": composite,
+            "performance_boost": round(performance_boost * 100.0, 4),
             "watch_score": alpha.watch_score,
             "alpha_score": alpha.alpha_score,
             "discovery_score": discovery_score,
