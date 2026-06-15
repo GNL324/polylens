@@ -925,6 +925,82 @@ def wallet_acquire_cli(as_json: bool = False, limit: int = 100) -> dict[str, Any
     return result
 
 
+def wallet_seed_import_cli(
+    as_json: bool = False,
+    traders_db_path: str = "data/traders.db",
+    discovery_db_path: str = "data/trader_discovery.db",
+    seed_path: str = "",
+    exports_dir: str = "",
+) -> dict[str, Any]:
+    from src.intelligence.wallet_seed_import import WalletSeedImporter
+
+    importer = WalletSeedImporter(
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+        seed_wallets_path=seed_path or "data/traders/seed_wallets.json",
+        seed_exports_dir=exports_dir or "data/traders/seed_exports",
+    )
+    result = importer.bootstrap_from_packaged_seeds()
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Imported {result.get('imported_count', 0)} wallets, skipped {result.get('skipped_duplicates', 0)}")
+    return result
+
+
+def wallet_bootstrap_cli(
+    as_json: bool = False,
+    force: bool = False,
+    limit: int = 100,
+    traders_db_path: str = "data/traders.db",
+    discovery_db_path: str = "data/trader_discovery.db",
+) -> dict[str, Any]:
+    from src.intelligence.wallet_seed_import import run_wallet_bootstrap_cycle
+
+    result = run_wallet_bootstrap_cycle(
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+        force=force,
+        limit=limit,
+    )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        if result.get("skipped"):
+            print(f"Bootstrap skipped: {result.get('reason')}")
+        else:
+            health = result.get("health") or {}
+            print(
+                f"Bootstrap complete: registry={health.get('registry_population', 0)} "
+                f"discovery={health.get('discovery_population', 0)} "
+                f"acquisition_records={health.get('wallet_acquisition_records', 0)}"
+            )
+    return result
+
+
+def wallet_bootstrap_health_cli(
+    as_json: bool = False,
+    traders_db_path: str = "data/traders.db",
+    discovery_db_path: str = "data/trader_discovery.db",
+) -> dict[str, Any]:
+    from src.intelligence.wallet_seed_import import bootstrap_health_report
+
+    result = bootstrap_health_report(
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+    )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(
+            f"Seed imports={result.get('seed_wallets_imported', 0)} "
+            f"registry={result.get('registry_population', 0)} "
+            f"discovery={result.get('discovery_population', 0)} "
+            f"success_rate={result.get('ingestion_success_rate', 0)}"
+        )
+    return result
+
+
 def wallet_acquisition_report_cli(as_json: bool = False, days: int = 7) -> dict[str, Any]:
     from src.intelligence.wallet_acquisition_analytics import wallet_acquisition_analytics_report
 
@@ -4202,6 +4278,25 @@ def main() -> None:
     wallet_acquire_parser.add_argument("--limit", type=int, default=100)
     wallet_acquire_parser.add_argument("--json", action="store_true")
 
+    wallet_seed_import_parser = sub.add_parser("wallet-seed-import", help="import seed wallets and offline forensic exports")
+    wallet_seed_import_parser.add_argument("--traders-db", default="data/traders.db")
+    wallet_seed_import_parser.add_argument("--discovery-db", default="data/trader_discovery.db")
+    wallet_seed_import_parser.add_argument("--seed-path", default="")
+    wallet_seed_import_parser.add_argument("--exports-dir", default="")
+    wallet_seed_import_parser.add_argument("--json", action="store_true")
+
+    wallet_bootstrap_parser = sub.add_parser("wallet-bootstrap", help="bootstrap wallet ecosystem from packaged seeds")
+    wallet_bootstrap_parser.add_argument("--traders-db", default="data/traders.db")
+    wallet_bootstrap_parser.add_argument("--discovery-db", default="data/trader_discovery.db")
+    wallet_bootstrap_parser.add_argument("--limit", type=int, default=100)
+    wallet_bootstrap_parser.add_argument("--force", action="store_true")
+    wallet_bootstrap_parser.add_argument("--json", action="store_true")
+
+    wallet_bootstrap_health_parser = sub.add_parser("wallet-bootstrap-health", help="wallet bootstrap population health")
+    wallet_bootstrap_health_parser.add_argument("--traders-db", default="data/traders.db")
+    wallet_bootstrap_health_parser.add_argument("--discovery-db", default="data/trader_discovery.db")
+    wallet_bootstrap_health_parser.add_argument("--json", action="store_true")
+
     wallet_acquisition_report_parser = sub.add_parser("wallet-acquisition-report", help="wallet acquisition analytics report")
     wallet_acquisition_report_parser.add_argument("--days", type=int, default=7)
     wallet_acquisition_report_parser.add_argument("--json", action="store_true")
@@ -4795,6 +4890,28 @@ def main() -> None:
         wallet_service_health_cli(as_json=args.json)
     elif args.command == "wallet-acquire":
         wallet_acquire_cli(as_json=args.json, limit=args.limit)
+    elif args.command == "wallet-seed-import":
+        wallet_seed_import_cli(
+            as_json=args.json,
+            traders_db_path=args.traders_db,
+            discovery_db_path=args.discovery_db,
+            seed_path=args.seed_path,
+            exports_dir=args.exports_dir,
+        )
+    elif args.command == "wallet-bootstrap":
+        wallet_bootstrap_cli(
+            as_json=args.json,
+            force=args.force,
+            limit=args.limit,
+            traders_db_path=args.traders_db,
+            discovery_db_path=args.discovery_db,
+        )
+    elif args.command == "wallet-bootstrap-health":
+        wallet_bootstrap_health_cli(
+            as_json=args.json,
+            traders_db_path=args.traders_db,
+            discovery_db_path=args.discovery_db,
+        )
     elif args.command == "wallet-acquisition-report":
         wallet_acquisition_report_cli(as_json=args.json, days=args.days)
     elif args.command == "wallet-acquisition-health":

@@ -19,9 +19,10 @@ from src.intelligence.wallet_discovery_analytics import wallet_discovery_analyti
 from src.intelligence.wallet_tracker import WalletTracker
 from src.sqlite_utils import closing_connection
 
-CYCLE_NAMES = ("acquisition", "discovery", "signals", "performance", "feedback", "analytics", "alpha")
+CYCLE_NAMES = ("bootstrap", "acquisition", "discovery", "signals", "performance", "feedback", "analytics", "alpha")
 SERVICE_KEY = "__service__"
 DEFAULT_CYCLE_INTERVALS_SECONDS = {
+    "bootstrap": 24 * 3600,
     "acquisition": 6 * 3600,
     "discovery": 6 * 3600,
     "signals": 5 * 60,
@@ -265,6 +266,23 @@ class WalletAutonomyService:
             )
             return {"cycle": cycle_name, "status": "error", "duration_ms": duration_ms, "error": error}
 
+    def run_bootstrap_cycle(self) -> dict[str, Any]:
+        from src.intelligence.wallet_seed_import import ecosystem_is_empty, run_wallet_bootstrap_cycle
+
+        def _runner() -> dict[str, Any]:
+            if not ecosystem_is_empty(
+                traders_db_path=self.traders_db_path,
+                discovery_db_path=self.discovery_db_path,
+            ):
+                return {"skipped": True, "reason": "ecosystem not empty"}
+            return run_wallet_bootstrap_cycle(
+                traders_db_path=self.traders_db_path,
+                discovery_db_path=self.discovery_db_path,
+                limit=self.config.discovery_limit,
+            )
+
+        return self._run_wrapped("bootstrap", _runner)
+
     def run_acquisition_cycle(self) -> dict[str, Any]:
         from src.intelligence.wallet_data_acquisition import run_wallet_acquisition
 
@@ -373,6 +391,7 @@ class WalletAutonomyService:
 
     def run_cycle(self, cycle_name: str) -> dict[str, Any]:
         runners = {
+            "bootstrap": self.run_bootstrap_cycle,
             "acquisition": self.run_acquisition_cycle,
             "discovery": self.run_discovery_cycle,
             "signals": self.run_signals_cycle,
@@ -401,7 +420,17 @@ class WalletAutonomyService:
         started = _utc_now()
         start_ts = self._clock()
         results: list[dict[str, Any]] = []
+        from src.intelligence.wallet_seed_import import ecosystem_is_empty
+
+        if force or ecosystem_is_empty(
+            traders_db_path=self.traders_db_path,
+            discovery_db_path=self.discovery_db_path,
+        ):
+            if force or self.cycle_is_due("bootstrap"):
+                results.append(self.run_cycle("bootstrap"))
         for cycle_name in CYCLE_NAMES:
+            if cycle_name == "bootstrap":
+                continue
             if force or self.cycle_is_due(cycle_name):
                 results.append(self.run_cycle(cycle_name))
         finished = _utc_now()
