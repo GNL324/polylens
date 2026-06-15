@@ -911,6 +911,66 @@ def wallet_service_health_cli(as_json: bool = False) -> dict[str, Any]:
     return result
 
 
+def wallet_acquire_cli(as_json: bool = False, limit: int = 100) -> dict[str, Any]:
+    from src.intelligence.wallet_data_acquisition import run_wallet_acquisition
+
+    result = run_wallet_acquisition(limit=limit)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(
+            f"Acquired {result.get('accepted', 0)} accepted, "
+            f"{result.get('rejected', 0)} rejected from {result.get('discovered', 0)} discovered"
+        )
+    return result
+
+
+def wallet_acquisition_report_cli(as_json: bool = False, days: int = 7) -> dict[str, Any]:
+    from src.intelligence.wallet_acquisition_analytics import wallet_acquisition_analytics_report
+
+    result = wallet_acquisition_analytics_report(days=days)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Accepted: {result.get('wallets_accepted')} Rejected: {result.get('wallets_rejected')}")
+        print(f"Registry growth: {result.get('registry_growth')} velocity: {result.get('acquisition_velocity')}")
+    return result
+
+
+def wallet_acquisition_health_cli(as_json: bool = False) -> dict[str, Any]:
+    from src.intelligence.wallet_acquisition_analytics import wallet_acquisition_health_summary
+
+    result = wallet_acquisition_health_summary()
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Acquisition health: {result.get('status')} last_run={result.get('last_run_at')}")
+    return result
+
+
+def wallet_registry_growth_cli(as_json: bool = False, limit: int = 25) -> dict[str, Any]:
+    from src.intelligence.wallet_acquisition_analytics import wallet_registry_growth_report
+
+    result = wallet_registry_growth_report(limit=limit)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Registry count: {result.get('registry_count')}")
+    return result
+
+
+def wallet_source_stats_cli(as_json: bool = False, days: int = 7) -> dict[str, Any]:
+    from src.intelligence.wallet_acquisition_analytics import wallet_source_stats_report
+
+    result = wallet_source_stats_report(days=days)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        for source, stats in sorted((result.get("source_effectiveness") or {}).items()):
+            print(f"  {source}: {stats}")
+    return result
+
+
 def paper_performance_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
     result = build_paper_performance_report(db_path=db_path)
     if as_json:
@@ -3819,6 +3879,25 @@ def main() -> None:
     wallet_service_health_parser = sub.add_parser("wallet-service-health", help="wallet autonomy service health")
     wallet_service_health_parser.add_argument("--json", action="store_true")
 
+    wallet_acquire_parser = sub.add_parser("wallet-acquire", help="run wallet data acquisition pipeline")
+    wallet_acquire_parser.add_argument("--limit", type=int, default=100)
+    wallet_acquire_parser.add_argument("--json", action="store_true")
+
+    wallet_acquisition_report_parser = sub.add_parser("wallet-acquisition-report", help="wallet acquisition analytics report")
+    wallet_acquisition_report_parser.add_argument("--days", type=int, default=7)
+    wallet_acquisition_report_parser.add_argument("--json", action="store_true")
+
+    wallet_acquisition_health_parser = sub.add_parser("wallet-acquisition-health", help="wallet acquisition health summary")
+    wallet_acquisition_health_parser.add_argument("--json", action="store_true")
+
+    wallet_registry_growth_parser = sub.add_parser("wallet-registry-growth", help="trader registry growth report")
+    wallet_registry_growth_parser.add_argument("--limit", type=int, default=25)
+    wallet_registry_growth_parser.add_argument("--json", action="store_true")
+
+    wallet_source_stats_parser = sub.add_parser("wallet-source-stats", help="wallet acquisition source statistics")
+    wallet_source_stats_parser.add_argument("--days", type=int, default=7)
+    wallet_source_stats_parser.add_argument("--json", action="store_true")
+
     wallet_watchlist_parser = sub.add_parser("wallet-watchlist", help="wallets by lifecycle state")
     wallet_watchlist_parser.add_argument("--state", default="watchlist", choices=["all", "active", "watchlist", "probation", "retired"])
     wallet_watchlist_parser.add_argument("--limit", type=int, default=25)
@@ -4301,6 +4380,16 @@ def main() -> None:
         wallet_service_feedback_cli(as_json=args.json)
     elif args.command == "wallet-service-health":
         wallet_service_health_cli(as_json=args.json)
+    elif args.command == "wallet-acquire":
+        wallet_acquire_cli(as_json=args.json, limit=args.limit)
+    elif args.command == "wallet-acquisition-report":
+        wallet_acquisition_report_cli(as_json=args.json, days=args.days)
+    elif args.command == "wallet-acquisition-health":
+        wallet_acquisition_health_cli(as_json=args.json)
+    elif args.command == "wallet-registry-growth":
+        wallet_registry_growth_cli(as_json=args.json, limit=args.limit)
+    elif args.command == "wallet-source-stats":
+        wallet_source_stats_cli(as_json=args.json, days=args.days)
     elif args.command == "wallet-watchlist":
         wallet_watchlist_cli(as_json=args.json, state=args.state, limit=args.limit)
     elif args.command == "wallet-discovery-analytics":
