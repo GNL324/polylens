@@ -19,7 +19,9 @@ from src.analysis.paper_copy_trader import DEFAULT_PAPER_COPY_DB
 from src.analysis.trader_signal_dashboard_views import init_trader_signal_dashboard_views
 from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB
 from src.analysis.wallet_activity import validate_wallet
+from src.intelligence.wallet_acquisition_analytics import wallet_acquisition_analytics_report
 from src.intelligence.wallet_autonomy_service import WalletAutonomyService, load_wallet_autonomy_reports
+from src.intelligence.wallet_data_acquisition import WalletDataAcquisitionEngine
 from src.intelligence.wallet_discovery import WalletDiscoveryEngine
 from src.intelligence.wallet_discovery_analytics import wallet_discovery_analytics_report
 from src.intelligence.wallet_performance_analytics import wallet_performance_analytics_report
@@ -44,6 +46,7 @@ __all__ = [
     "load_overview_recommendations",
     "load_profile_categories",
     "load_registry_summary",
+    "load_wallet_acquisition_dashboard",
     "load_wallet_discovery_dashboard",
     "load_wallet_performance_dashboard",
     "load_wallet_service_dashboard",
@@ -454,6 +457,29 @@ def load_wallet_performance_dashboard(
     }
 
 
+def load_wallet_acquisition_dashboard(
+    *,
+    traders_db_path: str | Path = DEFAULT_TRADERS_DB,
+    discovery_db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB,
+    limit: int = OVERVIEW_TABLE_LIMIT,
+) -> dict[str, Any]:
+    analytics = wallet_acquisition_analytics_report(
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+    )
+    engine = WalletDataAcquisitionEngine(traders_db_path=traders_db_path, discovery_db_path=discovery_db_path)
+    return {
+        "analytics": analytics,
+        "discovered_wallets": engine.load_recent_records(limit=limit),
+        "accepted_wallets": engine.load_recent_records(status="accepted", limit=limit),
+        "rejected_wallets": engine.load_recent_records(status="rejected", limit=limit),
+        "source_statistics": analytics.get("source_effectiveness", {}),
+        "acquisition_velocity": analytics.get("acquisition_velocity"),
+        "registry_growth": analytics.get("registry_growth"),
+        "quality_distribution": analytics.get("quality_score_distribution", {}),
+    }
+
+
 def load_wallet_service_dashboard(
     *,
     traders_db_path: str | Path = DEFAULT_TRADERS_DB,
@@ -688,6 +714,8 @@ def create_trader_dashboard(config: TraderDashboardConfig | None = None) -> None
                     _render_signals_page(state, settings)
                 elif page == "Discovery":
                     _render_discovery_page(state, settings)
+                elif page == "Acquisition":
+                    _render_acquisition_page(state, settings)
                 elif page == "Performance":
                     _render_performance_page(state, settings)
                 elif page == "Service":
@@ -1178,6 +1206,114 @@ def _render_discovery_page(state: dict[str, Any], settings: TraderDashboardConfi
             )
         else:
             ui.label("No archetype data yet.").classes("tt-status")
+
+
+def _render_acquisition_page(state: dict[str, Any], settings: TraderDashboardConfig) -> None:
+    from nicegui import ui
+
+    data = load_wallet_acquisition_dashboard(
+        traders_db_path=settings.traders_db_path,
+        discovery_db_path=settings.discovery_db_path,
+        limit=OVERVIEW_TABLE_LIMIT,
+    )
+    analytics = data.get("analytics", {})
+
+    with ui.element("div").classes("tt-kpi-grid w-full"):
+        for key, label in (
+            ("registry_growth", "Registry Size"),
+            ("wallets_accepted", "Accepted"),
+            ("wallets_rejected", "Rejected"),
+            ("acquisition_velocity", "Velocity"),
+        ):
+            with ui.element("div").classes("tt-kpi-card"):
+                ui.label(label).classes("label")
+                value = analytics.get(key, data.get(key, "—"))
+                ui.label(str(value)).classes("value")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Recently Discovered").classes("tt-section-title")
+        rows = [
+            {
+                "wallet": _short_wallet(row.get("wallet", "")),
+                "source": row.get("source"),
+                "status": row.get("status"),
+                "quality": row.get("quality_score"),
+            }
+            for row in data.get("discovered_wallets", [])
+        ]
+        if rows:
+            _render_table(
+                [
+                    {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                    {"name": "source", "label": "Source", "field": "source", "align": "left"},
+                    {"name": "status", "label": "Status", "field": "status", "align": "left"},
+                    {"name": "quality", "label": "Quality", "field": "quality", "align": "left"},
+                ],
+                rows,
+            )
+        else:
+            ui.label("No acquisition records yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Accepted Wallets").classes("tt-section-title")
+        accepted_rows = [
+            {
+                "wallet": _short_wallet(row.get("wallet", "")),
+                "source": row.get("source"),
+                "confidence": row.get("confidence"),
+            }
+            for row in data.get("accepted_wallets", [])
+        ]
+        if accepted_rows:
+            _render_table(
+                [
+                    {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                    {"name": "source", "label": "Source", "field": "source", "align": "left"},
+                    {"name": "confidence", "label": "Confidence", "field": "confidence", "align": "left"},
+                ],
+                accepted_rows,
+            )
+        else:
+            ui.label("No accepted wallets yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Rejected Wallets").classes("tt-section-title")
+        rejected_rows = [
+            {
+                "wallet": _short_wallet(row.get("wallet", "")),
+                "reason": row.get("reason"),
+                "source": row.get("source"),
+            }
+            for row in data.get("rejected_wallets", [])
+        ]
+        if rejected_rows:
+            _render_table(
+                [
+                    {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                    {"name": "reason", "label": "Reason", "field": "reason", "align": "left"},
+                    {"name": "source", "label": "Source", "field": "source", "align": "left"},
+                ],
+                rejected_rows,
+            )
+        else:
+            ui.label("No rejected wallets yet.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Source Statistics").classes("tt-section-title")
+        source_rows = [
+            {"source": source, "stats": ", ".join(f"{k}:{v}" for k, v in stats.items())}
+            for source, stats in sorted((data.get("source_statistics") or {}).items())
+        ]
+        if source_rows:
+            _render_table(
+                [
+                    {"name": "source", "label": "Source", "field": "source", "align": "left"},
+                    {"name": "stats", "label": "Outcomes", "field": "stats", "align": "left"},
+                ],
+                source_rows,
+            )
+        else:
+            ui.label("No source statistics yet.").classes("tt-status")
 
 
 def _render_performance_page(state: dict[str, Any], settings: TraderDashboardConfig) -> None:
