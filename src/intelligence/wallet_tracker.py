@@ -307,3 +307,39 @@ class WalletTracker:
             if path.exists():
                 paths.append(path)
         return paths
+
+    def sync_watchlist_to_paper_copy(
+        self,
+        entries: list[WalletWatchlistEntry] | None = None,
+        *,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        from src.analysis.paper_copy_trader import watch_trader
+
+        selected = (entries or self.load_watchlist())[: max(int(limit), 0)]
+        wallets: list[str] = []
+        for entry in selected:
+            watch_trader(
+                entry.wallet,
+                db_path=self.paper_copy_db_path,
+                source="wallet_intelligence",
+                alpha_score=entry.alpha_score,
+            )
+            wallets.append(entry.wallet)
+        return {"synced": len(wallets), "wallets": wallets}
+
+    def sync_watchlist_to_registry(
+        self,
+        entries: list[WalletWatchlistEntry] | None = None,
+    ) -> dict[str, Any]:
+        selected = entries or self.load_watchlist()
+        matched = 0
+        with closing_connection(self.traders_db_path) as conn:
+            for entry in selected:
+                row = conn.execute("SELECT wallet FROM wallets WHERE wallet = ?", (entry.wallet,)).fetchone()
+                if row is not None:
+                    matched += 1
+        return {
+            "watchlist_count": len(selected),
+            "registry_wallets_matched": matched,
+        }

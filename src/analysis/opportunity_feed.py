@@ -13,6 +13,7 @@ DEFAULT_OPPORTUNITY_DBS = ("data/opportunities.db", "data/polylens.db")
 DEFAULT_REPORT_GLOBS = ("data/reports/*.json",)
 DEFAULT_PAPER_COPY_DB = "data/paper_copy_trader.db"
 DEFAULT_SHORT_CRYPTO_PAPER_DB = "data/short_crypto_paper.db"
+DEFAULT_TRADER_SIGNAL_DB = "data/trader_signals.db"
 
 
 @dataclass
@@ -50,6 +51,7 @@ def get_live_opportunities(
     if include_auxiliary:
         rows.extend(_paper_copy_rows())
         rows.extend(_short_crypto_paper_rows())
+        rows.extend(_trader_signal_intent_rows())
     rows.extend(_report_rows(report_globs))
     opportunities = _dedupe(_normalize(row) for row in rows)
     opportunities.sort(key=lambda item: (-item.ranking_score, item.source, item.opportunity_id))
@@ -110,6 +112,7 @@ def opportunity_inventory(
         _inventory_row("recent_opportunities", "python -m src.cli recent-opportunities --json", sum(_table_count(path, "opportunities") for path in db_paths)),
         _inventory_row("recent_alerts", "python -m src.cli recent-alerts --json", sum(_table_count(path, "alert_events") + _table_count(path, "alerts") for path in db_paths)),
         _inventory_row("paper_copy_trader", "python -m src.cli paper-copy-trader --report --json", _table_count(DEFAULT_PAPER_COPY_DB, "paper_copy_positions")),
+        _inventory_row("trader_signal", "python -m src.cli trader-signal-paper-bridge --json", _table_count(DEFAULT_TRADER_SIGNAL_DB, "trader_signal_paper_intents")),
         _inventory_row("report_files", "data/reports/*.json", len(_report_rows(report_globs))),
     ]
     normalized = get_live_opportunities(db_paths=db_paths, report_globs=report_globs, include_ranker=False, include_auxiliary=include_auxiliary)
@@ -177,6 +180,76 @@ def _paper_copy_rows() -> list[dict[str, Any]]:
             if "paper_copy_positions" not in tables:
                 return []
             return [{**{key: row[key] for key in row.keys()}, "_feed_source": "paper_copy_trader", "_source_path": str(path)} for row in conn.execute("SELECT * FROM paper_copy_positions").fetchall()]
+    except Exception:
+        return []
+
+
+def _trader_signal_intent_rows() -> list[dict[str, Any]]:
+    path = Path(DEFAULT_TRADER_SIGNAL_DB)
+    if not path.exists():
+        return []
+    try:
+        with closing_connection(path) as conn:
+            tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "trader_signal_paper_intents" not in tables:
+                return []
+            query = """
+                SELECT
+                    i.intent_key,
+                    i.market_id,
+                    i.side,
+                    i.signal_type,
+                    i.score,
+                    i.notional_usd,
+                    i.trader_address,
+                    i.recommendation_type,
+                    s.market_title,
+                    s.asset,
+                    s.price,
+                    s.amount
+                FROM trader_signal_paper_intents i
+                LEFT JOIN trader_signals s
+                    ON s.wallet = i.trader_address
+                    AND s.market_id = i.market_id
+                    AND s.signal_type = i.signal_type
+                WHERE i.status = 'simulated'
+                ORDER BY i.score DESC, i.created_at DESC
+            """
+            if "trader_signals" not in tables:
+                query = """
+                    SELECT
+                        intent_key, market_id, side, signal_type, score, notional_usd,
+                        trader_address, recommendation_type,
+                        NULL AS market_title, NULL AS asset, NULL AS price, NULL AS amount
+                    FROM trader_signal_paper_intents
+                    WHERE status = 'simulated'
+                    ORDER BY score DESC, created_at DESC
+                """
+            rows = conn.execute(query).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            price = _first_float(dict(row), "price") or 0.5
+            results.append(
+                {
+                    "opportunity_id": str(row["intent_key"]),
+                    "market_id": str(row["market_id"]),
+                    "market_title": str(row["market_title"] or row["market_id"]),
+                    "asset": str(row["asset"] or "OTHER"),
+                    "side": str(row["side"] or "yes"),
+                    "price": price,
+                    "entry_price": price,
+                    "score": float(row["score"] or 0.0),
+                    "ranking_score": float(row["score"] or 0.0) / 100.0,
+                    "estimated_roi": 0.0,
+                    "strategy": f"wallet_signal:{row['signal_type']}",
+                    "trader_address": str(row["trader_address"]),
+                    "notional_usd": float(row["notional_usd"] or 0.0),
+                    "recommendation_type": str(row["recommendation_type"]),
+                    "_feed_source": "trader_signal",
+                    "_source_path": str(path),
+                }
+            )
+        return results
     except Exception:
         return []
 
@@ -273,7 +346,9 @@ def _dedupe(items: Any) -> list[FeedOpportunity]:
 
 
 def _strategy(row: dict[str, Any], source: str) -> str:
-    if source in {"prop_arbitrage", "live_arbitrage", "short_crypto", "short_crypto_paper", "paper_copy_trader"}:
+    if source in {"prop_arbitrage", "live_arbitrage", "short_crypto", "short_crypto_paper", "paper_copy_trader", "trader_signal"}:
+        if source == "trader_signal":
+            return str(row.get("strategy") or "wallet_signal")
         return source
     return str(row.get("strategy") or row.get("opportunity_type") or row.get("market_type") or source)
 
