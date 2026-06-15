@@ -395,7 +395,7 @@ def test_trader_dashboard_cli_defaults(monkeypatch):
 
 
 def test_trader_nav_items_cover_required_pages():
-    assert TRADER_NAV_ITEMS == ("Overview", "Network", "Profiles", "Signals", "Discovery", "Acquisition", "Performance", "Service", "Insights")
+    assert TRADER_NAV_ITEMS == ("Overview", "Network", "Profiles", "Signals", "Discovery", "Acquisition", "Performance", "Alpha Lab", "Service", "Insights")
 
 
 def test_load_wallet_signal_dashboard_returns_pipeline(tmp_path):
@@ -465,3 +465,16 @@ def test_load_wallet_acquisition_dashboard_returns_sections(tmp_path):
     assert "discovered_wallets" in data
     assert "accepted_wallets" in data
     assert "source_statistics" in data
+
+
+def test_load_wallet_alpha_lab_dashboard_returns_sections(tmp_path):
+    from src.web.trader_dashboard import load_wallet_alpha_lab_dashboard
+
+    data = load_wallet_alpha_lab_dashboard(
+        traders_db_path=tmp_path / "traders.db",
+        discovery_db_path=tmp_path / "discovery.db",
+        limit=5,
+    )
+    assert "top_alpha_wallets" in data
+    assert "baselines" in data
+    assert "research_answers" in data
