@@ -10,7 +10,7 @@ from src.intelligence.signal_engine import SignalEngine, SignalEngineConfig, run
 from src.intelligence.strategy_classifier import StrategyClassifier
 from src.intelligence.wallet_tracker import WalletTracker
 
-WALLET = "0x" + "a" * 40
+WALLET = "0x" + "a1" * 20
 
 
 def _report():

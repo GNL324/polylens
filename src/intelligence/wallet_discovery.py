@@ -20,6 +20,7 @@ from src.analysis.trader_scanner import DEFAULT_WATCHLIST_PATH, DEFAULT_WALLET_E
 from src.intelligence.strategy_classifier import StrategyClassifier
 from src.intelligence.wallet_scoring import WalletScore, WalletScorer
 from src.intelligence.wallet_tracker import WalletTracker
+from src.intelligence.wallet_synthetic_filter import filter_production_wallets, is_synthetic_wallet
 from src.sqlite_utils import closing_connection
 
 LIFECYCLE_STATES = ("active", "watchlist", "probation", "retired")
@@ -390,9 +391,10 @@ class WalletDiscoveryEngine:
             wallets = []
             for wallet in discovered + registry:
                 normalized = _normalize_wallet(wallet)
-                if normalized and normalized not in seen:
+                if normalized and normalized not in seen and not is_synthetic_wallet(normalized):
                     seen.add(normalized)
                     wallets.append(normalized)
+        wallets = filter_production_wallets(wallets)
         performance_boosts = self._performance_boosts(wallets)
         ranked = self._scorer.rank_wallets(wallets, performance_boosts=performance_boosts)
         now = _utc_now()

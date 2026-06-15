@@ -14,7 +14,7 @@ from src.intelligence.wallet_signal_analytics import (
 from src.intelligence.wallet_signal_integration import link_profile_to_registry, sync_profiles_to_registry
 from src.intelligence.wallet_tracker import WalletTracker
 
-WALLET = "0x" + "a" * 40
+WALLET = "0x" + "a1" * 20
 
 
 def _report():

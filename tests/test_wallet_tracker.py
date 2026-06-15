@@ -10,8 +10,8 @@ from src.analysis.trader_registry import save_wallet_report
 from src.analysis.wallet_activity import WalletActivityEvent, WalletActivityExport
 from src.intelligence.wallet_tracker import WalletTracker, init_wallet_watchlist_db
 
-WALLET_A = "0x" + "a" * 40
-WALLET_B = "0x" + "b" * 40
+WALLET_A = "0x" + "a1" * 20
+WALLET_B = "0x" + "b2" * 20
 
 
 def _report(wallet: str, classification: str = "arbitrage_trader", watch_score: int = 85):

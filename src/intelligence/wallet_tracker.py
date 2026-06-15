@@ -18,6 +18,7 @@ from src.analysis.wallet_activity import (
     export_wallet_activity,
     write_wallet_activity_export,
 )
+from src.intelligence.wallet_synthetic_filter import filter_production_wallets, is_synthetic_wallet
 from src.sqlite_utils import closing_connection
 
 DEFAULT_WATCHLIST_LIMIT = 50
@@ -138,7 +139,7 @@ class WalletTracker:
         watched = load_watched_wallets(db_path=self.paper_copy_db_path)
         discovered = [candidate.wallet for candidate in load_discovered_wallets(db_path=self.discovery_db_path, limit=limit)]
         registry = [row.wallet for row in list_traders(limit=limit, db_path=str(self.traders_db_path))]
-        return _dedupe_wallets(manual + watched + discovered + registry)[:limit]
+        return filter_production_wallets(_dedupe_wallets(manual + watched + discovered + registry))[:limit]
 
     def refresh_wallet_history(
         self,
@@ -225,7 +226,7 @@ class WalletTracker:
 
     def build_ranked_watchlist(self, *, limit: int = DEFAULT_WATCHLIST_LIMIT) -> list[WalletWatchlistEntry]:
         wallets = self.discover_top_wallets(limit=limit)
-        scored = [self.score_wallet(wallet) for wallet in wallets]
+        scored = [self.score_wallet(wallet) for wallet in wallets if not is_synthetic_wallet(wallet)]
         scored.sort(
             key=lambda row: (
                 -float(row["composite_score"]),

@@ -15,6 +15,7 @@ from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB
 from src.intelligence.wallet_discovery import WalletDiscoveryEngine, init_wallet_discovery_db
 from src.intelligence.wallet_performance import WalletPerformanceEngine, init_wallet_performance_db
 from src.intelligence.wallet_signal_analytics import _load_strategy_profiles, _wallet_validation_stats, wallet_performance_rows
+from src.intelligence.wallet_synthetic_filter import filter_production_wallets, is_synthetic_wallet
 from src.sqlite_utils import closing_connection
 
 ALPHA_GRADES = ("A", "B", "C", "D", "F")
@@ -240,11 +241,14 @@ class WalletAlphaLab:
             wallets = [str(row["wallet"]) for row in lifecycle]
             if not wallets:
                 wallets = [row.wallet for row in list_traders(limit=limit, db_path=str(self.traders_db_path))]
+        wallets = filter_production_wallets(wallets)
         from src.intelligence.wallet_signal_decay import wallet_decay_report
 
         decay_data = {row["wallet"]: row for row in wallet_decay_report(traders_db_path=self.traders_db_path).get("wallets", [])}
         ranked: list[AlphaScore] = []
         for wallet in wallets[: limit * 2]:
+            if is_synthetic_wallet(wallet):
+                continue
             report = self.analyze_wallet(wallet)
             decay = decay_data.get(wallet, {})
             resistance = 100.0 - _clamp(_safe_float(decay.get("decay_rate")) * 100)

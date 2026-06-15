@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from src.intelligence.wallet_synthetic_filter import is_synthetic_seed_wallet, synthetic_wallet_reason
+
 QUALITY_STATUSES = ("accepted", "rejected", "probation")
 
 
@@ -66,6 +68,15 @@ class WalletQualityFilter:
                 confidence=0.0,
                 status="rejected",
                 reason=reason or "malformed wallet",
+            )
+
+        if is_synthetic_seed_wallet(wallet, metadata=metadata):
+            return WalletQualityScore(
+                wallet=wallet,
+                quality_score=0.0,
+                confidence=0.0,
+                status="rejected",
+                reason=f"synthetic wallet: {synthetic_wallet_reason(wallet, metadata=metadata)}",
             )
 
         confidence = float(metadata.get("confidence") or 0.0)

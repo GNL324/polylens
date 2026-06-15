@@ -516,11 +516,15 @@ class WalletDataAcquisitionEngine:
         accepted = 0
         rejected = 0
         probation = 0
+        synthetic_rejected = 0
         results: list[dict[str, Any]] = []
         for acquired in candidates:
             outcome = self.acquire_wallet(acquired)
             results.append(outcome)
             status = outcome.get("status")
+            reason = str(outcome.get("reason") or "")
+            if "synthetic wallet" in reason:
+                synthetic_rejected += 1
             if status == "accepted":
                 accepted += 1
             elif status == "probation":
@@ -541,6 +545,7 @@ class WalletDataAcquisitionEngine:
                 "accepted": accepted,
                 "rejected": rejected,
                 "probation": probation,
+                "synthetic_rejected": synthetic_rejected,
                 "watchlist_count": len(watchlist),
                 "results": results[:25],
             }
