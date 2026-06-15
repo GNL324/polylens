@@ -687,23 +687,139 @@ def wallet_score_report_cli(as_json: bool = False, wallet: str = "", limit: int 
     return payload
 
 
-def wallet_promotions_cli(as_json: bool = False, limit: int = 20) -> dict[str, Any]:
+def wallet_promotions_cli(as_json: bool = False, limit: int = 20, source: str = "all") -> dict[str, Any]:
     engine = WalletDiscoveryEngine()
-    events = engine.load_promotion_events(limit=limit)
+    discovery_events = engine.load_promotion_events(limit=limit) if source in {"all", "discovery"} else []
+    performance_events: list[dict[str, Any]] = []
+    if source in {"all", "performance"}:
+        from src.intelligence.wallet_performance import WalletPerformanceEngine
+
+        performance_events = WalletPerformanceEngine().load_actions(action="promoted", limit=limit)
+    events = discovery_events + performance_events
+    events.sort(key=lambda row: str(row.get("recorded_at") or ""), reverse=True)
+    events = events[:limit]
+    payload = {"read_only": True, "paper_only": True, "source": source, "events": events}
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Promotion events ({source}): {len(events)}")
+        for event in events:
+            if "previous_state" in event:
+                print(
+                    f"  {event.get('wallet')} {event.get('previous_state')} -> {event.get('new_state')} "
+                    f"(score={event.get('score')})"
+                )
+            else:
+                print(
+                    f"  {event.get('wallet')} {event.get('previous_status')} -> {event.get('new_status')} "
+                    f"(score={event.get('score')})"
+                )
+    return payload
+
+
+def wallet_demotions_cli(as_json: bool = False, limit: int = 20) -> dict[str, Any]:
+    from src.intelligence.wallet_performance import WalletPerformanceEngine
+
+    events = WalletPerformanceEngine().load_actions(action="demoted", limit=limit)
     payload = {"read_only": True, "paper_only": True, "events": events}
     if as_json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print(f"Lifecycle events: {len(events)}")
+        print(f"Demotion events: {len(events)}")
         for event in events:
             print(
-                f"  {event.get('wallet')} {event.get('previous_state')} -> {event.get('new_state')} "
+                f"  {event.get('wallet')} {event.get('previous_status')} -> {event.get('new_status')} "
                 f"(score={event.get('score')})"
             )
     return payload
 
 
+def wallet_retirements_cli(as_json: bool = False, limit: int = 20) -> dict[str, Any]:
+    from src.intelligence.wallet_performance import WalletPerformanceEngine
+
+    events = WalletPerformanceEngine().load_actions(action="retired", limit=limit)
+    payload = {"read_only": True, "paper_only": True, "events": events}
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Retirement events: {len(events)}")
+        for event in events:
+            print(
+                f"  {event.get('wallet')} {event.get('previous_status')} -> {event.get('new_status')} "
+                f"(score={event.get('score')}) reason={event.get('reason')}"
+            )
+    return payload
+
+
+def wallet_performance_cli(as_json: bool = False, wallet: str = "", limit: int = 25) -> dict[str, Any]:
+    from src.intelligence.wallet_performance import WalletPerformanceEngine
+
+    engine = WalletPerformanceEngine()
+    if wallet:
+        scores = [engine.score_wallet(wallet).to_dict()]
+    else:
+        discovery = WalletDiscoveryEngine()
+        wallets = [row["wallet"] for row in discovery.load_lifecycle(limit=limit)]
+        scores = [row.to_dict() for row in engine.score_wallets(wallets[:limit])]
+    payload = {"read_only": True, "paper_only": True, "scores": scores}
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        for row in scores:
+            print(
+                f"{row['wallet']}: score={row['score']:.2f} status={row['status']} "
+                f"trend={row['trend']} confidence={row['confidence']:.2f}"
+            )
+    return payload
+
+
+def wallet_performance_report_cli(as_json: bool = False, limit: int = 15) -> dict[str, Any]:
+    from src.intelligence.wallet_performance_analytics import wallet_performance_analytics_report
+
+    result = wallet_performance_analytics_report(top_limit=limit)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Tracked wallets: {result.get('wallet_count')}")
+        print(f"Promoted: {result.get('promoted_wallet_performance', {}).get('count', 0)}")
+        print(f"Retired: {result.get('retired_wallet_performance', {}).get('count', 0)}")
+        print(f"Top performers: {len(result.get('top_performers', []))}")
+    return result
+
+
+def wallet_feedback_cycle_cli(as_json: bool = False, limit: int = 50) -> dict[str, Any]:
+    from src.intelligence.wallet_feedback_engine import run_wallet_feedback_cycle
+
+    discovery = WalletDiscoveryEngine()
+    wallets = [row["wallet"] for row in discovery.load_lifecycle(limit=limit)]
+    result = run_wallet_feedback_cycle(wallets=wallets or None)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(
+            f"Evaluated {result.get('evaluated', 0)} wallets; "
+            f"actions={result.get('actions_taken', 0)} "
+            f"promotions={result.get('promotions', 0)} "
+            f"demotions={result.get('demotions', 0)} "
+            f"retirements={result.get('retirements', 0)}"
+        )
+    return result
+
+
 def wallet_watchlist_cli(as_json: bool = False, state: str = "watchlist", limit: int = 25) -> dict[str, Any]:
+    engine = WalletDiscoveryEngine()
+    rows = engine.load_lifecycle(state=state if state != "all" else None, limit=limit)
+    payload = {"read_only": True, "paper_only": True, "state": state, "wallets": rows}
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"{state} wallets: {len(rows)}")
+        for row in rows:
+            print(f"  {row.get('wallet')} score={row.get('score')} rank={row.get('rank')}")
+    return payload
+
+
+def wallet_discovery_analytics_cli(as_json: bool = False, limit: int = 10) -> dict[str, Any]:
     engine = WalletDiscoveryEngine()
     rows = engine.load_lifecycle(state=state if state != "all" else None, limit=limit)
     payload = {"read_only": True, "paper_only": True, "state": state, "wallets": rows}
@@ -3580,9 +3696,37 @@ def main() -> None:
     wallet_score_report_parser.add_argument("--limit", type=int, default=25)
     wallet_score_report_parser.add_argument("--json", action="store_true")
 
-    wallet_promotions_parser = sub.add_parser("wallet-promotions", help="wallet promotion and demotion events")
+    wallet_promotions_parser = sub.add_parser("wallet-promotions", help="wallet promotion events (discovery and performance)")
     wallet_promotions_parser.add_argument("--limit", type=int, default=20)
+    wallet_promotions_parser.add_argument("--source", default="all", choices=["all", "discovery", "performance"])
     wallet_promotions_parser.add_argument("--json", action="store_true")
+
+    wallet_demotions_parser = sub.add_parser("wallet-demotions", help="wallet performance demotion events")
+    wallet_demotions_parser.add_argument("--limit", type=int, default=20)
+    wallet_demotions_parser.add_argument("--json", action="store_true")
+
+    wallet_retirements_parser = sub.add_parser("wallet-retirements", help="wallet performance retirement events")
+    wallet_retirements_parser.add_argument("--limit", type=int, default=20)
+    wallet_retirements_parser.add_argument("--json", action="store_true")
+
+    wallet_performance_parser = sub.add_parser("wallet-performance", help="wallet performance scores")
+    wallet_performance_parser.add_argument("--wallet", default="")
+    wallet_performance_parser.add_argument("--limit", type=int, default=25)
+    wallet_performance_parser.add_argument("--json", action="store_true")
+
+    wallet_performance_report_parser = sub.add_parser(
+        "wallet-performance-report",
+        help="wallet performance analytics report",
+    )
+    wallet_performance_report_parser.add_argument("--limit", type=int, default=15)
+    wallet_performance_report_parser.add_argument("--json", action="store_true")
+
+    wallet_feedback_cycle_parser = sub.add_parser(
+        "wallet-feedback-cycle",
+        help="run wallet performance feedback cycle (promote/demote/retire)",
+    )
+    wallet_feedback_cycle_parser.add_argument("--limit", type=int, default=50)
+    wallet_feedback_cycle_parser.add_argument("--json", action="store_true")
 
     wallet_watchlist_parser = sub.add_parser("wallet-watchlist", help="wallets by lifecycle state")
     wallet_watchlist_parser.add_argument("--state", default="watchlist", choices=["all", "active", "watchlist", "probation", "retired"])
@@ -4041,7 +4185,17 @@ def main() -> None:
     elif args.command == "wallet-score-report":
         wallet_score_report_cli(as_json=args.json, wallet=args.wallet, limit=args.limit)
     elif args.command == "wallet-promotions":
-        wallet_promotions_cli(as_json=args.json, limit=args.limit)
+        wallet_promotions_cli(as_json=args.json, limit=args.limit, source=args.source)
+    elif args.command == "wallet-demotions":
+        wallet_demotions_cli(as_json=args.json, limit=args.limit)
+    elif args.command == "wallet-retirements":
+        wallet_retirements_cli(as_json=args.json, limit=args.limit)
+    elif args.command == "wallet-performance":
+        wallet_performance_cli(as_json=args.json, wallet=args.wallet, limit=args.limit)
+    elif args.command == "wallet-performance-report":
+        wallet_performance_report_cli(as_json=args.json, limit=args.limit)
+    elif args.command == "wallet-feedback-cycle":
+        wallet_feedback_cycle_cli(as_json=args.json, limit=args.limit)
     elif args.command == "wallet-watchlist":
         wallet_watchlist_cli(as_json=args.json, state=args.state, limit=args.limit)
     elif args.command == "wallet-discovery-analytics":
