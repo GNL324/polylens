@@ -395,4 +395,18 @@ def test_trader_dashboard_cli_defaults(monkeypatch):
 
 
 def test_trader_nav_items_cover_required_pages():
-    assert TRADER_NAV_ITEMS == ("Overview", "Network", "Profiles", "Insights")
+    assert TRADER_NAV_ITEMS == ("Overview", "Network", "Profiles", "Signals", "Insights")
+
+
+def test_load_wallet_signal_dashboard_returns_pipeline(tmp_path):
+    from src.web.trader_dashboard import load_wallet_signal_dashboard
+
+    data = load_wallet_signal_dashboard(
+        traders_db_path=tmp_path / "traders.db",
+        signal_db_path=tmp_path / "signals.db",
+        paper_copy_db_path=tmp_path / "paper_copy.db",
+        limit=5,
+    )
+    assert "pipeline" in data
+    assert "top_copied_wallets" in data
+    assert "archetype_performance" in data

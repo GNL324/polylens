@@ -202,7 +202,10 @@ class SignalEngine:
             self.strategy_classifier.persist_profiles(profiles)
 
         signal_cycle = self.run_signal_cycle(outcomes_path=outcomes_path)
-        paper_bridge = self.integrate_paper_trading()
+        registry_sync = self.wallet_tracker.sync_watchlist_to_registry(
+            [entry for entry in watchlist if entry.wallet in wallets]
+        )
+        paper_trading = self.emit_wallet_recommendations_to_paper_trading()
 
         return _with_flags(
             {
@@ -210,7 +213,32 @@ class SignalEngine:
                 "refresh": refresh_result,
                 "strategy_profiles": [profile.to_dict() for profile in profiles],
                 "signal_cycle": signal_cycle,
-                "paper_bridge": paper_bridge,
+                "registry_sync": registry_sync,
+                "paper_trading": paper_trading,
+            }
+        )
+
+    def emit_wallet_recommendations_to_paper_trading(
+        self,
+        *,
+        sync_limit: int = 20,
+        run_copy_trader: bool = True,
+    ) -> dict[str, Any]:
+        from src.analysis.paper_copy_trader import run_paper_copy_trader
+
+        sync = self.wallet_tracker.sync_watchlist_to_paper_copy(limit=sync_limit)
+        bridge = self.integrate_paper_trading()
+        copy_result: dict[str, Any] | None = None
+        if run_copy_trader:
+            copy_result = run_paper_copy_trader(
+                db_path=self.wallet_tracker.paper_copy_db_path,
+                wallets=sync.get("wallets"),
+            )
+        return _with_flags(
+            {
+                "watchlist_sync": sync,
+                "paper_bridge": bridge,
+                "paper_copy_trader": copy_result,
             }
         )
 

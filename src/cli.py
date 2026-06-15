@@ -101,6 +101,8 @@ from src.analysis.trader_signal_paper_bridge import (
     trader_signal_paper_bridge_report,
 )
 from src.analysis.trader_signal_dashboard_views import trader_signal_dashboard_views_report
+from src.intelligence.wallet_signal_analytics import wallet_signal_analytics_report
+from src.intelligence.wallet_signal_integration import run_wallet_signal_integration_cycle
 from src.analysis.trader_signal_validation import (
     trader_signal_validation_report,
     validate_trader_signals_from_path,
@@ -589,6 +591,29 @@ def trader_signal_dashboard_views_cli(
     db_path: str = DEFAULT_TRADER_SIGNAL_DB,
 ) -> dict[str, Any]:
     result = trader_signal_dashboard_views_report(db_path=db_path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def wallet_signal_integration_cycle_cli(
+    as_json: bool = False,
+    watchlist_limit: int = 50,
+    sync_limit: int = 20,
+    outcomes_path: str | None = None,
+    skip_copy_trader: bool = False,
+) -> dict[str, Any]:
+    result = run_wallet_signal_integration_cycle(
+        watchlist_limit=watchlist_limit,
+        sync_limit=sync_limit,
+        outcomes_path=outcomes_path,
+        run_copy_trader=not skip_copy_trader,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def wallet_signal_analytics_cli(as_json: bool = False, wallet_limit: int = 25, top_copied_limit: int = 15) -> dict[str, Any]:
+    result = wallet_signal_analytics_report(wallet_limit=wallet_limit, top_copied_limit=top_copied_limit)
     print(json.dumps(result, indent=2, sort_keys=True))
     return result
 
@@ -3414,6 +3439,24 @@ def main() -> None:
     trader_signal_dashboard_views_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
     trader_signal_dashboard_views_parser.add_argument("--json", action="store_true")
 
+    wallet_signal_integration_parser = sub.add_parser(
+        "wallet-signal-integration-cycle",
+        help="run wallet intelligence through signal, recommendation, and paper-trading integration",
+    )
+    wallet_signal_integration_parser.add_argument("--watchlist-limit", type=int, default=50)
+    wallet_signal_integration_parser.add_argument("--sync-limit", type=int, default=20)
+    wallet_signal_integration_parser.add_argument("--outcomes-path", default=None)
+    wallet_signal_integration_parser.add_argument("--skip-copy-trader", action="store_true")
+    wallet_signal_integration_parser.add_argument("--json", action="store_true")
+
+    wallet_signal_analytics_parser = sub.add_parser(
+        "wallet-signal-analytics",
+        help="report wallet signal analytics (win rate, ROI, archetypes, top copied wallets)",
+    )
+    wallet_signal_analytics_parser.add_argument("--wallet-limit", type=int, default=25)
+    wallet_signal_analytics_parser.add_argument("--top-copied-limit", type=int, default=15)
+    wallet_signal_analytics_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -3838,6 +3881,20 @@ def main() -> None:
         trader_signal_paper_bridge_report_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "trader-signal-dashboard-views":
         trader_signal_dashboard_views_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "wallet-signal-integration-cycle":
+        wallet_signal_integration_cycle_cli(
+            as_json=args.json,
+            watchlist_limit=args.watchlist_limit,
+            sync_limit=args.sync_limit,
+            outcomes_path=args.outcomes_path,
+            skip_copy_trader=args.skip_copy_trader,
+        )
+    elif args.command == "wallet-signal-analytics":
+        wallet_signal_analytics_cli(
+            as_json=args.json,
+            wallet_limit=args.wallet_limit,
+            top_copied_limit=args.top_copied_limit,
+        )
 
 
 if __name__ == "__main__":
