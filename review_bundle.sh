@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -u
-cd /home/noel/polylens
+cd "$(dirname "$0")"
 OUT=/tmp/polylens_review_bundle.txt
 {
   echo "===== git status ====="

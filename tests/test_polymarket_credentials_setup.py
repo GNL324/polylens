@@ -27,7 +27,9 @@ def test_credentials_setup_secrets_not_printed(monkeypatch, tmp_path):
 
 
 def test_generated_env_file_is_gitignored():
-    gitignore = open("/home/noel/polylens/.gitignore", encoding="utf-8").read()
+    import pathlib
+
+    gitignore = (pathlib.Path(__file__).parent.parent / ".gitignore").read_text(encoding="utf-8")
     assert ".polymarket.env.generated" in gitignore
 
 
