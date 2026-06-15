@@ -395,7 +395,7 @@ def test_trader_dashboard_cli_defaults(monkeypatch):
 
 
 def test_trader_nav_items_cover_required_pages():
-    assert TRADER_NAV_ITEMS == ("Overview", "Network", "Profiles", "Signals", "Discovery", "Acquisition", "Performance", "Alpha Lab", "Service", "Insights")
+    assert TRADER_NAV_ITEMS == ("Overview", "Network", "Profiles", "Signals", "Discovery", "Acquisition", "Performance", "Alpha Lab", "Service", "Trading Readiness", "Insights")
 
 
 def test_load_wallet_signal_dashboard_returns_pipeline(tmp_path):

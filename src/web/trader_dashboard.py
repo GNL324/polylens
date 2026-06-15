@@ -32,6 +32,7 @@ from src.intelligence.wallet_signal_analytics import wallet_signal_analytics_rep
 from src.intelligence.wallet_signal_decay import wallet_decay_report
 from src.sqlite_utils import closing_connection
 from src.web.trader_dashboard_styles import OVERVIEW_TABLE_LIMIT, TRADER_NAV_ITEMS, TRADER_TERMINAL_CSS
+from src.web.trading_readiness_data import build_trading_readiness_dashboard
 
 __all__ = [
     "DEFAULT_TRADER_DASHBOARD_HOST",
@@ -757,6 +758,8 @@ def create_trader_dashboard(config: TraderDashboardConfig | None = None) -> None
                     _render_alpha_lab_page(state, settings)
                 elif page == "Service":
                     _render_service_page(state, settings)
+                elif page == "Trading Readiness":
+                    _render_trading_readiness_page(state, settings)
                 elif page == "Insights":
                     _render_insights_page(state, settings, render_center)
 
@@ -1737,6 +1740,147 @@ def _render_service_page(state: dict[str, Any], settings: TraderDashboardConfig)
                 {"name": "health", "label": "Health", "field": "health", "align": "left"},
             ],
             subsystem_rows,
+        )
+
+
+def _render_trading_readiness_page(state: dict[str, Any], settings: TraderDashboardConfig) -> None:
+    from nicegui import ui
+
+    data = build_trading_readiness_dashboard()
+    readiness = data.get("readiness", {})
+    gate = data.get("gate", {})
+    kill = data.get("kill_switch", {})
+    flags = data.get("live_flags", {})
+    limits = data.get("risk_limits", {})
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Trading Readiness").classes("tt-section-title")
+        ui.label("Read-only visibility for future live execution gates. Live trading cannot be enabled from this dashboard.").classes("tt-status")
+
+    with ui.element("div").classes("tt-kpi-grid w-full"):
+        for key, label in (
+            ("ready", "Readiness"),
+            ("paper_only", "Paper Only"),
+            ("live_trading_enabled", "Live Enabled"),
+            ("required_human_approval", "Approval Required"),
+        ):
+            with ui.element("div").classes("tt-kpi-card"):
+                ui.label(label).classes("label")
+                value = readiness.get(key, "—")
+                ui.label(str(value)).classes("value")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Blockers").classes("tt-section-title")
+        blockers = readiness.get("blockers") or []
+        if blockers:
+            for item in blockers:
+                ui.label(f"• {item}").classes("tt-status")
+        else:
+            ui.label("No blockers.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Execution Gate").classes("tt-section-title")
+        ui.label(f"Status: {'ALLOWED' if gate.get('allowed') else 'BLOCKED'}").classes("tt-status")
+        gate_reasons = gate.get("reasons") or []
+        if gate_reasons:
+            for reason in gate_reasons:
+                ui.label(f"• {reason}").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Approved Strategies").classes("tt-section-title")
+        approval_rows = [
+            {
+                "strategy_id": row.get("strategy_id"),
+                "status": row.get("approval_status"),
+                "approved_by": row.get("approved_by"),
+                "approved_at": row.get("approved_at"),
+            }
+            for row in data.get("approved_strategies", [])
+        ]
+        if approval_rows:
+            _render_table(
+                [
+                    {"name": "strategy_id", "label": "Strategy", "field": "strategy_id", "align": "left"},
+                    {"name": "status", "label": "Status", "field": "status", "align": "left"},
+                    {"name": "approved_by", "label": "Approved By", "field": "approved_by", "align": "left"},
+                    {"name": "approved_at", "label": "Approved At", "field": "approved_at", "align": "left"},
+                ],
+                approval_rows,
+            )
+        else:
+            ui.label("No approved strategies.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Kill Switch").classes("tt-section-title")
+        ui.label(f"Halted: {kill.get('halted')}").classes("tt-status")
+        halt_rows = [
+            {
+                "scope": row.get("scope"),
+                "strategy_id": row.get("strategy_id") or "—",
+                "market": row.get("market") or "—",
+                "reason": row.get("reason"),
+            }
+            for row in kill.get("active_halts", [])
+        ]
+        if halt_rows:
+            _render_table(
+                [
+                    {"name": "scope", "label": "Scope", "field": "scope", "align": "left"},
+                    {"name": "strategy_id", "label": "Strategy", "field": "strategy_id", "align": "left"},
+                    {"name": "market", "label": "Market", "field": "market", "align": "left"},
+                    {"name": "reason", "label": "Reason", "field": "reason", "align": "left"},
+                ],
+                halt_rows,
+            )
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Simulated Orders").classes("tt-section-title")
+        order_rows = [
+            {
+                "exchange": row.get("exchange"),
+                "market": row.get("market"),
+                "side": row.get("side"),
+                "status": row.get("status"),
+                "recorded_at": row.get("recorded_at"),
+            }
+            for row in data.get("simulated_orders", [])
+        ]
+        if order_rows:
+            _render_table(
+                [
+                    {"name": "exchange", "label": "Exchange", "field": "exchange", "align": "left"},
+                    {"name": "market", "label": "Market", "field": "market", "align": "left"},
+                    {"name": "side", "label": "Side", "field": "side", "align": "left"},
+                    {"name": "status", "label": "Status", "field": "status", "align": "left"},
+                    {"name": "recorded_at", "label": "Recorded", "field": "recorded_at", "align": "left"},
+                ],
+                order_rows,
+            )
+        else:
+            ui.label("No simulated orders recorded.").classes("tt-status")
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Live Flags").classes("tt-section-title")
+        flag_rows = [{"flag": key, "value": str(value)} for key, value in sorted(flags.items())]
+        _render_table(
+            [
+                {"name": "flag", "label": "Flag", "field": "flag", "align": "left"},
+                {"name": "value", "label": "Value", "field": "value", "align": "left"},
+            ],
+            flag_rows,
+        )
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Risk Limits").classes("tt-section-title")
+        _render_table(
+            [
+                {"name": "limit", "label": "Limit", "field": "limit", "align": "left"},
+                {"name": "value", "label": "Value", "field": "value", "align": "left"},
+            ],
+            [
+                {"limit": "max_daily_loss", "value": limits.get("max_daily_loss")},
+                {"limit": "max_position_size", "value": limits.get("max_position_size")},
+            ],
         )
 
 

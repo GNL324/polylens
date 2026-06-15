@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-TRADER_NAV_ITEMS = ("Overview", "Network", "Profiles", "Signals", "Discovery", "Acquisition", "Performance", "Alpha Lab", "Service", "Insights")
+TRADER_NAV_ITEMS = ("Overview", "Network", "Profiles", "Signals", "Discovery", "Acquisition", "Performance", "Alpha Lab", "Service", "Trading Readiness", "Insights")
 
 OVERVIEW_TABLE_LIMIT = 15
 

@@ -2,6 +2,8 @@ import os
 import stat
 from pathlib import Path
 
+import pytest
+
 from src.cli import _env_float, _env_int, _env_str
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -153,7 +155,32 @@ def test_wallet_autonomy_service_is_paper_only():
     timer = (SYSTEMD / "wallet-autonomy.timer").read_text()
     assert "Type=oneshot" in service
     assert "POLYLENS_LIVE_TRADING=false" in service
+    assert "LIVE_TRADING=false" in service
+    assert "DRY_RUN=true" in service
     assert "wallet-service-run" in service
     assert "OnUnitActiveSec=5min" in timer
     assert "Unit=wallet-autonomy.service" in timer
     assert "trade-" not in service
+
+
+AUTONOMOUS_SERVICE_FILES = [
+    "wallet-autonomy.service",
+    "polylens-trader-signal-cycle.service",
+    "polylens-paper-trading.service",
+    "polylens-short-crypto-paper.service",
+    "polylens-short-crypto-paper-settle.service",
+    "polylens-prop-arb-collector.service",
+    "polylens-live-arb.service",
+    "polylens-prop-watch.service",
+    "kalshi-market-recorder.service",
+]
+
+
+@pytest.mark.parametrize("service_name", AUTONOMOUS_SERVICE_FILES)
+def test_autonomous_services_disable_live_trading(service_name):
+    text = (SYSTEMD / service_name).read_text()
+    assert "LIVE_TRADING=false" in text or "POLYLENS_LIVE_TRADING=false" in text
+    assert "DRY_RUN=true" in text
+    assert "trade-short-crypto" not in text
+    assert "kalshi-live-trade" not in text
+    assert "--live" not in text

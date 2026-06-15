@@ -9,6 +9,8 @@ User=noel
 WorkingDirectory=/home/noel/polylens
 EnvironmentFile=-/home/noel/polylens/deploy/systemd/polylens-prop-arb-collector.env
 Environment=PYTHONPATH=/home/noel/polylens
+Environment=LIVE_TRADING=false
+Environment=DRY_RUN=true
 Environment=POLYLENS_LIVE_TRADING=false
 Environment=POLYLENS_AUTONOMOUS_CRYPTO=false
 Environment=POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false

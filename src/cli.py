@@ -971,6 +971,252 @@ def wallet_source_stats_cli(as_json: bool = False, days: int = 7) -> dict[str, A
     return result
 
 
+def _with_trading_readiness_flags(payload: dict[str, Any]) -> dict[str, Any]:
+    return {"read_only": True, "paper_only": True, "live_trading_disabled": True, **payload}
+
+
+def trading_readiness_cli(
+    as_json: bool = False,
+    strategy_id: str = "",
+    readiness_db_path: str = "data/trading_readiness.db",
+    risk_db_path: str = "data/polylens.db",
+) -> dict[str, Any]:
+    from src.trading.trading_readiness import evaluate_trading_readiness
+
+    report = evaluate_trading_readiness(
+        strategy_id=strategy_id or None,
+        readiness_db_path=readiness_db_path,
+        risk_db_path=risk_db_path,
+        approved_strategy_id=strategy_id or None,
+    )
+    payload = _with_trading_readiness_flags({"report": report.to_dict()})
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        status = "READY" if report.ready else "BLOCKED"
+        print(f"Trading readiness: {status}")
+        print(f"Paper only: {report.paper_only}")
+        print(f"Live trading enabled: {report.live_trading_enabled}")
+        print(f"Human approval required: {report.required_human_approval}")
+        if report.blockers:
+            print("Blockers:")
+            for item in report.blockers:
+                print(f"  - {item}")
+        if report.warnings:
+            print("Warnings:")
+            for item in report.warnings:
+                print(f"  - {item}")
+    return payload
+
+
+def trading_gate_check_cli(
+    as_json: bool = False,
+    strategy_id: str = "",
+    exchange: str = "kalshi",
+    market: str = "",
+    readiness_db_path: str = "data/trading_readiness.db",
+    risk_db_path: str = "data/polylens.db",
+    has_open_position: bool = False,
+    market_data_stale: bool = False,
+    sre_incident_open: bool = False,
+) -> dict[str, Any]:
+    from src.trading.execution_gate import check_execution_gate
+
+    gate = check_execution_gate(
+        strategy_id=strategy_id or None,
+        exchange=exchange,
+        market=market,
+        readiness_db_path=readiness_db_path,
+        risk_db_path=risk_db_path,
+        has_open_position=has_open_position,
+        market_data_stale=market_data_stale,
+        sre_incident_open=sre_incident_open,
+    )
+    payload = _with_trading_readiness_flags({"gate": gate.to_dict()})
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Execution gate: {'ALLOWED' if gate.allowed else 'BLOCKED'}")
+        if gate.reasons:
+            print("Reasons:")
+            for reason in gate.reasons:
+                print(f"  - {reason}")
+    return payload
+
+
+def strategy_approve_cli(
+    strategy_id: str,
+    approved_by: str,
+    as_json: bool = False,
+    max_capital: float = 0.0,
+    max_position_size: float = 0.0,
+    allowed_markets: str = "",
+    expiration: str = "",
+    notes: str = "",
+    readiness_db_path: str = "data/trading_readiness.db",
+) -> dict[str, Any]:
+    from src.trading.strategy_approval import StrategyApprovalRegistry
+
+    markets = [item.strip() for item in allowed_markets.split(",") if item.strip()] if allowed_markets else []
+    approval = StrategyApprovalRegistry(db_path=readiness_db_path).approve_strategy(
+        strategy_id,
+        approved_by=approved_by,
+        max_capital=max_capital,
+        max_position_size=max_position_size,
+        allowed_markets=markets,
+        expiration=expiration or None,
+        notes=notes,
+    )
+    payload = _with_trading_readiness_flags({"approval": approval})
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Approved strategy {strategy_id} by {approved_by}")
+    return payload
+
+
+def strategy_revoke_cli(
+    strategy_id: str,
+    as_json: bool = False,
+    notes: str = "",
+    readiness_db_path: str = "data/trading_readiness.db",
+) -> dict[str, Any]:
+    from src.trading.strategy_approval import StrategyApprovalRegistry
+
+    approval = StrategyApprovalRegistry(db_path=readiness_db_path).revoke_strategy(strategy_id, notes=notes)
+    payload = _with_trading_readiness_flags({"approval": approval})
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Revoked strategy {strategy_id}")
+    return payload
+
+
+def strategy_approvals_cli(
+    as_json: bool = False,
+    status: str = "",
+    readiness_db_path: str = "data/trading_readiness.db",
+) -> dict[str, Any]:
+    from src.trading.strategy_approval import StrategyApprovalRegistry
+
+    approvals = StrategyApprovalRegistry(db_path=readiness_db_path).list_approvals(status=status or None)
+    payload = _with_trading_readiness_flags({"approvals": approvals})
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        if not approvals:
+            print("No strategy approvals recorded.")
+        for row in approvals:
+            print(f"{row.get('strategy_id')}: {row.get('approval_status')} by {row.get('approved_by')}")
+    return payload
+
+
+def simulated_order_cli(
+    exchange: str,
+    market: str,
+    side: str,
+    price: float,
+    size: float,
+    as_json: bool = False,
+    strategy_id: str = "",
+    readiness_db_path: str = "data/trading_readiness.db",
+    has_open_position: bool = False,
+    market_data_stale: bool = False,
+) -> dict[str, Any]:
+    from src.trading.simulated_order_router import SimulatedOrderRouter
+
+    result = SimulatedOrderRouter(db_path=readiness_db_path).route_order(
+        exchange=exchange,
+        market=market,
+        side=side,
+        price=price,
+        size=size,
+        strategy_id=strategy_id or None,
+        has_open_position=has_open_position,
+        market_data_stale=market_data_stale,
+    )
+    payload = _with_trading_readiness_flags(result)
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Simulated order: {result['status']}")
+        if result.get("rejection_reason"):
+            print(f"Rejection: {result['rejection_reason']}")
+    return payload
+
+
+def trading_kill_cli(
+    as_json: bool = False,
+    scope: str = "global",
+    strategy_id: str = "",
+    wallet: str = "",
+    market: str = "",
+    reason: str = "manual halt",
+    readiness_db_path: str = "data/trading_readiness.db",
+) -> dict[str, Any]:
+    from src.trading.kill_switch import KillSwitch
+
+    result = KillSwitch(db_path=readiness_db_path).halt(
+        scope=scope,
+        strategy_id=strategy_id or None,
+        wallet=wallet or None,
+        market=market or None,
+        reason=reason,
+    )
+    payload = _with_trading_readiness_flags({"kill_switch": result})
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Kill switch halt ({scope}): {reason}")
+    return payload
+
+
+def trading_resume_cli(
+    as_json: bool = False,
+    scope: str = "global",
+    strategy_id: str = "",
+    market: str = "",
+    reason: str = "manual resume",
+    readiness_db_path: str = "data/trading_readiness.db",
+) -> dict[str, Any]:
+    from src.trading.kill_switch import KillSwitch
+
+    result = KillSwitch(db_path=readiness_db_path).resume(
+        scope=scope,
+        strategy_id=strategy_id or None,
+        market=market or None,
+        reason=reason,
+    )
+    payload = _with_trading_readiness_flags({"kill_switch": result})
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Kill switch resume ({scope}): {reason}")
+    return payload
+
+
+def trading_status_cli(
+    as_json: bool = False,
+    readiness_db_path: str = "data/trading_readiness.db",
+    risk_db_path: str = "data/polylens.db",
+) -> dict[str, Any]:
+    from src.web.trading_readiness_data import build_trading_readiness_dashboard
+
+    payload = build_trading_readiness_dashboard(
+        readiness_db_path=readiness_db_path,
+        risk_db_path=risk_db_path,
+    )
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        readiness = payload["readiness"]
+        print(f"Readiness: {'READY' if readiness.get('ready') else 'BLOCKED'}")
+        print(f"Kill switch halted: {payload['kill_switch'].get('halted')}")
+        print(f"Approved strategies: {len(payload.get('approved_strategies', []))}")
+        print(f"Simulated orders: {len(payload.get('simulated_orders', []))}")
+    return payload
+
+
 def wallet_alpha_report_cli(as_json: bool = False, wallet: str = "", limit: int = 25) -> dict[str, Any]:
     from src.intelligence.wallet_alpha_lab import WalletAlphaLab, run_wallet_alpha_lab_cycle
 
@@ -4004,6 +4250,79 @@ def main() -> None:
     wallet_discovery_analytics_parser.add_argument("--limit", type=int, default=10)
     wallet_discovery_analytics_parser.add_argument("--json", action="store_true")
 
+    trading_readiness_parser = sub.add_parser("trading-readiness", help="evaluate trading readiness for live execution")
+    trading_readiness_parser.add_argument("--strategy-id", default="")
+    trading_readiness_parser.add_argument("--readiness-db", default="data/trading_readiness.db")
+    trading_readiness_parser.add_argument("--risk-db", default="data/polylens.db")
+    trading_readiness_parser.add_argument("--json", action="store_true")
+
+    trading_gate_parser = sub.add_parser("trading-gate-check", help="check execution gate for live order routing")
+    trading_gate_parser.add_argument("--strategy-id", default="")
+    trading_gate_parser.add_argument("--exchange", default="kalshi")
+    trading_gate_parser.add_argument("--market", default="")
+    trading_gate_parser.add_argument("--readiness-db", default="data/trading_readiness.db")
+    trading_gate_parser.add_argument("--risk-db", default="data/polylens.db")
+    trading_gate_parser.add_argument("--has-open-position", action="store_true")
+    trading_gate_parser.add_argument("--market-data-stale", action="store_true")
+    trading_gate_parser.add_argument("--sre-incident-open", action="store_true")
+    trading_gate_parser.add_argument("--json", action="store_true")
+
+    strategy_approve_parser = sub.add_parser("strategy-approve", help="approve a strategy for future live execution")
+    strategy_approve_parser.add_argument("strategy_id")
+    strategy_approve_parser.add_argument("--approved-by", required=True)
+    strategy_approve_parser.add_argument("--max-capital", type=float, default=0.0)
+    strategy_approve_parser.add_argument("--max-position-size", type=float, default=0.0)
+    strategy_approve_parser.add_argument("--allowed-markets", default="")
+    strategy_approve_parser.add_argument("--expiration", default="")
+    strategy_approve_parser.add_argument("--notes", default="")
+    strategy_approve_parser.add_argument("--readiness-db", default="data/trading_readiness.db")
+    strategy_approve_parser.add_argument("--json", action="store_true")
+
+    strategy_revoke_parser = sub.add_parser("strategy-revoke", help="revoke strategy live execution approval")
+    strategy_revoke_parser.add_argument("strategy_id")
+    strategy_revoke_parser.add_argument("--notes", default="")
+    strategy_revoke_parser.add_argument("--readiness-db", default="data/trading_readiness.db")
+    strategy_revoke_parser.add_argument("--json", action="store_true")
+
+    strategy_approvals_parser = sub.add_parser("strategy-approvals", help="list strategy approval registry entries")
+    strategy_approvals_parser.add_argument("--status", default="", choices=["", "approved", "revoked"])
+    strategy_approvals_parser.add_argument("--readiness-db", default="data/trading_readiness.db")
+    strategy_approvals_parser.add_argument("--json", action="store_true")
+
+    simulated_order_parser = sub.add_parser("simulated-order", help="route a simulated dry-run order")
+    simulated_order_parser.add_argument("--exchange", required=True)
+    simulated_order_parser.add_argument("--market", required=True)
+    simulated_order_parser.add_argument("--side", required=True, choices=["buy", "sell", "yes", "no"])
+    simulated_order_parser.add_argument("--price", type=float, required=True)
+    simulated_order_parser.add_argument("--size", type=float, required=True)
+    simulated_order_parser.add_argument("--strategy-id", default="")
+    simulated_order_parser.add_argument("--readiness-db", default="data/trading_readiness.db")
+    simulated_order_parser.add_argument("--has-open-position", action="store_true")
+    simulated_order_parser.add_argument("--market-data-stale", action="store_true")
+    simulated_order_parser.add_argument("--json", action="store_true")
+
+    trading_kill_parser = sub.add_parser("trading-kill", help="activate trading kill switch")
+    trading_kill_parser.add_argument("--scope", default="global", choices=["global", "strategy", "wallet", "market"])
+    trading_kill_parser.add_argument("--strategy-id", default="")
+    trading_kill_parser.add_argument("--wallet", default="")
+    trading_kill_parser.add_argument("--market", default="")
+    trading_kill_parser.add_argument("--reason", default="manual halt")
+    trading_kill_parser.add_argument("--readiness-db", default="data/trading_readiness.db")
+    trading_kill_parser.add_argument("--json", action="store_true")
+
+    trading_resume_parser = sub.add_parser("trading-resume", help="resume trading after kill switch halt")
+    trading_resume_parser.add_argument("--scope", default="global", choices=["global", "strategy", "wallet", "market"])
+    trading_resume_parser.add_argument("--strategy-id", default="")
+    trading_resume_parser.add_argument("--market", default="")
+    trading_resume_parser.add_argument("--reason", default="manual resume")
+    trading_resume_parser.add_argument("--readiness-db", default="data/trading_readiness.db")
+    trading_resume_parser.add_argument("--json", action="store_true")
+
+    trading_status_parser = sub.add_parser("trading-status", help="trading readiness, kill switch, and gate status")
+    trading_status_parser.add_argument("--readiness-db", default="data/trading_readiness.db")
+    trading_status_parser.add_argument("--risk-db", default="data/polylens.db")
+    trading_status_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "analyze-wallet":
@@ -4498,6 +4817,88 @@ def main() -> None:
         wallet_watchlist_cli(as_json=args.json, state=args.state, limit=args.limit)
     elif args.command == "wallet-discovery-analytics":
         wallet_discovery_analytics_cli(as_json=args.json, limit=args.limit)
+    elif args.command == "trading-readiness":
+        trading_readiness_cli(
+            as_json=args.json,
+            strategy_id=args.strategy_id,
+            readiness_db_path=args.readiness_db,
+            risk_db_path=args.risk_db,
+        )
+    elif args.command == "trading-gate-check":
+        trading_gate_check_cli(
+            as_json=args.json,
+            strategy_id=args.strategy_id,
+            exchange=args.exchange,
+            market=args.market,
+            readiness_db_path=args.readiness_db,
+            risk_db_path=args.risk_db,
+            has_open_position=args.has_open_position,
+            market_data_stale=args.market_data_stale,
+            sre_incident_open=args.sre_incident_open,
+        )
+    elif args.command == "strategy-approve":
+        strategy_approve_cli(
+            strategy_id=args.strategy_id,
+            approved_by=args.approved_by,
+            as_json=args.json,
+            max_capital=args.max_capital,
+            max_position_size=args.max_position_size,
+            allowed_markets=args.allowed_markets,
+            expiration=args.expiration,
+            notes=args.notes,
+            readiness_db_path=args.readiness_db,
+        )
+    elif args.command == "strategy-revoke":
+        strategy_revoke_cli(
+            strategy_id=args.strategy_id,
+            as_json=args.json,
+            notes=args.notes,
+            readiness_db_path=args.readiness_db,
+        )
+    elif args.command == "strategy-approvals":
+        strategy_approvals_cli(
+            as_json=args.json,
+            status=args.status,
+            readiness_db_path=args.readiness_db,
+        )
+    elif args.command == "simulated-order":
+        simulated_order_cli(
+            exchange=args.exchange,
+            market=args.market,
+            side=args.side,
+            price=args.price,
+            size=args.size,
+            as_json=args.json,
+            strategy_id=args.strategy_id,
+            readiness_db_path=args.readiness_db,
+            has_open_position=args.has_open_position,
+            market_data_stale=args.market_data_stale,
+        )
+    elif args.command == "trading-kill":
+        trading_kill_cli(
+            as_json=args.json,
+            scope=args.scope,
+            strategy_id=args.strategy_id,
+            wallet=args.wallet,
+            market=args.market,
+            reason=args.reason,
+            readiness_db_path=args.readiness_db,
+        )
+    elif args.command == "trading-resume":
+        trading_resume_cli(
+            as_json=args.json,
+            scope=args.scope,
+            strategy_id=args.strategy_id,
+            market=args.market,
+            reason=args.reason,
+            readiness_db_path=args.readiness_db,
+        )
+    elif args.command == "trading-status":
+        trading_status_cli(
+            as_json=args.json,
+            readiness_db_path=args.readiness_db,
+            risk_db_path=args.risk_db,
+        )
 
 
 if __name__ == "__main__":

@@ -8,6 +8,9 @@ Type=simple
 User=noel
 WorkingDirectory=/home/noel/polylens
 EnvironmentFile=/home/noel/polylens/deploy/systemd/polylens-live-arb.env
+Environment=LIVE_TRADING=false
+Environment=DRY_RUN=true
+Environment=POLYLENS_LIVE_TRADING=false
 ExecStart=/home/noel/.venv/bin/python -m src.cli watch-live-arb --save --interval 60 --min-score 0.7
 Restart=always
 RestartSec=10

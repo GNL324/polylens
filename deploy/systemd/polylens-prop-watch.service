@@ -6,6 +6,9 @@ After=network.target tailscaled.service
 User=noel
 WorkingDirectory=/home/noel/polylens
 EnvironmentFile=/home/noel/polylens/deploy/systemd/polylens-live-arb.env
+Environment=LIVE_TRADING=false
+Environment=DRY_RUN=true
+Environment=POLYLENS_LIVE_TRADING=false
 ExecStart=/home/noel/.venv/bin/python -m src.cli watch-prop-arb --profile __ACTIVE__ --json
 Restart=always
 RestartSec=10
