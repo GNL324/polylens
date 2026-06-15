@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Polylens wallet autonomy service every 5 minutes (signals cadence)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=wallet-autonomy.service
+
+[Install]
+WantedBy=timers.target
