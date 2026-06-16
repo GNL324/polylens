@@ -12,6 +12,8 @@ from src.analysis.trader_signal_engine import (
     score_trader_signals,
 )
 from src.analysis.trader_signal_validation import (
+    backfill_trader_signal_validations,
+    collect_signal_validation_outcomes,
     init_trader_signal_validation_db,
     trader_signal_validation_report,
     validate_trader_signals,
@@ -238,6 +240,41 @@ def test_validate_from_fixture_path(tmp_path):
     )
 
     assert result["validations_inserted"] >= 1
+
+
+def test_backfill_collects_resolved_markets_and_validates(tmp_path):
+    db_path = tmp_path / "signals.db"
+    events = [
+        _event(
+            "buy",
+            timestamp=100 + index,
+            tx_hash=f"0xbuy{index}",
+            amount=500.0,
+            market_id=f"market-{index}",
+        )
+        for index in range(20)
+    ]
+    persist_signals(generate_signals_from_activity(events), db_path=db_path)
+    score_trader_signals(db_path=db_path)
+
+    def resolver(opportunity_id):
+        return {
+            "resolved": str(opportunity_id).startswith("market-"),
+            "winner": "up",
+            "settlement_price": 1.0,
+            "settlement_timestamp": "2026-06-14T20:00:00Z",
+            "source": "test",
+        }
+
+    collected = collect_signal_validation_outcomes(db_path=db_path, resolver=resolver)
+    result = backfill_trader_signal_validations(db_path=db_path, resolver=resolver)
+    report = trader_signal_validation_report(db_path=db_path)
+
+    assert collected["markets_resolved"] == 20
+    assert result["backfill"] is True
+    assert result["validations_inserted"] >= 20
+    assert report["total_validated"] >= 20
+    assert any(item["count"] >= 20 for item in report["signal_type_performance"])
 
 
 def test_rolling_windows_use_resolved_at(tmp_path):

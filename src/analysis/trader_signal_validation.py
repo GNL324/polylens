@@ -165,6 +165,18 @@ def _outcome_label(row: dict[str, Any]) -> str:
     return str(row.get("outcome") or row.get("result") or "unknown").strip().lower()
 
 
+def _resolved_timestamp(row: dict[str, Any]) -> str:
+    return (
+        _timestamp_to_iso(
+            row.get("resolved_at")
+            or row.get("settlement_timestamp")
+            or row.get("settled_at")
+            or row.get("timestamp")
+        )
+        or _utc_now()
+    )
+
+
 def _confidence_bucket(confidence: float | None) -> str:
     score = float(confidence or 0.0)
     for label, lower, upper in CONFIDENCE_BUCKETS:
@@ -254,7 +266,7 @@ def _build_validation_row(
         "signal_type": signal_type,
         "recommendation_type": recommendation_type,
         "generated_at": generated_at,
-        "resolved_at": _timestamp_to_iso(outcome_row.get("resolved_at") or outcome_row.get("timestamp")),
+        "resolved_at": _resolved_timestamp(outcome_row),
         "outcome": outcome_label or "unknown",
         "predicted_side": _normalize_side(predicted_side) or None,
         "correct": int(correct),
@@ -309,6 +321,175 @@ def _candidate_outcomes(
             seen.add(marker)
             candidates.append(row)
     return candidates
+
+
+def _load_json_dict(value: Any) -> dict[str, Any]:
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return value
+    try:
+        payload = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _resolution_keys(row: dict[str, Any]) -> list[str]:
+    raw = _load_json_dict(row.get("raw_json"))
+    nested_raw = _load_json_dict(raw.get("raw"))
+    keys = [
+        row.get("market_id"),
+        raw.get("market_id"),
+        raw.get("condition_id"),
+        raw.get("conditionId"),
+        raw.get("slug"),
+        raw.get("market_slug"),
+        raw.get("event_slug"),
+        raw.get("eventSlug"),
+        raw.get("token_id"),
+        raw.get("tokenId"),
+        nested_raw.get("condition_id"),
+        nested_raw.get("conditionId"),
+        nested_raw.get("slug"),
+        nested_raw.get("market_slug"),
+        nested_raw.get("event_slug"),
+        nested_raw.get("eventSlug"),
+        nested_raw.get("token_id"),
+        nested_raw.get("tokenId"),
+    ]
+    result: list[str] = []
+    seen: set[str] = set()
+    for key in keys:
+        text = str(key or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _resolve_polymarket_slug_outcome(key: str) -> dict[str, Any]:
+    if "-" not in str(key):
+        return {"resolved": False}
+    try:
+        from src.analysis.polymarket_short_crypto_settlement import resolve_polymarket_short_crypto_market
+
+        resolved = resolve_polymarket_short_crypto_market(str(key))
+    except Exception as exc:
+        return {"resolved": False, "reason": str(exc)}
+    if not resolved.get("resolved"):
+        return resolved
+    return {
+        "resolved": True,
+        "winner": resolved.get("outcome"),
+        "outcome": resolved.get("outcome"),
+        "settlement_timestamp": resolved.get("settlement_timestamp"),
+        "source": resolved.get("source") or "polymarket_gamma",
+    }
+
+
+def _outcome_from_resolution(
+    *,
+    row: dict[str, Any],
+    resolution: dict[str, Any],
+    lookup_key: str,
+) -> dict[str, Any]:
+    winner = (
+        resolution.get("winner")
+        or resolution.get("winning_side")
+        or resolution.get("resolved_side")
+        or resolution.get("resolved_outcome")
+        or resolution.get("outcome")
+    )
+    return {
+        "outcome_key": f"backfill:{lookup_key}:{winner or resolution.get('settlement_price') or 'resolved'}",
+        "market_id": str(row.get("market_id") or lookup_key),
+        "winning_side": winner,
+        "outcome": winner or resolution.get("result") or "resolved",
+        "resolved_at": (
+            resolution.get("resolved_at")
+            or resolution.get("settlement_timestamp")
+            or resolution.get("settled_at")
+            or _utc_now()
+        ),
+        "settlement_price": resolution.get("settlement_price"),
+        "roi_proxy": resolution.get("roi_proxy"),
+        "source": resolution.get("source"),
+    }
+
+
+def collect_signal_validation_outcomes(
+    *,
+    db_path: str | Path = DEFAULT_TRADER_SIGNAL_DB,
+    limit: int | None = None,
+    resolver: Any | None = None,
+) -> dict[str, Any]:
+    """Collect resolved market outcomes for stored trader signals without trading."""
+    from src.analysis.settlement_sources import resolve_opportunity_outcome
+
+    init_trader_signal_validation_db(db_path)
+    resolver = resolver or resolve_opportunity_outcome
+    max_rows = None if limit is None or int(limit) <= 0 else int(limit)
+    with closing_connection(db_path) as conn:
+        validated_market_rows = conn.execute(
+            """
+            SELECT DISTINCT market_id
+            FROM trader_signal_validation
+            """
+        ).fetchall()
+        validated_markets = {str(row["market_id"]) for row in validated_market_rows}
+        rows = conn.execute(
+            """
+            SELECT signal_key, wallet, market_id, signal_type, side, score, created_at, raw_json
+            FROM trader_signals
+            ORDER BY created_at ASC, signal_key ASC
+            """
+        ).fetchall()
+
+    outcomes: list[dict[str, Any]] = []
+    unresolved: list[dict[str, Any]] = []
+    resolved_markets: set[str] = set()
+    resolution_cache: dict[str, dict[str, Any]] = {}
+    attempted_keys = 0
+    for row_obj in rows:
+        if max_rows is not None and len(outcomes) >= max_rows:
+            break
+        row = dict(row_obj)
+        market_id = str(row.get("market_id") or "")
+        if market_id in resolved_markets or market_id in validated_markets:
+            continue
+        resolved = None
+        resolved_key = ""
+        keys = _resolution_keys(row)
+        for key in keys:
+            attempted_keys += 1
+            if key not in resolution_cache:
+                outcome = resolver(key)
+                if not outcome or not outcome.get("resolved"):
+                    outcome = _resolve_polymarket_slug_outcome(key)
+                resolution_cache[key] = outcome or {"resolved": False}
+            outcome = resolution_cache[key]
+            if outcome and outcome.get("resolved"):
+                resolved = outcome
+                resolved_key = key
+                break
+        if resolved:
+            outcomes.append(_outcome_from_resolution(row=row, resolution=resolved, lookup_key=resolved_key or market_id))
+            resolved_markets.add(market_id)
+        else:
+            unresolved.append({"market_id": market_id, "lookup_keys": keys})
+
+    return _with_flags(
+        {
+            "signals_seen": len(rows),
+            "markets_resolved": len(outcomes),
+            "markets_unresolved": len(unresolved),
+            "lookup_keys_attempted": attempted_keys,
+            "outcomes": outcomes,
+            "sample_unresolved": unresolved[:10],
+        }
+    )
 
 
 def validate_trader_signals(
@@ -460,6 +641,27 @@ def validate_trader_signals_from_path(
     result = validate_trader_signals(outcomes, db_path=db_path)
     result["outcomes_path"] = str(outcomes_path)
     return result
+
+
+def backfill_trader_signal_validations(
+    *,
+    db_path: str | Path = DEFAULT_TRADER_SIGNAL_DB,
+    limit: int | None = None,
+    resolver: Any | None = None,
+) -> dict[str, Any]:
+    collected = collect_signal_validation_outcomes(db_path=db_path, limit=limit, resolver=resolver)
+    result = validate_trader_signals(collected["outcomes"], db_path=db_path)
+    return _with_flags(
+        {
+            "backfill": True,
+            "collector": {
+                key: value
+                for key, value in collected.items()
+                if key not in {"outcomes", "read_only", "paper_only"}
+            },
+            **result,
+        }
+    )
 
 
 def _accuracy(rows: list[dict[str, Any]]) -> float | None:

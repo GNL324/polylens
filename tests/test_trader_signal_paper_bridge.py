@@ -20,7 +20,7 @@ from src.analysis.trader_signal_paper_bridge import (
     run_trader_signal_paper_bridge,
     trader_signal_paper_bridge_report,
 )
-from src.analysis.trader_signal_validation import init_trader_signal_validation_db
+from src.analysis.trader_signal_validation import backfill_trader_signal_validations, init_trader_signal_validation_db
 from src.sqlite_utils import closing_connection
 
 WALLET = "0x" + "a" * 40
@@ -124,6 +124,33 @@ def test_proven_recommendations_create_intent(tmp_path):
     assert result["simulated_count"] >= 1 or result["candidate_count"] >= 1
     assert any(intent["gate_status"] == "proven" for intent in result["intents"])
     assert any(intent["status"] in {"candidate", "simulated"} for intent in result["intents"])
+
+
+def test_paper_bridge_runs_after_backfilled_validation(tmp_path):
+    db_path = tmp_path / "signals.db"
+    events = [
+        _event("buy", timestamp=100 + index, tx_hash=f"0xbuy{index}", market_id=f"market-{index}", amount=500.0)
+        for index in range(20)
+    ]
+    persist_signals(generate_signals_from_activity(events), db_path=db_path)
+    score_trader_signals(db_path=db_path)
+
+    def resolver(opportunity_id):
+        return {
+            "resolved": str(opportunity_id).startswith("market-"),
+            "winner": "up",
+            "settlement_price": 1.0,
+            "settlement_timestamp": "2026-06-14T20:00:00Z",
+            "source": "test",
+        }
+
+    backfill_trader_signal_validations(db_path=db_path, resolver=resolver)
+    generate_trader_signal_recommendations(db_path=db_path, limit=10)
+
+    result = run_trader_signal_paper_bridge(db_path=db_path)
+
+    assert any(intent["gate_status"] == "proven" for intent in result["intents"])
+    assert result["simulated_count"] >= 1 or result["candidate_count"] >= 1
 
 
 def test_low_score_blocked(tmp_path):

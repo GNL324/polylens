@@ -18,7 +18,7 @@ from src.analysis.trader_signal_gates import (
     load_signal_family_stats,
     trader_signal_gates_report,
 )
-from src.analysis.trader_signal_validation import init_trader_signal_validation_db
+from src.analysis.trader_signal_validation import backfill_trader_signal_validations, init_trader_signal_validation_db
 from src.sqlite_utils import closing_connection
 
 WALLET = "0x" + "a" * 40
@@ -156,6 +156,33 @@ def test_recommendation_integration_promotes_proven_family(tmp_path):
 
     assert result["promoted_recommendations"]
     assert all(item["gate_status"] == "proven" for item in result["promoted_recommendations"])
+
+
+def test_backfill_graduates_signal_family_gate(tmp_path):
+    db_path = tmp_path / "signals.db"
+    events = [
+        _event("buy", timestamp=100 + index, tx_hash=f"0xbuy{index}", market_id=f"market-{index}", amount=500.0)
+        for index in range(20)
+    ]
+    persist_signals(generate_signals_from_activity(events), db_path=db_path)
+    score_trader_signals(db_path=db_path)
+
+    def resolver(opportunity_id):
+        return {
+            "resolved": str(opportunity_id).startswith("market-"),
+            "winner": "up",
+            "settlement_price": 1.0,
+            "settlement_timestamp": "2026-06-14T20:00:00Z",
+            "source": "test",
+        }
+
+    before = trader_signal_gates_report(db_path=db_path)
+    result = backfill_trader_signal_validations(db_path=db_path, resolver=resolver)
+    after = trader_signal_gates_report(db_path=db_path)
+
+    assert before["gate_summary"]["proven_count"] == 0
+    assert result["validations_inserted"] >= 20
+    assert after["gate_summary"]["proven_count"] >= 1
 
 
 def test_report_includes_gate_sections(tmp_path):

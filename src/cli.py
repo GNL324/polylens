@@ -105,9 +105,11 @@ from src.intelligence.wallet_discovery import WalletDiscoveryConfig, WalletDisco
 from src.intelligence.wallet_discovery_analytics import wallet_discovery_analytics_report
 from src.intelligence.wallet_scoring import WalletScorer
 from src.analysis.trader_signal_validation import (
+    backfill_trader_signal_validations,
     trader_signal_validation_report,
     validate_trader_signals_from_path,
 )
+from src.intelligence.wallet_signal_integration import run_wallet_signal_integration_cycle
 from src.analysis.trader_registry import (
     list_traders,
     top_traders,
@@ -535,11 +537,18 @@ def trader_signal_health_cli(as_json: bool = False, db_path: str = DEFAULT_TRADE
 
 
 def validate_trader_signals_cli(
-    outcomes: str,
+    outcomes: str | None = None,
     as_json: bool = False,
     db_path: str = DEFAULT_TRADER_SIGNAL_DB,
+    backfill: bool = False,
+    limit: int | None = None,
 ) -> dict[str, Any]:
-    result = validate_trader_signals_from_path(outcomes, db_path=db_path)
+    if backfill:
+        result = backfill_trader_signal_validations(db_path=db_path, limit=limit)
+    elif outcomes:
+        result = validate_trader_signals_from_path(outcomes, db_path=db_path)
+    else:
+        raise ValueError("validate-trader-signals requires --outcomes or --backfill")
     print(json.dumps(result, indent=2, sort_keys=True))
     return result
 
@@ -1034,11 +1043,41 @@ def polymarket_leaderboard_fetch_cli(
     return result
 
 
+def polymarket_leaderboard_scan_cli(
+    as_json: bool = False,
+    category: str = "OVERALL",
+    time_period: str = "MONTH",
+    order_by: str = "PNL",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    from src.intelligence.polymarket_leaderboard_ingestion import run_leaderboard_scan
+
+    result = run_leaderboard_scan(
+        category=category,
+        time_period=time_period,
+        order_by=order_by,
+        limit=limit,
+        offset=offset,
+    )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(
+            f"Leaderboard scan {result.get('status')}: "
+            f"seen={result.get('leaderboard_wallets_seen')} "
+            f"accepted={result.get('leaderboard_wallets_accepted')} "
+            f"rejected={result.get('leaderboard_wallets_rejected')}"
+        )
+    return result
+
+
 def polymarket_leaderboard_ingest_cli(
     as_json: bool = False,
     traders_db_path: str = "data/traders.db",
     discovery_db_path: str = "data/trader_discovery.db",
     limit: int = 50,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     from src.intelligence.polymarket_leaderboard_ingestion import run_leaderboard_ingestion
 
@@ -1046,12 +1085,13 @@ def polymarket_leaderboard_ingest_cli(
         traders_db_path=traders_db_path,
         discovery_db_path=discovery_db_path,
         limit=limit,
+        dry_run=dry_run,
     )
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
         print(
-            f"Leaderboard ingestion {result.get('status')}: wallets={result.get('wallet_count')} "
+            f"Leaderboard ingestion {result.get('status')}: dry_run={result.get('dry_run')} wallets={result.get('wallet_count')} "
             f"discovery={result.get('discovery', {}).get('ingested', 0)} "
             f"synthetic_rejected={result.get('synthetic_rejected')}"
         )
@@ -1100,6 +1140,30 @@ def polymarket_leaderboard_status_cli(
         print(f"Leaderboard status: {result.get('health_status')}")
         for row in result.get("top_wallets") or []:
             print(f"- #{row.get('rank')} {row.get('wallet')} pnl={row.get('pnl')}")
+    return result
+
+
+def polymarket_leaderboard_report_cli(
+    as_json: bool = False,
+    traders_db_path: str = "data/traders.db",
+    discovery_db_path: str = "data/trader_discovery.db",
+    limit: int = 25,
+) -> dict[str, Any]:
+    from src.intelligence.polymarket_leaderboard_ingestion import leaderboard_status
+
+    result = leaderboard_status(
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+        wallet_limit=limit,
+    )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(
+            f"Leaderboard report {result.get('health_status')}: "
+            f"tracked={result.get('tracked_wallet_count')} "
+            f"discovery={result.get('discovery_wallet_count')}"
+        )
     return result
 
 
@@ -2241,7 +2305,7 @@ def fetch_oddsblaze_odds(
     elif not quiet and rows:
         print(f"Fetched OddsBlaze odds: {len(rows)}")
         for row in rows[:20]:
-            print(f"- {row.get("player")} {row.get("market_type")} {row.get("side")} {row.get("line")} {row.get("sportsbook")} odds={row.get("odds")}")
+            print(f"- {row.get('player')} {row.get('market_type')} {row.get('side')} {row.get('line')} {row.get('sportsbook')} odds={row.get('odds')}")
     return rows
 
 
@@ -4257,7 +4321,9 @@ def main() -> None:
         "validate-trader-signals",
         help="validate read-only trader signals and recommendations against resolved outcomes",
     )
-    validate_trader_signals_parser.add_argument("--outcomes", required=True, help="path to resolved outcomes JSON")
+    validate_trader_signals_parser.add_argument("--outcomes", help="path to resolved outcomes JSON")
+    validate_trader_signals_parser.add_argument("--backfill", action="store_true", help="collect historical resolved market outcomes and validate stored signals")
+    validate_trader_signals_parser.add_argument("--limit", type=int, default=None, help="maximum resolved markets to backfill")
     validate_trader_signals_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
     validate_trader_signals_parser.add_argument("--json", action="store_true")
 
@@ -4421,6 +4487,17 @@ def main() -> None:
     polymarket_leaderboard_fetch_parser.add_argument("--offset", type=int, default=0)
     polymarket_leaderboard_fetch_parser.add_argument("--json", action="store_true")
 
+    polymarket_leaderboard_scan_parser = sub.add_parser(
+        "polymarket-leaderboard-scan",
+        help="scan public Polymarket leaderboard wallets without persistence",
+    )
+    polymarket_leaderboard_scan_parser.add_argument("--category", default="OVERALL")
+    polymarket_leaderboard_scan_parser.add_argument("--time-period", default="MONTH")
+    polymarket_leaderboard_scan_parser.add_argument("--order-by", default="PNL", choices=["PNL", "VOL"])
+    polymarket_leaderboard_scan_parser.add_argument("--limit", type=int, default=50)
+    polymarket_leaderboard_scan_parser.add_argument("--offset", type=int, default=0)
+    polymarket_leaderboard_scan_parser.add_argument("--json", action="store_true")
+
     polymarket_leaderboard_ingest_parser = sub.add_parser(
         "polymarket-leaderboard-ingest",
         help="ingest Polymarket leaderboard wallets into discovery",
@@ -4428,6 +4505,7 @@ def main() -> None:
     polymarket_leaderboard_ingest_parser.add_argument("--traders-db", default="data/traders.db")
     polymarket_leaderboard_ingest_parser.add_argument("--discovery-db", default="data/trader_discovery.db")
     polymarket_leaderboard_ingest_parser.add_argument("--limit", type=int, default=50)
+    polymarket_leaderboard_ingest_parser.add_argument("--dry-run", action="store_true")
     polymarket_leaderboard_ingest_parser.add_argument("--json", action="store_true")
 
     polymarket_leaderboard_health_parser = sub.add_parser(
@@ -4446,6 +4524,15 @@ def main() -> None:
     polymarket_leaderboard_status_parser.add_argument("--discovery-db", default="data/trader_discovery.db")
     polymarket_leaderboard_status_parser.add_argument("--limit", type=int, default=25)
     polymarket_leaderboard_status_parser.add_argument("--json", action="store_true")
+
+    polymarket_leaderboard_report_parser = sub.add_parser(
+        "polymarket-leaderboard-report",
+        help="Polymarket leaderboard ingestion report",
+    )
+    polymarket_leaderboard_report_parser.add_argument("--traders-db", default="data/traders.db")
+    polymarket_leaderboard_report_parser.add_argument("--discovery-db", default="data/trader_discovery.db")
+    polymarket_leaderboard_report_parser.add_argument("--limit", type=int, default=25)
+    polymarket_leaderboard_report_parser.add_argument("--json", action="store_true")
 
     wallet_acquisition_report_parser = sub.add_parser("wallet-acquisition-report", help="wallet acquisition analytics report")
     wallet_acquisition_report_parser.add_argument("--days", type=int, default=7)
@@ -4975,7 +5062,13 @@ def main() -> None:
     elif args.command == "trader-signal-health":
         trader_signal_health_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "validate-trader-signals":
-        validate_trader_signals_cli(outcomes=args.outcomes, as_json=args.json, db_path=args.db_path)
+        validate_trader_signals_cli(
+            outcomes=args.outcomes,
+            as_json=args.json,
+            db_path=args.db_path,
+            backfill=args.backfill,
+            limit=args.limit,
+        )
     elif args.command == "trader-signal-validation-report":
         trader_signal_validation_report_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "trader-signal-gates":
@@ -5072,12 +5165,22 @@ def main() -> None:
             limit=args.limit,
             offset=args.offset,
         )
+    elif args.command == "polymarket-leaderboard-scan":
+        polymarket_leaderboard_scan_cli(
+            as_json=args.json,
+            category=args.category,
+            time_period=args.time_period,
+            order_by=args.order_by,
+            limit=args.limit,
+            offset=args.offset,
+        )
     elif args.command == "polymarket-leaderboard-ingest":
         polymarket_leaderboard_ingest_cli(
             as_json=args.json,
             traders_db_path=args.traders_db,
             discovery_db_path=args.discovery_db,
             limit=args.limit,
+            dry_run=args.dry_run,
         )
     elif args.command == "polymarket-leaderboard-health":
         polymarket_leaderboard_health_cli(
@@ -5087,6 +5190,13 @@ def main() -> None:
         )
     elif args.command == "polymarket-leaderboard-status":
         polymarket_leaderboard_status_cli(
+            as_json=args.json,
+            traders_db_path=args.traders_db,
+            discovery_db_path=args.discovery_db,
+            limit=args.limit,
+        )
+    elif args.command == "polymarket-leaderboard-report":
+        polymarket_leaderboard_report_cli(
             as_json=args.json,
             traders_db_path=args.traders_db,
             discovery_db_path=args.discovery_db,
