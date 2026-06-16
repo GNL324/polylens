@@ -40,6 +40,7 @@ class DiscoverySourceConfig:
 class WalletDiscoveryConfig:
     sources: list[DiscoverySourceConfig] = field(
         default_factory=lambda: [
+            DiscoverySourceConfig(name="polymarket_leaderboard", enabled=True, limit=50),
             DiscoverySourceConfig(name="registry", enabled=True, limit=50),
             DiscoverySourceConfig(name="discovery_db", enabled=True, limit=100),
             DiscoverySourceConfig(name="watchlist", enabled=True, limit=50),
@@ -121,6 +122,27 @@ class SeedWalletDiscoverySource:
             discovery_db_path=self.discovery_db_path,
             limit=limit,
         )
+
+
+@dataclass
+class LeaderboardDiscoverySource:
+    traders_db_path: str | Path = DEFAULT_TRADERS_DB
+    name: str = "polymarket_leaderboard"
+
+    def discover(self, *, limit: int) -> list[TraderDiscoveryCandidate]:
+        from src.intelligence.polymarket_leaderboard_ingestion import load_latest_leaderboard_wallets
+
+        rows = load_latest_leaderboard_wallets(traders_db_path=self.traders_db_path, limit=limit)
+        return [
+            TraderDiscoveryCandidate(
+                wallet=row.wallet,
+                source=self.name,
+                discovery_score=row.discovery_score,
+                evidence_count=max(1, row.rank or 1),
+                markets_seen=[],
+            )
+            for row in rows[:limit]
+        ]
 
 
 def _utc_now() -> str:
@@ -265,6 +287,8 @@ class WalletDiscoveryEngine:
                         traders_db_path=self.traders_db_path,
                     )
                 )
+            elif source_cfg.name == "polymarket_leaderboard":
+                sources.append(LeaderboardDiscoverySource(traders_db_path=self.traders_db_path))
         return sources
 
     def _cache_get(self, key: str) -> list[TraderDiscoveryCandidate] | None:

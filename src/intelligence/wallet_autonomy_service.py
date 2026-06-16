@@ -19,10 +19,11 @@ from src.intelligence.wallet_discovery_analytics import wallet_discovery_analyti
 from src.intelligence.wallet_tracker import WalletTracker
 from src.sqlite_utils import closing_connection
 
-CYCLE_NAMES = ("bootstrap", "acquisition", "discovery", "signals", "performance", "feedback", "analytics", "alpha")
+CYCLE_NAMES = ("bootstrap", "leaderboard_ingestion", "acquisition", "discovery", "signals", "performance", "feedback", "analytics", "alpha")
 SERVICE_KEY = "__service__"
 DEFAULT_CYCLE_INTERVALS_SECONDS = {
     "bootstrap": 24 * 3600,
+    "leaderboard_ingestion": 6 * 3600,
     "acquisition": 6 * 3600,
     "discovery": 6 * 3600,
     "signals": 5 * 60,
@@ -295,6 +296,18 @@ class WalletAutonomyService:
             ),
         )
 
+    def run_leaderboard_ingestion_cycle(self) -> dict[str, Any]:
+        from src.intelligence.polymarket_leaderboard_ingestion import run_leaderboard_ingestion
+
+        return self._run_wrapped(
+            "leaderboard_ingestion",
+            lambda: run_leaderboard_ingestion(
+                traders_db_path=self.traders_db_path,
+                discovery_db_path=self.discovery_db_path,
+                limit=min(50, self.config.discovery_limit),
+            ),
+        )
+
     def run_discovery_cycle(self) -> dict[str, Any]:
         return self._run_wrapped(
             "discovery",
@@ -392,6 +405,7 @@ class WalletAutonomyService:
     def run_cycle(self, cycle_name: str) -> dict[str, Any]:
         runners = {
             "bootstrap": self.run_bootstrap_cycle,
+            "leaderboard_ingestion": self.run_leaderboard_ingestion_cycle,
             "acquisition": self.run_acquisition_cycle,
             "discovery": self.run_discovery_cycle,
             "signals": self.run_signals_cycle,

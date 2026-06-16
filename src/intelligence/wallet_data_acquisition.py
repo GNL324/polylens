@@ -171,6 +171,34 @@ class WatchlistAcquisitionSource:
         ]
 
 
+@dataclass
+class LeaderboardAcquisitionSource:
+    traders_db_path: str | Path = DEFAULT_TRADERS_DB
+    name: str = "polymarket_leaderboard"
+
+    def fetch(self, *, limit: int) -> list[AcquiredWallet]:
+        from src.intelligence.polymarket_leaderboard_ingestion import load_latest_leaderboard_wallets
+
+        rows = load_latest_leaderboard_wallets(traders_db_path=self.traders_db_path, limit=limit)
+        return [
+            AcquiredWallet(
+                wallet=row.wallet,
+                source=self.name,
+                confidence=row.confidence,
+                discovery_score=row.discovery_score,
+                evidence_count=max(1, row.rank or 1),
+                metadata={
+                    **row.metadata,
+                    "leaderboard_rank": row.rank,
+                    "leaderboard_vol": row.vol,
+                    "leaderboard_pnl": row.pnl,
+                    "user_name": row.user_name,
+                },
+            )
+            for row in rows[:limit]
+        ]
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -274,6 +302,7 @@ class WalletDataAcquisitionEngine:
         self.discovery_db_path = Path(discovery_db_path)
         self.watchlist_path = Path(watchlist_path)
         self.sources_config = sources or [
+            AcquisitionSourceConfig(name="polymarket_leaderboard", enabled=True, limit=50),
             AcquisitionSourceConfig(name="discovery_db", enabled=True, limit=100),
             AcquisitionSourceConfig(name="registry", enabled=True, limit=100),
             AcquisitionSourceConfig(name="forensics", enabled=True, limit=100),
@@ -312,6 +341,8 @@ class WalletDataAcquisitionEngine:
                 sources.append(ForensicsAcquisitionSource(traders_db_path=self.traders_db_path))
             elif cfg.name == "watchlist":
                 sources.append(WatchlistAcquisitionSource(watchlist_path=self.watchlist_path))
+            elif cfg.name == "polymarket_leaderboard":
+                sources.append(LeaderboardAcquisitionSource(traders_db_path=self.traders_db_path))
         return sources
 
     def _cache_get(self, key: str) -> list[AcquiredWallet] | None:
