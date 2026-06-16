@@ -3,8 +3,14 @@ from __future__ import annotations
 
 import json
 import math
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 from src.analysis.trader_discovery import load_discovered_wallets
 from src.intelligence.leaderboard_performance_attribution import (
@@ -256,15 +262,21 @@ def test_classify_leaderboard_wallet_market_maker():
     assert _classify_leaderboard_wallet("0x1234", {"vol": 20_000_000, "pnl": 100}) == "market_maker"
 
 
-def test_leaderboard_alpha_rankings_cli_flag_registers():
-    import subprocess
-
-    result = subprocess.run(
-        [".venv/bin/python", "-m", "src.cli", "wallet-alpha-rankings", "--leaderboard-only", "--json"],
-        cwd="/home/noel/polylens",
+def _run_cli(args: list[str], tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    existing_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(REPO_ROOT) if not existing_pythonpath else f"{REPO_ROOT}{os.pathsep}{existing_pythonpath}"
+    return subprocess.run(
+        [sys.executable, "-m", "src.cli", *args],
+        cwd=tmp_path,
+        env=env,
         capture_output=True,
         text=True,
     )
+
+
+def test_leaderboard_alpha_rankings_cli_flag_registers(tmp_path):
+    result = _run_cli(["wallet-alpha-rankings", "--leaderboard-only", "--json"], tmp_path)
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     assert payload["leaderboard_only"] is True
@@ -272,44 +284,23 @@ def test_leaderboard_alpha_rankings_cli_flag_registers():
     assert "rankings" in payload
 
 
-def test_wallet_performance_breakdown_cli():
-    import subprocess
-
-    result = subprocess.run(
-        [".venv/bin/python", "-m", "src.cli", "wallet-performance-breakdown", "--json"],
-        cwd="/home/noel/polylens",
-        capture_output=True,
-        text=True,
-    )
+def test_wallet_performance_breakdown_cli(tmp_path):
+    result = _run_cli(["wallet-performance-breakdown", "--json"], tmp_path)
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     assert payload["analytics_only"] is True
     assert "total_wallets" in payload
 
 
-def test_wallet_follow_candidates_cli():
-    import subprocess
-
-    result = subprocess.run(
-        [".venv/bin/python", "-m", "src.cli", "wallet-follow-candidates", "--json"],
-        cwd="/home/noel/polylens",
-        capture_output=True,
-        text=True,
-    )
+def test_wallet_follow_candidates_cli(tmp_path):
+    result = _run_cli(["wallet-follow-candidates", "--json"], tmp_path)
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     assert "candidates" in payload
 
 
-def test_wallet_strategy_clustering_cli():
-    import subprocess
-
-    result = subprocess.run(
-        [".venv/bin/python", "-m", "src.cli", "wallet-strategy-clustering", "--leaderboard-only", "--json"],
-        cwd="/home/noel/polylens",
-        capture_output=True,
-        text=True,
-    )
+def test_wallet_strategy_clustering_cli(tmp_path):
+    result = _run_cli(["wallet-strategy-clustering", "--leaderboard-only", "--json"], tmp_path)
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     assert payload["leaderboard_only"] is True
