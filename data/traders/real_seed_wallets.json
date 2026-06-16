@@ -1,0 +1,12 @@
+[
+  {
+    "wallet": "0x927f7694de44d19a72bce76254e628d1c141d215",
+    "label": "market_maker_seed",
+    "source": "real_seed_export",
+    "confidence": 0.85,
+    "classification": "market_maker",
+    "reason": "Known real Polymarket wallet from packaged forensic export",
+    "first_seen_source": "data/traders/seed_exports/market_maker_wallet.json",
+    "export_path": "data/traders/seed_exports/market_maker_wallet.json"
+  }
+]

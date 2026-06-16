@@ -994,8 +994,11 @@ def wallet_bootstrap_health_cli(
     else:
         print(
             f"Seed imports={result.get('seed_wallets_imported', 0)} "
+            f"real={result.get('real_wallet_count', 0)} "
+            f"synthetic={result.get('synthetic_wallet_count', 0)} "
             f"registry={result.get('registry_population', 0)} "
             f"discovery={result.get('discovery_population', 0)} "
+            f"synthetic_rejections={result.get('synthetic_rejections', 0)} "
             f"success_rate={result.get('ingestion_success_rate', 0)}"
         )
     return result
@@ -1042,6 +1045,11 @@ def wallet_source_stats_cli(as_json: bool = False, days: int = 7) -> dict[str, A
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
+        print(
+            f"real_wallets={result.get('real_wallet_count', 0)} "
+            f"synthetic={result.get('synthetic_wallet_count', 0)} "
+            f"synthetic_rejections={result.get('synthetic_rejections', 0)}"
+        )
         for source, stats in sorted((result.get("source_effectiveness") or {}).items()):
             print(f"  {source}: {stats}")
     return result
@@ -1316,7 +1324,12 @@ def wallet_alpha_rankings_cli(as_json: bool = False, limit: int = 25) -> dict[st
     from src.intelligence.wallet_alpha_lab import WalletAlphaLab
 
     rankings = WalletAlphaLab().rank_wallets(limit=limit)
-    payload = _with_alpha_flags({"rankings": [row.to_dict() for row in rankings]})
+    payload = _with_alpha_flags(
+        {
+            "real_wallet_only": True,
+            "rankings": [row.to_dict() for row in rankings],
+        }
+    )
     if as_json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:

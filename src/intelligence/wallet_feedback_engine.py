@@ -12,6 +12,7 @@ from src.intelligence.wallet_performance import (
     WalletPerformanceScore,
     init_wallet_performance_db,
 )
+from src.intelligence.wallet_synthetic_filter import filter_production_wallets, is_synthetic_wallet
 from src.sqlite_utils import closing_connection
 
 PERFORMANCE_TO_LIFECYCLE = {
@@ -61,17 +62,10 @@ class WalletFeedbackEngine:
 
     def _load_wallets(self, wallets: list[str] | None = None) -> list[str]:
         if wallets:
-            return [w.lower() for w in wallets if w]
+            return filter_production_wallets([w.lower() for w in wallets if w])
         discovered = [row.wallet for row in self._discovery.load_recent_discoveries(limit=200)]
         registry = [row.wallet for row in list_traders(limit=200, db_path=str(self.traders_db_path))]
-        seen: set[str] = set()
-        ordered: list[str] = []
-        for wallet in discovered + registry:
-            normalized = str(wallet or "").strip().lower()
-            if normalized and normalized not in seen:
-                seen.add(normalized)
-                ordered.append(normalized)
-        return ordered
+        return filter_production_wallets(discovered + registry)
 
     def _current_lifecycle_state(self, wallet: str) -> str:
         rows = self._discovery.load_lifecycle(limit=500)
@@ -118,6 +112,13 @@ class WalletFeedbackEngine:
         return None
 
     def evaluate_wallet(self, wallet: str) -> dict[str, Any]:
+        if is_synthetic_wallet(wallet):
+            return {
+                "wallet": wallet,
+                "action": None,
+                "skipped": True,
+                "reason": "synthetic wallet excluded from production feedback",
+            }
         performance = self._performance.score_wallet(wallet)
         previous_status = self._current_lifecycle_state(wallet)
         previous_perf = performance.status

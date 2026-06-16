@@ -30,11 +30,19 @@ from src.intelligence.wallet_data_acquisition import (
     init_wallet_acquisition_db,
 )
 from src.intelligence.wallet_discovery import init_wallet_discovery_db
+from src.intelligence.wallet_synthetic_filter import (
+    filter_production_wallets,
+    is_synthetic_seed_wallet,
+    is_synthetic_wallet,
+    partition_wallets,
+    synthetic_wallet_reason,
+)
 from src.intelligence.wallet_tracker import WalletTracker
 from src.sqlite_utils import closing_connection
 
 WALLET_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 DEFAULT_SEED_WALLETS_PATH = "data/traders/seed_wallets.json"
+DEFAULT_REAL_SEED_WALLETS_PATH = "data/traders/real_seed_wallets.json"
 DEFAULT_SEED_EXPORTS_DIR = "data/traders/seed_exports"
 DEFAULT_REGISTRY_SNAPSHOTS_DIR = "data/traders/registry_snapshots"
 
@@ -104,7 +112,7 @@ class WalletSeedImporter:
         discovery_db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB,
         watchlist_path: str | Path = DEFAULT_WATCHLIST_PATH,
         export_dir: str | Path = DEFAULT_WALLET_EXPORT_DIR,
-        seed_wallets_path: str | Path = DEFAULT_SEED_WALLETS_PATH,
+        seed_wallets_path: str | Path = DEFAULT_REAL_SEED_WALLETS_PATH,
         seed_exports_dir: str | Path = DEFAULT_SEED_EXPORTS_DIR,
         registry_snapshots_dir: str | Path = DEFAULT_REGISTRY_SNAPSHOTS_DIR,
     ) -> None:
@@ -156,8 +164,17 @@ class WalletSeedImporter:
         discovery_score: int = 35,
         evidence_count: int = 1,
         markets_seen: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> SeedImportResult:
         wallet = _normalize_wallet(str(report_payload.get("wallet") or ""))
+        if is_synthetic_seed_wallet(wallet, metadata=metadata):
+            return SeedImportResult(
+                wallet=wallet,
+                source=source,
+                imported=False,
+                skipped=True,
+                reason=f"synthetic wallet: {synthetic_wallet_reason(wallet, metadata=metadata)}",
+            )
         if not WALLET_RE.match(wallet):
             return SeedImportResult(wallet=wallet, source=source, imported=False, skipped=True, reason="invalid wallet")
         known = self._known_wallets()
@@ -335,7 +352,35 @@ class WalletSeedImporter:
             wallets = payload
         else:
             return []
-        return self.import_known_wallets([str(item) for item in wallets], source=source, confidence=0.35)
+        real_wallets = [str(item) for item in wallets if not is_synthetic_seed_wallet(str(item))]
+        return self.import_known_wallets(real_wallets, source=source, confidence=0.35)
+
+    def import_real_seed_entries(self, path: str | Path | None = None) -> list[SeedImportResult]:
+        from src.intelligence.real_wallet_ingestion import load_real_seed_entries
+
+        results: list[SeedImportResult] = []
+        for entry in load_real_seed_entries(path or DEFAULT_REAL_SEED_WALLETS_PATH):
+            wallet = str(entry.get("wallet") or "")
+            export_path = entry.get("export_path") or entry.get("first_seen_source")
+            if export_path and Path(str(export_path)).exists():
+                results.append(self.import_wallet_export(export_path, source=str(entry.get("source") or "real_seed")))
+                continue
+            report_payload = {
+                "wallet": wallet,
+                "classification": entry.get("classification") or "unknown",
+                "confidence": float(entry.get("confidence") or 0.5),
+                "metrics": entry.get("metrics") or {},
+                "signals": entry.get("signals") or [],
+            }
+            results.append(
+                self._materialize_report(
+                    report_payload,
+                    source=str(entry.get("source") or "real_seed"),
+                    confidence=float(entry.get("confidence") or 0.5),
+                    metadata=entry,
+                )
+            )
+        return results
 
     def import_directory_exports(self, directory: str | Path | None = None) -> list[SeedImportResult]:
         root = Path(directory or self.seed_exports_dir)
@@ -343,6 +388,19 @@ class WalletSeedImporter:
             return []
         results: list[SeedImportResult] = []
         for path in sorted(root.glob("*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            wallet = _normalize_wallet(str(payload.get("wallet") or ""))
+            if is_synthetic_seed_wallet(wallet):
+                results.append(
+                    SeedImportResult(
+                        wallet=wallet,
+                        source="seed_export",
+                        imported=False,
+                        skipped=True,
+                        reason=f"synthetic wallet: {synthetic_wallet_reason(wallet)}",
+                    )
+                )
+                continue
             results.append(self.import_forensic_report(path, source="seed_export"))
         return results
 
@@ -366,11 +424,12 @@ class WalletSeedImporter:
         return results
 
     def bootstrap_from_packaged_seeds(self) -> dict[str, Any]:
+        real_seed_path = Path(DEFAULT_REAL_SEED_WALLETS_PATH)
         batches = {
+            "real_seed_entries": self.import_real_seed_entries(real_seed_path),
             "seed_exports": self.import_directory_exports(),
             "registry_snapshots": self.import_directory_snapshots(),
             "existing_exports": self.import_existing_wallet_exports(),
-            "seed_file": self.import_from_seed_file(),
         }
         all_results = [item for group in batches.values() for item in group]
         imported = [item for item in all_results if item.imported]
@@ -465,10 +524,22 @@ def bootstrap_health_report(
         ).fetchone()["count"]
         bootstrap_runs = conn.execute("SELECT COUNT(*) AS count FROM wallet_bootstrap_runs").fetchone()["count"]
     ingestion_success_rate = round(float(accepted) / float(acquisition_total), 4) if acquisition_total else 0.0
+    registry_wallets = [row.wallet for row in list_traders(limit=10_000, db_path=str(traders_db_path))]
+    real_wallets, synthetic_wallets = partition_wallets(registry_wallets)
+    with closing_connection(traders_db_path) as conn:
+        synthetic_rejections = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM wallet_acquisition_records
+            WHERE status = 'rejected' AND reason LIKE '%synthetic%'
+            """
+        ).fetchone()["count"]
     return _with_flags(
         {
             "seed_wallets_imported": int(seed_imported),
             "registry_population": int(stats.get("total_traders") or 0),
+            "real_wallet_count": len(set(real_wallets)),
+            "synthetic_wallet_count": len(set(synthetic_wallets)),
+            "synthetic_rejections": int(synthetic_rejections or 0),
             "discovery_population": discovery_count,
             "wallet_acquisition_records": int(acquisition_total),
             "ingestion_success_rate": ingestion_success_rate,
@@ -488,7 +559,7 @@ def run_wallet_bootstrap_cycle(
     discovery_db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB,
     watchlist_path: str | Path = DEFAULT_WATCHLIST_PATH,
     export_dir: str | Path = DEFAULT_WALLET_EXPORT_DIR,
-    seed_wallets_path: str | Path = DEFAULT_SEED_WALLETS_PATH,
+    seed_wallets_path: str | Path = DEFAULT_REAL_SEED_WALLETS_PATH,
     seed_exports_dir: str | Path = DEFAULT_SEED_EXPORTS_DIR,
     force: bool = False,
     limit: int = 100,

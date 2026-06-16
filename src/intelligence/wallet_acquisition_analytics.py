@@ -9,6 +9,8 @@ from typing import Any
 from src.analysis.trader_discovery import DEFAULT_TRADER_DISCOVERY_DB
 from src.analysis.trader_registry import DEFAULT_TRADERS_DB, list_traders
 from src.intelligence.wallet_data_acquisition import init_wallet_acquisition_db
+from src.intelligence.real_wallet_ingestion import synthetic_rejection_stats
+from src.intelligence.wallet_synthetic_filter import partition_wallets
 from src.sqlite_utils import closing_connection
 
 
@@ -93,6 +95,8 @@ def wallet_acquisition_analytics_report(
         ).fetchall()
 
     registry_count = len(list_traders(limit=10_000, db_path=str(traders_db_path)))
+    real_wallets, synthetic_wallets = partition_wallets([row.wallet for row in list_traders(limit=10_000, db_path=str(traders_db_path))])
+    synthetic_stats = synthetic_rejection_stats(traders_db_path=traders_db_path, days=days)
     wallets_discovered_per_day = {str(row["day"]): int(row["count"]) for row in daily_rows}
     status_counts = {str(row["status"]): int(row["count"]) for row in status_rows}
     source_effectiveness: dict[str, dict[str, int]] = {}
@@ -116,6 +120,10 @@ def wallet_acquisition_analytics_report(
             "source_effectiveness": source_effectiveness,
             "quality_score_distribution": _distribution(quality_scores),
             "registry_growth": registry_count,
+            "real_wallet_count": len(set(real_wallets)),
+            "synthetic_wallet_count": len(set(synthetic_wallets)),
+            "synthetic_rejections": synthetic_stats.get("synthetic_rejections", 0),
+            "synthetic_rejections_by_source": synthetic_stats.get("by_source", {}),
             "acquisition_velocity": velocity,
             "recent_runs": [dict(row) for row in run_rows[:10]],
         }
@@ -179,5 +187,9 @@ def wallet_source_stats_report(
         {
             "source_effectiveness": analytics.get("source_effectiveness", {}),
             "wallets_discovered_per_day": analytics.get("wallets_discovered_per_day", {}),
+            "real_wallet_count": analytics.get("real_wallet_count", 0),
+            "synthetic_wallet_count": analytics.get("synthetic_wallet_count", 0),
+            "synthetic_rejections": analytics.get("synthetic_rejections", 0),
+            "synthetic_rejections_by_source": analytics.get("synthetic_rejections_by_source", {}),
         }
     )

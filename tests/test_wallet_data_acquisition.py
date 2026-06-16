@@ -13,7 +13,7 @@ from src.intelligence.wallet_data_acquisition import (
 from src.intelligence.wallet_acquisition_analytics import wallet_acquisition_analytics_report
 from src.intelligence.wallet_quality_filter import WalletQualityFilter
 
-WALLET = "0x" + "a" * 40
+WALLET = "0x" + "a1" * 20
 WALLET_BAD = "not-a-wallet"
 
 

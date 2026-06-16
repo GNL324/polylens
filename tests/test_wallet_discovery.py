@@ -14,8 +14,8 @@ from src.intelligence.wallet_discovery import (
 from src.intelligence.wallet_discovery_analytics import wallet_discovery_analytics_report
 from src.intelligence.wallet_scoring import WalletScorer
 
-WALLET_A = "0x" + "a" * 40
-WALLET_B = "0x" + "b" * 40
+WALLET_A = "0x" + "a1" * 20
+WALLET_B = "0x" + "b2" * 20
 
 
 def _report(wallet: str, classification: str = "arbitrage_trader"):

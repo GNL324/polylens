@@ -15,6 +15,7 @@ from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB
 from src.intelligence.wallet_discovery import init_wallet_discovery_db
 from src.intelligence.wallet_scoring import WalletScorer
 from src.intelligence.wallet_signal_analytics import _wallet_validation_stats
+from src.intelligence.wallet_synthetic_filter import is_synthetic_wallet
 from src.sqlite_utils import closing_connection
 
 PERFORMANCE_STATUSES = ("promoted", "active", "probation", "retired")
@@ -197,6 +198,16 @@ class WalletPerformanceEngine:
 
     def score_wallet(self, wallet: str) -> WalletPerformanceScore:
         wallet = str(wallet or "").strip().lower()
+        if is_synthetic_wallet(wallet):
+            return WalletPerformanceScore(
+                wallet=wallet,
+                score=0.0,
+                confidence=0.0,
+                status="retired",
+                trend="stable",
+                metrics={"synthetic": True},
+                components={"synthetic_excluded": 100.0},
+            )
         base = self._scorer.score_wallet(wallet)
         validations = _wallet_validation_stats(self.signal_db_path).get(wallet, {})
         rois = self._closed_trade_rois(wallet)

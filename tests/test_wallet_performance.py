@@ -8,8 +8,8 @@ from src.intelligence.wallet_feedback_engine import FeedbackConfig, WalletFeedba
 from src.intelligence.wallet_performance import WalletPerformanceEngine, init_wallet_performance_db
 from src.intelligence.wallet_performance_analytics import wallet_performance_analytics_report
 
-WALLET_A = "0x" + "a" * 40
-WALLET_B = "0x" + "b" * 40
+WALLET_A = "0x" + "a1" * 20
+WALLET_B = "0x" + "b2" * 20
 
 
 def _report(wallet: str, watch_score: int = 85):

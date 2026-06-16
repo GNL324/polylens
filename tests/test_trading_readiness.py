@@ -39,10 +39,16 @@ def test_live_env_flags_default_paper_only():
     assert flags["POLYLENS_CONFIRM_RISK_ACK"] is False
 
 
-def test_readiness_blocked_by_default(readiness_db, risk_db):
+@pytest.fixture
+def paper_copy_db(tmp_path):
+    return tmp_path / "paper_copy.db"
+
+
+def test_readiness_blocked_by_default(readiness_db, risk_db, paper_copy_db):
     report = evaluate_trading_readiness(
         readiness_db_path=readiness_db,
         risk_db_path=risk_db,
+        paper_copy_db_path=paper_copy_db,
         min_paper_sample=1,
     )
     assert report.ready is False
@@ -52,11 +58,15 @@ def test_readiness_blocked_by_default(readiness_db, risk_db):
     assert report.blockers
 
 
-def test_readiness_blocks_live_flags(monkeypatch, readiness_db, risk_db):
+def test_readiness_blocks_live_flags(monkeypatch, readiness_db, risk_db, paper_copy_db):
     monkeypatch.setenv("LIVE_TRADING", "true")
     monkeypatch.setenv("DRY_RUN", "false")
     monkeypatch.setenv("POLYLENS_LIVE_TRADING", "true")
-    report = evaluate_trading_readiness(readiness_db_path=readiness_db, risk_db_path=risk_db)
+    report = evaluate_trading_readiness(
+        readiness_db_path=readiness_db,
+        risk_db_path=risk_db,
+        paper_copy_db_path=paper_copy_db,
+    )
     assert report.live_trading_enabled is True
     assert any("live trading flags" in item for item in report.blockers)
 
@@ -143,10 +153,11 @@ def test_simulated_order_router_rejects_without_gate(readiness_db):
     assert orders[0]["status"] == "rejected"
 
 
-def test_trading_readiness_cli_json(readiness_db, risk_db, monkeypatch):
+def test_trading_readiness_cli_json(readiness_db, risk_db, paper_copy_db, monkeypatch):
     from src.cli import trading_readiness_cli
+    import src.analysis.paper_copy_trader as paper_module
 
-    monkeypatch.setenv("POLYLENS_DB_PATH", str(risk_db))
+    monkeypatch.setattr(paper_module, "DEFAULT_PAPER_COPY_DB", str(paper_copy_db))
     result = trading_readiness_cli(
         as_json=True,
         readiness_db_path=str(readiness_db),
@@ -216,9 +227,11 @@ def test_trading_kill_resume_status_cli(readiness_db, risk_db):
     assert status["kill_switch"]["halted"] is False
 
 
-def test_trading_readiness_cli_human_output(readiness_db, risk_db, monkeypatch):
+def test_trading_readiness_cli_human_output(readiness_db, risk_db, paper_copy_db, monkeypatch):
     from src.cli import trading_readiness_cli
+    import src.trading.trading_readiness as readiness_module
 
+    monkeypatch.setattr(readiness_module, "DEFAULT_PAPER_COPY_DB", str(paper_copy_db))
     captured = StringIO()
     monkeypatch.setattr(sys, "stdout", captured)
     trading_readiness_cli(
@@ -228,7 +241,7 @@ def test_trading_readiness_cli_human_output(readiness_db, risk_db, monkeypatch):
     )
     output = captured.getvalue()
     assert "Trading readiness:" in output
-    assert "Blockers:" in output
+    assert "Paper only:" in output
 
 
 def test_trading_readiness_dashboard_payload(readiness_db, risk_db):
