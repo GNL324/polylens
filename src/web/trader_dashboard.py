@@ -52,6 +52,7 @@ __all__ = [
     "load_registry_summary",
     "load_wallet_alpha_lab_dashboard",
     "load_wallet_acquisition_dashboard",
+    "load_polymarket_leaderboard_dashboard",
     "load_wallet_discovery_dashboard",
     "load_wallet_performance_dashboard",
     "load_wallet_service_dashboard",
@@ -482,6 +483,32 @@ def load_wallet_acquisition_dashboard(
         "acquisition_velocity": analytics.get("acquisition_velocity"),
         "registry_growth": analytics.get("registry_growth"),
         "quality_distribution": analytics.get("quality_score_distribution", {}),
+    }
+
+
+def load_polymarket_leaderboard_dashboard(
+    *,
+    traders_db_path: str | Path = DEFAULT_TRADERS_DB,
+    discovery_db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB,
+    limit: int = OVERVIEW_TABLE_LIMIT,
+) -> dict[str, Any]:
+    from src.intelligence.polymarket_leaderboard_ingestion import (
+        leaderboard_health_report,
+        load_latest_leaderboard_wallets,
+        load_recent_leaderboard_fetches,
+    )
+
+    health = leaderboard_health_report(
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+    )
+    return {
+        "health": health,
+        "recent_fetches": load_recent_leaderboard_fetches(traders_db_path=traders_db_path, limit=limit),
+        "top_wallets": [
+            row.to_dict()
+            for row in load_latest_leaderboard_wallets(traders_db_path=traders_db_path, limit=limit)
+        ],
     }
 
 
@@ -1251,12 +1278,55 @@ def _render_discovery_page(state: dict[str, Any], settings: TraderDashboardConfi
 def _render_acquisition_page(state: dict[str, Any], settings: TraderDashboardConfig) -> None:
     from nicegui import ui
 
+    leaderboard = load_polymarket_leaderboard_dashboard(
+        traders_db_path=settings.traders_db_path,
+        discovery_db_path=settings.discovery_db_path,
+        limit=OVERVIEW_TABLE_LIMIT,
+    )
+    leaderboard_health = leaderboard.get("health", {})
+
     data = load_wallet_acquisition_dashboard(
         traders_db_path=settings.traders_db_path,
         discovery_db_path=settings.discovery_db_path,
         limit=OVERVIEW_TABLE_LIMIT,
     )
     analytics = data.get("analytics", {})
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Polymarket Leaderboard Source").classes("tt-section-title")
+        with ui.element("div").classes("tt-kpi-grid w-full"):
+            for key, label in (
+                ("health_status", "Health"),
+                ("tracked_wallet_count", "Tracked Wallets"),
+                ("discovery_wallet_count", "In Discovery"),
+                ("recent_error_count", "Recent Errors"),
+            ):
+                with ui.element("div").classes("tt-kpi-card"):
+                    ui.label(label).classes("label")
+                    ui.label(str(leaderboard_health.get(key, "—"))).classes("value")
+        fetch_rows = [
+            {
+                "status": row.get("status"),
+                "category": row.get("category"),
+                "period": row.get("time_period"),
+                "wallets": row.get("wallet_count"),
+                "finished": row.get("finished_at"),
+            }
+            for row in leaderboard.get("recent_fetches", [])[:OVERVIEW_TABLE_LIMIT]
+        ]
+        if fetch_rows:
+            _render_table(
+                [
+                    {"name": "status", "label": "Status", "field": "status", "align": "left"},
+                    {"name": "category", "label": "Category", "field": "category", "align": "left"},
+                    {"name": "period", "label": "Period", "field": "period", "align": "left"},
+                    {"name": "wallets", "label": "Wallets", "field": "wallets", "align": "left"},
+                    {"name": "finished", "label": "Finished", "field": "finished", "align": "left"},
+                ],
+                fetch_rows,
+            )
+        else:
+            ui.label("No leaderboard fetches yet.").classes("tt-status")
 
     with ui.element("div").classes("tt-kpi-grid w-full"):
         for key, label in (

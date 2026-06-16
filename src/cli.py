@@ -1004,6 +1004,105 @@ def wallet_bootstrap_health_cli(
     return result
 
 
+def polymarket_leaderboard_fetch_cli(
+    as_json: bool = False,
+    traders_db_path: str = "data/traders.db",
+    category: str = "OVERALL",
+    time_period: str = "MONTH",
+    order_by: str = "PNL",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    from src.intelligence.polymarket_leaderboard_ingestion import run_leaderboard_fetch
+
+    result = run_leaderboard_fetch(
+        traders_db_path=traders_db_path,
+        category=category,
+        time_period=time_period,
+        order_by=order_by,
+        limit=limit,
+        offset=offset,
+    )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(
+            f"Leaderboard fetch {result.get('status')}: wallets={result.get('wallet_count')} "
+            f"synthetic_rejected={result.get('synthetic_rejected')} "
+            f"category={result.get('category')} period={result.get('time_period')}"
+        )
+    return result
+
+
+def polymarket_leaderboard_ingest_cli(
+    as_json: bool = False,
+    traders_db_path: str = "data/traders.db",
+    discovery_db_path: str = "data/trader_discovery.db",
+    limit: int = 50,
+) -> dict[str, Any]:
+    from src.intelligence.polymarket_leaderboard_ingestion import run_leaderboard_ingestion
+
+    result = run_leaderboard_ingestion(
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+        limit=limit,
+    )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(
+            f"Leaderboard ingestion {result.get('status')}: wallets={result.get('wallet_count')} "
+            f"discovery={result.get('discovery', {}).get('ingested', 0)} "
+            f"synthetic_rejected={result.get('synthetic_rejected')}"
+        )
+    return result
+
+
+def polymarket_leaderboard_health_cli(
+    as_json: bool = False,
+    traders_db_path: str = "data/traders.db",
+    discovery_db_path: str = "data/trader_discovery.db",
+) -> dict[str, Any]:
+    from src.intelligence.polymarket_leaderboard_ingestion import leaderboard_health_report
+
+    result = leaderboard_health_report(
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+    )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(
+            f"Leaderboard health: {result.get('health_status')} "
+            f"tracked={result.get('tracked_wallet_count')} "
+            f"discovery={result.get('discovery_wallet_count')} "
+            f"errors={result.get('recent_error_count')}"
+        )
+    return result
+
+
+def polymarket_leaderboard_status_cli(
+    as_json: bool = False,
+    traders_db_path: str = "data/traders.db",
+    discovery_db_path: str = "data/trader_discovery.db",
+    limit: int = 25,
+) -> dict[str, Any]:
+    from src.intelligence.polymarket_leaderboard_ingestion import leaderboard_status
+
+    result = leaderboard_status(
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+        wallet_limit=limit,
+    )
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Leaderboard status: {result.get('health_status')}")
+        for row in result.get("top_wallets") or []:
+            print(f"- #{row.get('rank')} {row.get('wallet')} pnl={row.get('pnl')}")
+    return result
+
+
 def wallet_acquisition_report_cli(as_json: bool = False, days: int = 7) -> dict[str, Any]:
     from src.intelligence.wallet_acquisition_analytics import wallet_acquisition_analytics_report
 
@@ -4310,6 +4409,44 @@ def main() -> None:
     wallet_bootstrap_health_parser.add_argument("--discovery-db", default="data/trader_discovery.db")
     wallet_bootstrap_health_parser.add_argument("--json", action="store_true")
 
+    polymarket_leaderboard_fetch_parser = sub.add_parser(
+        "polymarket-leaderboard-fetch",
+        help="fetch public Polymarket leaderboard wallets",
+    )
+    polymarket_leaderboard_fetch_parser.add_argument("--traders-db", default="data/traders.db")
+    polymarket_leaderboard_fetch_parser.add_argument("--category", default="OVERALL")
+    polymarket_leaderboard_fetch_parser.add_argument("--time-period", default="MONTH")
+    polymarket_leaderboard_fetch_parser.add_argument("--order-by", default="PNL", choices=["PNL", "VOL"])
+    polymarket_leaderboard_fetch_parser.add_argument("--limit", type=int, default=50)
+    polymarket_leaderboard_fetch_parser.add_argument("--offset", type=int, default=0)
+    polymarket_leaderboard_fetch_parser.add_argument("--json", action="store_true")
+
+    polymarket_leaderboard_ingest_parser = sub.add_parser(
+        "polymarket-leaderboard-ingest",
+        help="ingest Polymarket leaderboard wallets into discovery",
+    )
+    polymarket_leaderboard_ingest_parser.add_argument("--traders-db", default="data/traders.db")
+    polymarket_leaderboard_ingest_parser.add_argument("--discovery-db", default="data/trader_discovery.db")
+    polymarket_leaderboard_ingest_parser.add_argument("--limit", type=int, default=50)
+    polymarket_leaderboard_ingest_parser.add_argument("--json", action="store_true")
+
+    polymarket_leaderboard_health_parser = sub.add_parser(
+        "polymarket-leaderboard-health",
+        help="Polymarket leaderboard source health summary",
+    )
+    polymarket_leaderboard_health_parser.add_argument("--traders-db", default="data/traders.db")
+    polymarket_leaderboard_health_parser.add_argument("--discovery-db", default="data/trader_discovery.db")
+    polymarket_leaderboard_health_parser.add_argument("--json", action="store_true")
+
+    polymarket_leaderboard_status_parser = sub.add_parser(
+        "polymarket-leaderboard-status",
+        help="Polymarket leaderboard ingestion status and top wallets",
+    )
+    polymarket_leaderboard_status_parser.add_argument("--traders-db", default="data/traders.db")
+    polymarket_leaderboard_status_parser.add_argument("--discovery-db", default="data/trader_discovery.db")
+    polymarket_leaderboard_status_parser.add_argument("--limit", type=int, default=25)
+    polymarket_leaderboard_status_parser.add_argument("--json", action="store_true")
+
     wallet_acquisition_report_parser = sub.add_parser("wallet-acquisition-report", help="wallet acquisition analytics report")
     wallet_acquisition_report_parser.add_argument("--days", type=int, default=7)
     wallet_acquisition_report_parser.add_argument("--json", action="store_true")
@@ -4924,6 +5061,36 @@ def main() -> None:
             as_json=args.json,
             traders_db_path=args.traders_db,
             discovery_db_path=args.discovery_db,
+        )
+    elif args.command == "polymarket-leaderboard-fetch":
+        polymarket_leaderboard_fetch_cli(
+            as_json=args.json,
+            traders_db_path=args.traders_db,
+            category=args.category,
+            time_period=args.time_period,
+            order_by=args.order_by,
+            limit=args.limit,
+            offset=args.offset,
+        )
+    elif args.command == "polymarket-leaderboard-ingest":
+        polymarket_leaderboard_ingest_cli(
+            as_json=args.json,
+            traders_db_path=args.traders_db,
+            discovery_db_path=args.discovery_db,
+            limit=args.limit,
+        )
+    elif args.command == "polymarket-leaderboard-health":
+        polymarket_leaderboard_health_cli(
+            as_json=args.json,
+            traders_db_path=args.traders_db,
+            discovery_db_path=args.discovery_db,
+        )
+    elif args.command == "polymarket-leaderboard-status":
+        polymarket_leaderboard_status_cli(
+            as_json=args.json,
+            traders_db_path=args.traders_db,
+            discovery_db_path=args.discovery_db,
+            limit=args.limit,
         )
     elif args.command == "wallet-acquisition-report":
         wallet_acquisition_report_cli(as_json=args.json, days=args.days)
