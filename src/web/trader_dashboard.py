@@ -1425,6 +1425,142 @@ def _render_acquisition_page(state: dict[str, Any], settings: TraderDashboardCon
         else:
             ui.label("No source statistics yet.").classes("tt-status")
 
+    _render_leaderboard_attribution_section(settings)
+
+
+def _render_leaderboard_attribution_section(settings: TraderDashboardConfig) -> None:
+    from nicegui import ui
+    from src.intelligence.leaderboard_performance_attribution import (
+        leaderboard_alpha_rankings,
+        wallet_follow_candidates,
+        wallet_performance_breakdown,
+        wallet_strategy_clustering,
+    )
+
+    with ui.element("div").classes("tt-card w-full"):
+        ui.label("Leaderboard Attribution").classes("tt-section-title")
+
+        try:
+            breakdown = wallet_performance_breakdown(
+                traders_db_path=settings.traders_db_path,
+                discovery_db_path=settings.discovery_db_path,
+            )
+            with ui.element("div").classes("tt-kpi-grid w-full"):
+                for key, label in (
+                    ("total_wallets", "Tracked"),
+                    ("accepted_wallets", "Accepted"),
+                    ("probation_wallets", "Probation"),
+                    ("rejected_wallets", "Rejected"),
+                    ("average_alpha_score", "Avg Alpha"),
+                    ("top_alpha_score", "Top Alpha"),
+                    ("synthetic_wallet_count", "Synthetic"),
+                ):
+                    with ui.element("div").classes("tt-kpi-card"):
+                        ui.label(label).classes("label")
+                        ui.label(str(breakdown.get(key, "—"))).classes("value")
+
+            top_wallet = breakdown.get("top_wallet")
+            if top_wallet:
+                ui.label(f"Top wallet: {_short_wallet(top_wallet)}").classes("tt-status")
+        except Exception as exc:
+            ui.label(f"Attribution breakdown unavailable: {exc}").classes("tt-status")
+
+        try:
+            rankings = leaderboard_alpha_rankings(
+                traders_db_path=settings.traders_db_path,
+                discovery_db_path=settings.discovery_db_path,
+                limit=OVERVIEW_TABLE_LIMIT,
+            )
+            alpha_rows = [
+                {
+                    "wallet": _short_wallet(row.get("wallet", "")),
+                    "rank": row.get("alpha_rank"),
+                    "score": round(row.get("alpha_score", 0.0), 2),
+                    "confidence": round(row.get("alpha_confidence", 0.0), 3),
+                }
+                for row in rankings.get("rankings", [])
+            ]
+            if alpha_rows:
+                ui.label("Top Leaderboard Alpha Wallets").classes("tt-section-title")
+                _render_table(
+                    [
+                        {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                        {"name": "rank", "label": "Rank", "field": "rank", "align": "left"},
+                        {"name": "score", "label": "Alpha", "field": "score", "align": "left"},
+                        {"name": "confidence", "label": "Confidence", "field": "confidence", "align": "left"},
+                    ],
+                    alpha_rows,
+                )
+            else:
+                ui.label("No leaderboard alpha rankings yet.").classes("tt-status")
+        except Exception as exc:
+            ui.label(f"Alpha rankings unavailable: {exc}").classes("tt-status")
+
+        try:
+            candidates = wallet_follow_candidates(
+                traders_db_path=settings.traders_db_path,
+                discovery_db_path=settings.discovery_db_path,
+                limit=OVERVIEW_TABLE_LIMIT,
+            )
+            candidate_rows = [
+                {
+                    "wallet": _short_wallet(row.get("wallet", "")),
+                    "alpha": round(row.get("alpha_score", 0.0), 2),
+                    "confidence": round(row.get("confidence", 0.0), 3),
+                    "reason": row.get("reason"),
+                }
+                for row in candidates.get("candidates", [])
+            ]
+            if candidate_rows:
+                ui.label("Top Follow Candidates").classes("tt-section-title")
+                _render_table(
+                    [
+                        {"name": "wallet", "label": "Wallet", "field": "wallet", "align": "left"},
+                        {"name": "alpha", "label": "Alpha", "field": "alpha", "align": "left"},
+                        {"name": "confidence", "label": "Confidence", "field": "confidence", "align": "left"},
+                        {"name": "reason", "label": "Reason", "field": "reason", "align": "left"},
+                    ],
+                    candidate_rows,
+                )
+            else:
+                ui.label("No follow candidates yet.").classes("tt-status")
+        except Exception as exc:
+            ui.label(f"Follow candidates unavailable: {exc}").classes("tt-status")
+
+        try:
+            clusters = wallet_strategy_clustering(
+                traders_db_path=settings.traders_db_path,
+                discovery_db_path=settings.discovery_db_path,
+                leaderboard_only=True,
+                limit=OVERVIEW_TABLE_LIMIT,
+            )
+            cluster_rows = [
+                {
+                    "category": row.get("category"),
+                    "count": row.get("wallet_count"),
+                    "avg_alpha": round(row.get("average_alpha_score", 0.0), 2),
+                    "top_wallet": _short_wallet(
+                        (row.get("top_wallets") or [{}])[0].get("wallet", "")
+                    ),
+                }
+                for row in clusters.get("clusters", [])
+            ]
+            if cluster_rows:
+                ui.label("Strategy Clusters").classes("tt-section-title")
+                _render_table(
+                    [
+                        {"name": "category", "label": "Category", "field": "category", "align": "left"},
+                        {"name": "count", "label": "Wallets", "field": "count", "align": "left"},
+                        {"name": "avg_alpha", "label": "Avg Alpha", "field": "avg_alpha", "align": "left"},
+                        {"name": "top_wallet", "label": "Top Wallet", "field": "top_wallet", "align": "left"},
+                    ],
+                    cluster_rows,
+                )
+            else:
+                ui.label("No strategy clusters yet.").classes("tt-status")
+        except Exception as exc:
+            ui.label(f"Strategy clustering unavailable: {exc}").classes("tt-status")
+
 
 def _render_alpha_lab_page(state: dict[str, Any], settings: TraderDashboardConfig) -> None:
     from nicegui import ui

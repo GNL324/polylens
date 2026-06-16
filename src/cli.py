@@ -1419,21 +1419,72 @@ def wallet_alpha_report_cli(as_json: bool = False, wallet: str = "", limit: int 
     return payload
 
 
-def wallet_alpha_rankings_cli(as_json: bool = False, limit: int = 25) -> dict[str, Any]:
-    from src.intelligence.wallet_alpha_lab import WalletAlphaLab
+def wallet_alpha_rankings_cli(as_json: bool = False, limit: int = 25, leaderboard_only: bool = False) -> dict[str, Any]:
+    if leaderboard_only:
+        from src.intelligence.leaderboard_performance_attribution import leaderboard_alpha_rankings
 
-    rankings = WalletAlphaLab().rank_wallets(limit=limit)
-    payload = _with_alpha_flags(
-        {
-            "real_wallet_only": True,
-            "rankings": [row.to_dict() for row in rankings],
-        }
-    )
+        payload = leaderboard_alpha_rankings(limit=limit)
+    else:
+        from src.intelligence.wallet_alpha_lab import WalletAlphaLab
+
+        rankings = WalletAlphaLab().rank_wallets(limit=limit)
+        payload = _with_alpha_flags(
+            {
+                "real_wallet_only": True,
+                "rankings": [row.to_dict() for row in rankings],
+            }
+        )
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif leaderboard_only:
+        for row in payload.get("rankings", []):
+            print(f"  #{row.get('alpha_rank')} {row.get('wallet')} score={row.get('alpha_score'):.2f}")
+    else:
+        for row in payload.get("rankings", []):
+            print(f"  #{row.get('alpha_rank')} {row.get('wallet')} score={row.get('alpha_score'):.2f} grade={row.get('alpha_grade')}")
+    return payload
+
+
+def wallet_performance_breakdown_cli(as_json: bool = False) -> dict[str, Any]:
+    from src.intelligence.leaderboard_performance_attribution import wallet_performance_breakdown
+
+    payload = wallet_performance_breakdown()
     if as_json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        for row in rankings:
-            print(f"  #{row.alpha_rank} {row.wallet} score={row.alpha_score:.2f} grade={row.alpha_grade}")
+        print(
+            f"Leaderboard wallets: {payload.get('total_wallets')} "
+            f"accepted={payload.get('accepted_wallets')} "
+            f"probation={payload.get('probation_wallets')} "
+            f"rejected={payload.get('rejected_wallets')}"
+        )
+        print(f"Avg alpha: {payload.get('average_alpha_score')} top: {payload.get('top_wallet')} ({payload.get('top_alpha_score')})")
+    return payload
+
+
+def wallet_follow_candidates_cli(as_json: bool = False, limit: int = 10) -> dict[str, Any]:
+    from src.intelligence.leaderboard_performance_attribution import wallet_follow_candidates
+
+    payload = wallet_follow_candidates(limit=limit)
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Follow candidates: {payload.get('count')}")
+        for row in payload.get("candidates", []):
+            print(f"  {row.get('wallet')} alpha={row.get('alpha_score')} reason={row.get('reason')}")
+    return payload
+
+
+def wallet_strategy_clustering_cli(as_json: bool = False, leaderboard_only: bool = False, limit: int = 25) -> dict[str, Any]:
+    from src.intelligence.leaderboard_performance_attribution import wallet_strategy_clustering
+
+    payload = wallet_strategy_clustering(leaderboard_only=leaderboard_only, limit=limit)
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Strategy clusters: {len(payload.get('clusters', []))}")
+        for row in payload.get("clusters", []):
+            print(f"  {row.get('category')}: {row.get('wallet_count')} wallets avg_alpha={row.get('average_alpha_score')}")
     return payload
 
 
@@ -4469,7 +4520,20 @@ def main() -> None:
 
     wallet_alpha_rankings_parser = sub.add_parser("wallet-alpha-rankings", help="wallet alpha rankings")
     wallet_alpha_rankings_parser.add_argument("--limit", type=int, default=25)
+    wallet_alpha_rankings_parser.add_argument("--leaderboard-only", action="store_true")
     wallet_alpha_rankings_parser.add_argument("--json", action="store_true")
+
+    wallet_performance_breakdown_parser = sub.add_parser("wallet-performance-breakdown", help="leaderboard wallet performance breakdown")
+    wallet_performance_breakdown_parser.add_argument("--json", action="store_true")
+
+    wallet_follow_candidates_parser = sub.add_parser("wallet-follow-candidates", help="top leaderboard-derived follow candidates")
+    wallet_follow_candidates_parser.add_argument("--limit", type=int, default=10)
+    wallet_follow_candidates_parser.add_argument("--json", action="store_true")
+
+    wallet_strategy_clustering_parser = sub.add_parser("wallet-strategy-clustering", help="strategy clustering for leaderboard wallets")
+    wallet_strategy_clustering_parser.add_argument("--leaderboard-only", action="store_true")
+    wallet_strategy_clustering_parser.add_argument("--limit", type=int, default=25)
+    wallet_strategy_clustering_parser.add_argument("--json", action="store_true")
 
     wallet_alpha_trends_parser = sub.add_parser("wallet-alpha-trends", help="wallet alpha score trends")
     wallet_alpha_trends_parser.add_argument("--wallet", default="")
@@ -5103,7 +5167,21 @@ def main() -> None:
     elif args.command == "wallet-alpha-report":
         wallet_alpha_report_cli(as_json=args.json, wallet=args.wallet, limit=args.limit)
     elif args.command == "wallet-alpha-rankings":
-        wallet_alpha_rankings_cli(as_json=args.json, limit=args.limit)
+        wallet_alpha_rankings_cli(
+            as_json=args.json,
+            limit=args.limit,
+            leaderboard_only=args.leaderboard_only,
+        )
+    elif args.command == "wallet-performance-breakdown":
+        wallet_performance_breakdown_cli(as_json=args.json)
+    elif args.command == "wallet-follow-candidates":
+        wallet_follow_candidates_cli(as_json=args.json, limit=args.limit)
+    elif args.command == "wallet-strategy-clustering":
+        wallet_strategy_clustering_cli(
+            as_json=args.json,
+            leaderboard_only=args.leaderboard_only,
+            limit=args.limit,
+        )
     elif args.command == "wallet-alpha-trends":
         wallet_alpha_trends_cli(as_json=args.json, wallet=args.wallet, limit=args.limit)
     elif args.command == "wallet-alpha-decay":
