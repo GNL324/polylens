@@ -156,6 +156,12 @@ def evaluate_trading_readiness(
     if target_strategy and not strategy_validation_complete:
         blockers.append("strategy validation is not complete")
 
+    # Default readiness (no target strategy) must remain blocked until an explicit
+    # strategy is approved. Without a target strategy the framework cannot validate
+    # live execution intent.
+    if not target_strategy:
+        blockers.append("no approved target strategy provided")
+
     checks = {
         "live_flags": flags,
         "paper_closed_positions": total_closed,
