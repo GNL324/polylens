@@ -5,7 +5,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB, RECOMMENDATION_TYPES, init_trader_signal_db
+from src.analysis.trader_signal_engine import (
+    DEFAULT_TRADER_SIGNAL_DB,
+    RECOMMENDATION_TYPES,
+    init_trader_signal_db,
+    recommendation_family_distribution,
+)
 from src.analysis.trader_signal_gates import apply_gate_to_recommendation, load_signal_family_stats
 from src.analysis.trader_signal_validation import init_trader_signal_validation_db
 from src.sqlite_utils import closing_connection
@@ -187,6 +192,7 @@ def run_trader_signal_paper_bridge(
     config = config or PaperBridgeConfig()
     init_trader_signal_paper_bridge_db(db_path)
     recommendations = _load_recommendations_with_gates(db_path=db_path, limit=config.limit)
+    recommendation_distribution = recommendation_family_distribution(recommendations)
     intents = [build_paper_intent_from_recommendation(rec, config=config) for rec in recommendations]
 
     inserted = 0
@@ -242,6 +248,7 @@ def run_trader_signal_paper_bridge(
             "minimum_score": config.minimum_score,
             "notional_usd": config.notional_usd,
             "max_notional_usd": config.max_notional_usd,
+            "recommendation_distribution": recommendation_distribution,
             "intents": intents,
         }
     )

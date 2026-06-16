@@ -513,6 +513,84 @@ def update_signal_performance(
     )
 
 
+def recommendation_family_distribution(recommendations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in recommendations:
+        signal_type = str(item.get("signal_type") or "unknown")
+        row = grouped.setdefault(
+            signal_type,
+            {
+                "signal_type": signal_type,
+                "count": 0,
+                "blocked": 0,
+                "candidate": 0,
+                "simulated": 0,
+                "proven": 0,
+                "unproven": 0,
+                "weak": 0,
+                "max_score": None,
+                "avg_score": 0.0,
+            },
+        )
+        score = float(item.get("score") or 0.0)
+        row["count"] += 1
+        row["avg_score"] += score
+        row["max_score"] = score if row["max_score"] is None else max(float(row["max_score"]), score)
+        status = str(item.get("gate_status") or "unproven")
+        if status in {"proven", "unproven", "weak"}:
+            row[status] += 1
+        recommendation_type = str(item.get("recommendation_type") or "")
+        if recommendation_type == "blocked":
+            row["blocked"] += 1
+        elif recommendation_type in {"paper_entry", "watch"}:
+            row["candidate"] += 1
+            if recommendation_type == "paper_entry":
+                row["simulated"] += 1
+
+    distribution = []
+    for row in grouped.values():
+        count = int(row["count"])
+        distribution.append(
+            {
+                **row,
+                "avg_score": round(float(row["avg_score"]) / count, 4) if count else None,
+                "max_score": round(float(row["max_score"]), 4) if row["max_score"] is not None else None,
+            }
+        )
+    return sorted(distribution, key=lambda row: (-int(row["count"]), str(row["signal_type"])))
+
+
+def _is_bridge_actionable_recommendation(item: dict[str, Any]) -> bool:
+    return (
+        item.get("gate_status") == "proven"
+        and item.get("recommendation_type") in {"paper_entry", "watch"}
+    )
+
+
+def _select_recommendations_for_persistence(
+    recommendations: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    max_rows = max(int(limit), 0)
+    if max_rows == 0:
+        return []
+
+    ranked = sorted(recommendations, key=lambda row: (-float(row["score"]), row["recommendation_key"]))
+    actionable = [item for item in ranked if _is_bridge_actionable_recommendation(item)]
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [*actionable, *ranked]:
+        key = str(item["recommendation_key"])
+        if key in seen:
+            continue
+        selected.append(item)
+        seen.add(key)
+        if len(selected) >= max_rows:
+            break
+    return selected
+
+
 def _optional_float(value: Any) -> float | None:
     if value is None or value == "":
         return None
@@ -592,8 +670,9 @@ def generate_trader_signal_recommendations(
             }
         recommendations.append(item)
 
-    recommendations.sort(key=lambda row: (-float(row["score"]), row["recommendation_key"]))
-    recommendations = recommendations[: max(int(limit), 0)]
+    preselection_distribution = recommendation_family_distribution(recommendations)
+    recommendations = _select_recommendations_for_persistence(recommendations, limit=limit)
+    selected_distribution = recommendation_family_distribution(recommendations)
     split = split_recommendations_by_gate(recommendations)
 
     inserted = 0
@@ -627,6 +706,8 @@ def generate_trader_signal_recommendations(
             "recommendation_count": len(recommendations),
             "recommendations_persisted": inserted,
             "conflicts": len(conflict_keys),
+            "recommendation_distribution": selected_distribution,
+            "preselection_recommendation_distribution": preselection_distribution,
             "promoted_recommendations": split["promoted_recommendations"],
             "blocked_recommendations": split["blocked_recommendations"],
             "gate_summary": trader_signal_gates_report(db_path=db_path)["gate_summary"],

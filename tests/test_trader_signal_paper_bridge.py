@@ -153,6 +153,45 @@ def test_paper_bridge_runs_after_backfilled_validation(tmp_path):
     assert result["simulated_count"] >= 1 or result["candidate_count"] >= 1
 
 
+def test_mixed_families_only_proven_reach_simulation(tmp_path):
+    db_path = tmp_path / "signals.db"
+    events = [
+        _event(
+            "buy",
+            timestamp=100 + index,
+            tx_hash=f"0xbuy{index}",
+            market_id=f"market-{index}",
+            price=0.1,
+            amount=500.0,
+        )
+        for index in range(25)
+    ]
+    persist_signals(generate_signals_from_activity(events), db_path=db_path)
+    score_trader_signals(db_path=db_path)
+    seed_signal_family_validations(db_path, "early_entry", count=20, accuracy=0.6)
+    seed_signal_family_validations(db_path, "conviction", count=20, accuracy=0.5)
+
+    recommendations = generate_trader_signal_recommendations(db_path=db_path, limit=20)
+    result = run_trader_signal_paper_bridge(db_path=db_path, config=PaperBridgeConfig(limit=20))
+
+    selected_distribution = {
+        row["signal_type"]: row for row in recommendations["recommendation_distribution"]
+    }
+    preselection_distribution = {
+        row["signal_type"]: row for row in recommendations["preselection_recommendation_distribution"]
+    }
+
+    assert preselection_distribution["conviction"]["weak"] >= 20
+    assert selected_distribution["early_entry"]["proven"] >= 1
+    assert result["simulated_count"] >= 1
+    assert any(intent["signal_type"] == "early_entry" and intent["status"] == "simulated" for intent in result["intents"])
+    assert all(
+        intent["status"] == "blocked"
+        for intent in result["intents"]
+        if intent["signal_type"] == "conviction"
+    )
+
+
 def test_low_score_blocked(tmp_path):
     intent = build_paper_intent_from_recommendation(
         {
