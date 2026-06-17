@@ -100,6 +100,7 @@ from src.analysis.trader_signal_paper_bridge import (
     run_trader_signal_paper_bridge,
     trader_signal_paper_bridge_report,
 )
+from src.analysis.trader_signal_paper_performance import paper_strategy_performance_report
 from src.analysis.trader_signal_dashboard_views import trader_signal_dashboard_views_report
 from src.intelligence.wallet_discovery import WalletDiscoveryConfig, WalletDiscoveryEngine
 from src.intelligence.wallet_discovery_analytics import wallet_discovery_analytics_report
@@ -1542,8 +1543,11 @@ def _with_alpha_flags(payload: dict[str, Any]) -> dict[str, Any]:
     return {"read_only": True, "paper_only": True, **payload}
 
 
-def paper_performance_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
-    result = build_paper_performance_report(db_path=db_path)
+def paper_performance_report_cli(as_json: bool = False, db_path: str = DEFAULT_TRADER_SIGNAL_DB) -> dict[str, Any]:
+    if Path(db_path).name == Path(DEFAULT_TRADER_SIGNAL_DB).name:
+        result = paper_strategy_performance_report(db_path=db_path)
+    else:
+        result = build_paper_performance_report(db_path=db_path)
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -3719,8 +3723,8 @@ def main() -> None:
     paper_health_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
     paper_health_parser.add_argument("--json", action="store_true")
 
-    paper_performance_parser = sub.add_parser("paper-performance-report", help="report autonomous paper trading performance")
-    paper_performance_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    paper_performance_parser = sub.add_parser("paper-performance-report", help="report paper trading performance attribution")
+    paper_performance_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
     paper_performance_parser.add_argument("--json", action="store_true")
 
     paper_equity_parser = sub.add_parser("paper-equity-report", help="report autonomous paper trading equity curve")
