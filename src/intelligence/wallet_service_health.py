@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,11 +13,49 @@ from src.intelligence.wallet_autonomy_service import (
     init_wallet_service_state_db,
     _parse_ts,
 )
+from src.intelligence.wallet_seed_import import bootstrap_health_report
 from src.sqlite_utils import closing_connection
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _bootstrap_is_intentionally_dormant(
+    *,
+    row: dict[str, Any],
+    traders_db_path: str,
+    service: WalletAutonomyService,
+) -> bool:
+    if str(row.get("last_status") or "") != "success":
+        return False
+
+    try:
+        with closing_connection(traders_db_path) as conn:
+            result_row = conn.execute(
+                "SELECT last_result_json FROM wallet_service_state WHERE cycle_name = 'bootstrap'"
+            ).fetchone()
+    except Exception:
+        return False
+
+    result_json = result_row["last_result_json"] if result_row else "{}"
+    try:
+        result = json.loads(str(result_json or "{}"))
+    except json.JSONDecodeError:
+        return False
+
+    if result.get("skipped") is not True or result.get("reason") != "ecosystem not empty":
+        return False
+
+    try:
+        health = bootstrap_health_report(
+            traders_db_path=traders_db_path,
+            discovery_db_path=service.discovery_db_path,
+        )
+    except Exception:
+        return False
+
+    return health.get("ecosystem_empty") is False
 
 
 def wallet_service_health_summary(
@@ -49,6 +88,12 @@ def wallet_service_health_summary(
         else:
             age_seconds = (now - last_run_at).total_seconds()
             stale = age_seconds > interval * 2
+        if stale and cycle_name == "bootstrap" and _bootstrap_is_intentionally_dormant(
+            row=row,
+            traders_db_path=traders_db_path,
+            service=svc,
+        ):
+            stale = False
         if stale:
             stale_cycles.append(cycle_name)
         if last_status == "error":
