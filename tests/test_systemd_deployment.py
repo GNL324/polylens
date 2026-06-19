@@ -53,7 +53,7 @@ def test_dashboard_service_topology_is_localhost_only():
     assert "POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false" in main_dashboard
     assert "POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED=false" in main_dashboard
     assert (
-        "ExecStart=/home/noel/.venv/bin/python -m src.cli web-dashboard "
+        "ExecStart=/home/noel/polylens/.venv/bin/python -m src.cli web-dashboard "
         "--host 127.0.0.1 --port 8787"
     ) in main_dashboard
     assert "0.0.0.0" not in main_dashboard
@@ -68,7 +68,7 @@ def test_dashboard_service_topology_is_localhost_only():
     assert "POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false" in trader_dashboard
     assert "POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED=false" in trader_dashboard
     assert (
-        "ExecStart=/home/noel/.venv/bin/python -m src.cli trader-dashboard "
+        "ExecStart=/home/noel/polylens/.venv/bin/python -m src.cli trader-dashboard "
         "--host 127.0.0.1 --port 8788"
     ) in trader_dashboard
     assert "0.0.0.0" not in trader_dashboard
@@ -90,13 +90,21 @@ def test_dashboard_topology_validator_ignores_peer_wildcard(tmp_path):
         "  echo 'LISTEN 0 2048 127.0.0.1:8788 0.0.0.0:*'\n"
         "fi\n"
     )
-    (fake_bin / "curl").write_text("#!/usr/bin/env bash\necho -n 200\n")
+    (fake_bin / "curl").write_text(
+        "#!/usr/bin/env bash\n"
+        "url=\"${@: -1}\"\n"
+        "if [[ \"$url\" == 'http://127.0.0.1:8787/' ]]; then\n"
+        "  echo -n 307\n"
+        "else\n"
+        "  echo -n 200\n"
+        "fi\n"
+    )
     (fake_bin / "systemctl").write_text(
         "#!/usr/bin/env bash\n"
         "if [[ \"$*\" == *'polylens-dashboard.service'* ]]; then\n"
-        "  echo '/home/noel/.venv/bin/python -m src.cli web-dashboard --host 127.0.0.1 --port 8787'\n"
+        "  echo '/home/noel/polylens/.venv/bin/python -m src.cli web-dashboard --host 127.0.0.1 --port 8787'\n"
         "elif [[ \"$*\" == *'polylens-trader-dashboard.service'* ]]; then\n"
-        "  echo '/home/noel/.venv/bin/python -m src.cli trader-dashboard --host 127.0.0.1 --port 8788'\n"
+        "  echo '/home/noel/polylens/.venv/bin/python -m src.cli trader-dashboard --host 127.0.0.1 --port 8788'\n"
         "fi\n"
     )
     for command in fake_bin.iterdir():
@@ -106,6 +114,7 @@ def test_dashboard_topology_validator_ignores_peer_wildcard(tmp_path):
     result = subprocess.run([validator], cwd=ROOT, env=env, text=True, capture_output=True)
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "Main dashboard root redirects to /mission-control with HTTP 307" in result.stdout
     assert "Summary: 0 failure(s)" in result.stdout
 
 

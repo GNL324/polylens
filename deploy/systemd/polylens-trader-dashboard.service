@@ -14,7 +14,7 @@ Environment=POLYLENS_LIVE_TRADING=false
 Environment=POLYLENS_AUTONOMOUS_CRYPTO=false
 Environment=POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false
 Environment=POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED=false
-ExecStart=/home/noel/.venv/bin/python -m src.cli trader-dashboard --host 127.0.0.1 --port 8788
+ExecStart=/home/noel/polylens/.venv/bin/python -m src.cli trader-dashboard --host 127.0.0.1 --port 8788
 Restart=always
 RestartSec=10
 StandardOutput=journal

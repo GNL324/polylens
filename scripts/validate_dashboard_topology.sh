@@ -60,10 +60,10 @@ else
 fi
 
 main_root_status="$(http_status 'http://127.0.0.1:8787/')"
-if [[ "${main_root_status}" == "200" ]]; then
-  pass "Main dashboard root returns HTTP 200 on 8787"
+if [[ "${main_root_status}" == "307" ]]; then
+  pass "Main dashboard root redirects to /mission-control with HTTP 307 on 8787"
 else
-  fail "Main dashboard root returned HTTP ${main_root_status} (expected 200)"
+  fail "Main dashboard root returned HTTP ${main_root_status} (expected 307 redirect to /mission-control)"
 fi
 
 mission_status="$(http_status 'http://127.0.0.1:8787/mission-control')"
