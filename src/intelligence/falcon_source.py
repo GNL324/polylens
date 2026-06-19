@@ -98,7 +98,7 @@ class FalconClient:
             method="POST",
         )
         try:
-            with self.opener(request, self.timeout) as response:
+            with self.opener(request, timeout=self.timeout) as response:
                 body = response.read().decode("utf-8")
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Falcon request failed: {exc}") from exc
@@ -362,4 +362,3 @@ def _wallet_metrics(row: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             metrics[field] = value
     return metrics
-

@@ -38,15 +38,19 @@ class FalconSourceTests(unittest.TestCase):
     def test_request_payload_shape(self):
         captured = {}
 
-        def opener(request, timeout):
+        def opener(request, *, timeout=None):
+            captured["data_type"] = type(request.data)
             captured["body"] = json.loads(request.data.decode("utf-8"))
             captured["auth"] = request.headers["Authorization"]
+            captured["timeout"] = timeout
             return FakeResponse({"data": {"results": []}, "pagination": {"has_more": False}})
 
         client = FalconClient(api_key="test-key", opener=opener)
         client.retrieve(584, {"sort_by": "h_score"}, limit=25, offset=50)
 
+        self.assertIs(captured["data_type"], bytes)
         self.assertEqual(captured["auth"], "Bearer test-key")
+        self.assertEqual(captured["timeout"], 30)
         self.assertEqual(
             captured["body"],
             {
