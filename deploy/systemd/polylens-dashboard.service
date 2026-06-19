@@ -1,0 +1,24 @@
+[Unit]
+Description=Polylens main dashboard and Mission Control
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=noel
+WorkingDirectory=/home/noel/polylens
+Environment=PYTHONPATH=/home/noel/polylens
+Environment=LIVE_TRADING=false
+Environment=DRY_RUN=true
+Environment=POLYLENS_LIVE_TRADING=false
+Environment=POLYLENS_AUTONOMOUS_CRYPTO=false
+Environment=POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false
+Environment=POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED=false
+ExecStart=/home/noel/.venv/bin/python -m src.cli web-dashboard --host 127.0.0.1 --port 8787
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

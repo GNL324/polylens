@@ -1,5 +1,6 @@
 import os
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,8 @@ SYSTEMD = ROOT / "deploy" / "systemd"
 
 
 def test_service_files_exist():
+    assert (SYSTEMD / "polylens-dashboard.service").exists()
+    assert (SYSTEMD / "polylens-trader-dashboard.service").exists()
     assert (SYSTEMD / "polylens-live-arb.service").exists()
     assert (SYSTEMD / "polylens-live-arb.env.example").exists()
     assert (SYSTEMD / "install_polylens_service.sh").exists()
@@ -34,6 +37,76 @@ def test_service_command_is_correct():
     assert "EnvironmentFile=/home/noel/polylens/deploy/systemd/polylens-live-arb.env" in text
     assert "Restart=always" in text
     assert "python -m src.cli watch-live-arb --save --interval 60 --min-score 0.7" in text
+
+
+def test_dashboard_service_topology_is_localhost_only():
+    main_dashboard = (SYSTEMD / "polylens-dashboard.service").read_text()
+    trader_dashboard = (SYSTEMD / "polylens-trader-dashboard.service").read_text()
+
+    assert "User=noel" in main_dashboard
+    assert "WorkingDirectory=/home/noel/polylens" in main_dashboard
+    assert "Environment=PYTHONPATH=/home/noel/polylens" in main_dashboard
+    assert "LIVE_TRADING=false" in main_dashboard
+    assert "DRY_RUN=true" in main_dashboard
+    assert "POLYLENS_LIVE_TRADING=false" in main_dashboard
+    assert "POLYLENS_AUTONOMOUS_CRYPTO=false" in main_dashboard
+    assert "POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false" in main_dashboard
+    assert "POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED=false" in main_dashboard
+    assert (
+        "ExecStart=/home/noel/.venv/bin/python -m src.cli web-dashboard "
+        "--host 127.0.0.1 --port 8787"
+    ) in main_dashboard
+    assert "0.0.0.0" not in main_dashboard
+
+    assert "User=noel" in trader_dashboard
+    assert "WorkingDirectory=/home/noel/polylens" in trader_dashboard
+    assert "Environment=PYTHONPATH=/home/noel/polylens" in trader_dashboard
+    assert "LIVE_TRADING=false" in trader_dashboard
+    assert "DRY_RUN=true" in trader_dashboard
+    assert "POLYLENS_LIVE_TRADING=false" in trader_dashboard
+    assert "POLYLENS_AUTONOMOUS_CRYPTO=false" in trader_dashboard
+    assert "POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false" in trader_dashboard
+    assert "POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED=false" in trader_dashboard
+    assert (
+        "ExecStart=/home/noel/.venv/bin/python -m src.cli trader-dashboard "
+        "--host 127.0.0.1 --port 8788"
+    ) in trader_dashboard
+    assert "0.0.0.0" not in trader_dashboard
+
+
+def test_dashboard_topology_validator_ignores_peer_wildcard(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    validator = ROOT / "scripts" / "validate_dashboard_topology.sh"
+
+    (fake_bin / "ss").write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *'sport = :8787'* ]]; then\n"
+        "  echo 'LISTEN 0 2048 127.0.0.1:8787 0.0.0.0:*'\n"
+        "elif [[ \"$*\" == *'sport = :8788'* ]]; then\n"
+        "  echo 'LISTEN 0 2048 127.0.0.1:8788 0.0.0.0:*'\n"
+        "else\n"
+        "  echo 'LISTEN 0 2048 127.0.0.1:8787 0.0.0.0:*'\n"
+        "  echo 'LISTEN 0 2048 127.0.0.1:8788 0.0.0.0:*'\n"
+        "fi\n"
+    )
+    (fake_bin / "curl").write_text("#!/usr/bin/env bash\necho -n 200\n")
+    (fake_bin / "systemctl").write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *'polylens-dashboard.service'* ]]; then\n"
+        "  echo '/home/noel/.venv/bin/python -m src.cli web-dashboard --host 127.0.0.1 --port 8787'\n"
+        "elif [[ \"$*\" == *'polylens-trader-dashboard.service'* ]]; then\n"
+        "  echo '/home/noel/.venv/bin/python -m src.cli trader-dashboard --host 127.0.0.1 --port 8788'\n"
+        "fi\n"
+    )
+    for command in fake_bin.iterdir():
+        command.chmod(0o755)
+
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    result = subprocess.run([validator], cwd=ROOT, env=env, text=True, capture_output=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Summary: 0 failure(s)" in result.stdout
 
 
 def test_env_example_contains_defaults():
@@ -164,6 +237,8 @@ def test_wallet_autonomy_service_is_paper_only():
 
 
 AUTONOMOUS_SERVICE_FILES = [
+    "polylens-dashboard.service",
+    "polylens-trader-dashboard.service",
     "wallet-autonomy.service",
     "polylens-trader-signal-cycle.service",
     "polylens-paper-trading.service",
