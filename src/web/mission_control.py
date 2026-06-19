@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,40 @@ from src.web.mission_control_data import (
 from src.web.mission_control_styles import MISSION_CONTROL_CSS
 
 
+RECHARTS_HEAD = """
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
+<script>
+window.PolylensRecharts = window.PolylensRecharts || {
+  renderLine: function (id, rows, config) {
+    const mount = document.getElementById(id);
+    if (!mount || !window.React || !window.ReactDOM || !window.Recharts) {
+      window.setTimeout(function () { window.PolylensRecharts.renderLine(id, rows, config); }, 80);
+      return;
+    }
+    const R = window.Recharts;
+    const h = window.React.createElement;
+    const color = config.color || '#57d68d';
+    const grid = '#243241';
+    const axis = '#8ea0b6';
+    const tooltipStyle = { background: '#111923', border: '1px solid #26384a', borderRadius: 8, color: '#f5f8fb' };
+    const chart = h(R.ResponsiveContainer, { width: '100%', height: config.height || 260 },
+      h(R.LineChart, { data: rows, margin: { top: 12, right: 18, left: 0, bottom: 8 } },
+        h(R.CartesianGrid, { stroke: grid, strokeDasharray: '3 3', vertical: false }),
+        h(R.XAxis, { dataKey: config.xKey || 'label', tick: { fill: axis, fontSize: 11 }, axisLine: false, tickLine: false, minTickGap: 24 }),
+        h(R.YAxis, { tick: { fill: axis, fontSize: 11 }, axisLine: false, tickLine: false, width: 54 }),
+        h(R.Tooltip, { contentStyle: tooltipStyle, labelStyle: { color: '#f5f8fb' } }),
+        h(R.Line, { type: 'monotone', dataKey: config.valueKey, stroke: color, strokeWidth: 3, dot: false, activeDot: { r: 4 } })
+      )
+    );
+    window.ReactDOM.createRoot(mount).render(chart);
+  }
+};
+</script>
+"""
+
+
 def create_mission_control_page(
     *,
     paper_db_path: str | Path = SHORT_CRYPTO_PAPER_DB_PATH,
@@ -24,7 +60,7 @@ def create_mission_control_page(
 
     @ui.page("/mission-control")
     def mission_control_page() -> None:
-        ui.add_head_html(f"<style>{MISSION_CONTROL_CSS}</style>")
+        ui.add_head_html(f"<style>{MISSION_CONTROL_CSS}</style>{RECHARTS_HEAD}")
         shell = ui.column().classes("mc-shell mc-body w-full")
         state: dict[str, Any] = {"snapshot": mission_control_snapshot(paper_db_path=paper_db_path, polylens_db_path=polylens_db_path)}
 
@@ -37,18 +73,28 @@ def create_mission_control_page(
             data = state["snapshot"]
             with shell:
                 _render_header(data)
-                _render_kpis(data["kpis"])
-                with ui.element("div").classes("mc-grid-3"):
-                    _render_pnl_chart(data["pnl_chart"])
-                    _render_btc_feed(data["btc_feed"])
-                    _render_pipeline(data["pipeline"])
-                with ui.element("div").classes("mc-grid-bottom"):
-                    _render_active_bet(data["active_bet"])
-                    _render_recent_settlements(data["recent_settlements"])
-                    _render_risk(data["risk"])
-                _render_system_health(data["system_health"])
+                with ui.tabs().classes("mc-tabs") as tabs:
+                    overview = ui.tab("Overview")
+                    opportunities = ui.tab("Opportunities")
+                    wallets = ui.tab("Wallets")
+                    signals = ui.tab("Signals")
+                    strategies = ui.tab("Strategies")
+                    health = ui.tab("System Health")
+                with ui.tab_panels(tabs, value=overview).classes("mc-tab-panels"):
+                    with ui.tab_panel(overview).classes("mc-tab-panel"):
+                        _render_overview(data)
+                    with ui.tab_panel(opportunities).classes("mc-tab-panel"):
+                        _render_opportunities(data)
+                    with ui.tab_panel(wallets).classes("mc-tab-panel"):
+                        _render_wallets(data)
+                    with ui.tab_panel(signals).classes("mc-tab-panel"):
+                        _render_signals(data)
+                    with ui.tab_panel(strategies).classes("mc-tab-panel"):
+                        _render_strategies(data)
+                    with ui.tab_panel(health).classes("mc-tab-panel"):
+                        _render_system_health_page(data)
                 with ui.element("div").classes("mc-footer"):
-                    ui.html(f'<span>Auto-refresh {REFRESH_SECONDS}s • {data["generated_at"]}</span>', sanitize=False)
+                    ui.html(f'<span>Auto-refresh {REFRESH_SECONDS}s / {_html(data["generated_at"])}</span>', sanitize=False)
                     ui.link("Command Center", "/").classes("mc-link")
 
         render()
@@ -60,63 +106,187 @@ def _render_header(data: dict[str, Any]) -> None:
 
     header = data["header"]
     badges = data["mode_badges"]
-    with ui.element("div").classes("mc-header"):
-        with ui.element("div"):
+    mode_class = "live" if badges.get("live_ready") else "paper"
+    with ui.element("section").classes("mc-header"):
+        with ui.element("div").classes("mc-brand"):
             ui.html(
-                f'<div class="mc-title">{header["title"]} • {header["mode_label"]} • {header["utc_time"]}</div>'
-                f'<div class="mc-subtitle">{header["wallet"]} • {header["venue"]} • {header["strategy_label"]}</div>',
+                f'<div class="mc-eyebrow">Polylens Mission Control</div>'
+                f'<h1>{_html(header["title"])} Intelligence</h1>'
+                f'<p>{_html(header["strategy_label"])} / {_html(header["venue"])} / {_html(header["utc_time"])}</p>',
                 sanitize=False,
             )
-        with ui.element("div").classes("mc-badges"):
-            _badge("PAPER", badges.get("paper"), "paper")
-            _badge("LIVE_READY", badges.get("live_ready"), "live-ready")
-            _badge("LIVE_BLOCKED", badges.get("live_blocked"), "live-blocked")
-            _badge("KILL_SWITCH", badges.get("kill_switch"), "kill-switch")
+        with ui.element("div").classes("mc-header-side"):
+            ui.html(f'<div class="mc-mode-pill {mode_class}">{_html(header["mode_label"])}</div>', sanitize=False)
+            with ui.element("div").classes("mc-badges"):
+                _badge("Paper Only", badges.get("paper"), "paper")
+                _badge("Live Ready", badges.get("live_ready"), "live-ready")
+                _badge("Live Blocked", badges.get("live_blocked"), "live-blocked")
+                _badge("Kill Switch", badges.get("kill_switch"), "kill-switch")
+
+
+def _render_overview(data: dict[str, Any]) -> None:
+    from nicegui import ui
+
+    _render_kpis(data["kpis"])
+    with ui.element("div").classes("mc-grid-2"):
+        _render_pnl_chart(data["pnl_chart"])
+        _render_btc_feed(data["btc_feed"])
+    with ui.element("div").classes("mc-grid-2 compact"):
+        _render_active_bet(data["active_bet"])
+        _render_risk(data["risk"])
+
+
+def _render_opportunities(data: dict[str, Any]) -> None:
+    from nicegui import ui
+
+    with ui.element("div").classes("mc-grid-2"):
+        _render_active_bet(data["active_bet"])
+        _render_recent_settlements(data["recent_settlements"])
+    with ui.element("div").classes("mc-card"):
+        ui.html('<div class="mc-card-title">Opportunity Controls</div>', sanitize=False)
+        _metric_rows(
+            [
+                ("Execution Mode", "Paper-only monitor"),
+                ("Candidate Source", "Existing Polylens paper pipeline"),
+                ("Live Orders", "Disabled by dashboard"),
+                ("Persistence", "Read existing stores only"),
+            ]
+        )
+
+
+def _render_wallets(data: dict[str, Any]) -> None:
+    from nicegui import ui
+
+    kpis = data["kpis"]
+    risk = data["risk"]
+    with ui.element("div").classes("mc-grid-3"):
+        _mini_card("Capital Deployed", data["header"].get("wallet"), "signal")
+        _mini_card("Bankroll", f'${float(kpis.get("bankroll") or 0):.0f}', "")
+        _mini_card("Free Cash", f'${float(kpis.get("available_cash") or 0):.0f}', "profit")
+    with ui.element("div").classes("mc-card"):
+        ui.html('<div class="mc-card-title">Wallet Guardrails</div>', sanitize=False)
+        _metric_rows(
+            [
+                ("Max Stake", f'${float(risk.get("max_stake") or 0):.2f}'),
+                ("Daily Loss Limit", f'${float(risk.get("daily_loss_limit") or 0):.2f}'),
+                ("Daily Loss Left", format_pnl(kpis.get("daily_loss_remaining"))),
+                ("Duplicate Protection", "ON" if risk.get("duplicate_suppression") else "OFF"),
+            ]
+        )
+
+
+def _render_signals(data: dict[str, Any]) -> None:
+    from nicegui import ui
+
+    with ui.element("div").classes("mc-grid-2"):
+        _render_pipeline(data["pipeline"])
+        with ui.element("div").classes("mc-card"):
+            ui.html('<div class="mc-card-title">Signal Quality</div>', sanitize=False)
+            kpis = data["kpis"]
+            streak = kpis.get("current_streak") or {"type": "none", "count": 0}
+            streak_label = "None" if streak.get("type") == "none" else f'{streak["count"]} {str(streak["type"]).upper()}'
+            _metric_rows(
+                [
+                    ("Win Rate", format_pct(kpis.get("win_rate"))),
+                    ("Trades / Day", str(kpis.get("trades_per_day") if kpis.get("trades_per_day") is not None else "N/A")),
+                    ("Current Streak", streak_label),
+                    ("Open Trades", str(kpis.get("open_trades") or 0)),
+                    ("Closed Trades", str(kpis.get("closed_trades") or 0)),
+                ]
+            )
+
+
+def _render_strategies(data: dict[str, Any]) -> None:
+    from nicegui import ui
+
+    header = data["header"]
+    risk = data["risk"]
+    with ui.element("div").classes("mc-grid-2"):
+        with ui.element("div").classes("mc-card"):
+            ui.html('<div class="mc-card-title">Strategy Profile</div>', sanitize=False)
+            _metric_rows(
+                [
+                    ("Active Label", header.get("strategy_label")),
+                    ("Venue", header.get("venue")),
+                    ("Mode", header.get("mode_label")),
+                    ("Stale Data Guard", f'{float(risk.get("stale_data_guard_secs") or 0):.1f}s'),
+                    ("Liquidity Guard", f'${float(risk.get("liquidity_guard_min") or 0):.2f}'),
+                    ("Close Cutoff", f'{float(risk.get("close_cutoff_secs") or 0):.0f}s'),
+                ]
+            )
+        _render_risk(data["risk"])
+
+
+def _render_system_health_page(data: dict[str, Any]) -> None:
+    from nicegui import ui
+
+    with ui.element("div").classes("mc-grid-2"):
+        _render_system_health(data["system_health"])
+        with ui.element("div").classes("mc-card"):
+            ui.html('<div class="mc-card-title">Safety Controls</div>', sanitize=False)
+            risk = data["risk"]
+            gate = risk.get("live_send_gate") or {}
+            flags = risk.get("live_flags") or {}
+            _metric_rows(
+                [
+                    ("Kill Switch", "ACTIVE" if risk.get("kill_switch") else "OFF"),
+                    ("Kalshi Sends", "ON" if gate.get("kalshi") else "OFF"),
+                    ("Polymarket Sends", "ON" if gate.get("polymarket") else "OFF"),
+                    ("Live Trading Flag", "ON" if flags.get("POLYLENS_LIVE_TRADING") else "OFF"),
+                    ("Autonomous Crypto", "ON" if flags.get("POLYLENS_AUTONOMOUS_CRYPTO") else "OFF"),
+                    ("Risk Ack", "ON" if flags.get("POLYLENS_CONFIRM_RISK_ACK") else "OFF"),
+                ]
+            )
 
 
 def _badge(label: str, active: bool, css_class: str) -> None:
     from nicegui import ui
 
-    classes = f"mc-badge {css_class}" if active else "mc-badge"
-    opacity = "" if active else ' style="opacity:0.45"'
-    ui.html(f'<span class="{classes}"{opacity}>{label}</span>', sanitize=False)
+    state = "active" if active else "inactive"
+    ui.html(f'<span class="mc-badge {css_class} {state}">{_html(label)}</span>', sanitize=False)
 
 
 def _render_kpis(kpis: dict[str, Any]) -> None:
-    from nicegui import ui
-
     realized = float(kpis.get("realized_pnl") or 0.0)
     unrealized = float(kpis.get("unrealized_pnl") or 0.0)
     streak = kpis.get("current_streak") or {"type": "none", "count": 0}
-    streak_label = "—" if streak.get("type") == "none" else f'{streak["count"]} {str(streak["type"]).upper()}'
-
+    streak_label = "None" if streak.get("type") == "none" else f'{streak["count"]} {str(streak["type"]).upper()}'
     items = [
         ("Realized PnL", format_pnl(realized), _pnl_class(realized)),
         ("Unrealized PnL", format_pnl(unrealized), _pnl_class(unrealized)),
         ("Total Trades", str(kpis.get("total_trades") or 0), ""),
         ("Win Rate", format_pct(kpis.get("win_rate")), "signal"),
-        ("Trades/Day", str(kpis.get("trades_per_day") if kpis.get("trades_per_day") is not None else "—"), ""),
+        ("Trades / Day", str(kpis.get("trades_per_day") if kpis.get("trades_per_day") is not None else "N/A"), ""),
         ("Streak", streak_label, _streak_class(streak)),
         ("Daily Loss Left", format_pnl(kpis.get("daily_loss_remaining")), "signal"),
-        ("Bankroll", f'${float(kpis.get("bankroll") or 0):.0f} / ${float(kpis.get("available_cash") or 0):.0f} free', ""),
+        ("Available Cash", f'${float(kpis.get("available_cash") or 0):.0f}', "profit"),
     ]
-    with ui.element("div").classes("mc-grid-hero"):
+    from nicegui import ui
+
+    with ui.element("div").classes("mc-kpi-grid"):
         for label, value, css in items:
-            with ui.element("div").classes("mc-card mc-kpi"):
-                ui.html(f'<div class="label">{label}</div><div class="value {css}">{value}</div>', sanitize=False)
+            _mini_card(label, value, css)
+
+
+def _mini_card(label: Any, value: Any, css: str = "") -> None:
+    from nicegui import ui
+
+    with ui.element("div").classes("mc-card mc-kpi-card"):
+        ui.html(f'<div class="label">{_html(label)}</div><div class="value {css}">{_html(value)}</div>', sanitize=False)
 
 
 def _render_pnl_chart(chart: dict[str, Any]) -> None:
     from nicegui import ui
 
-    with ui.element("div").classes("mc-card"):
-        ui.html('<div class="mc-card-title">24h PnL</div>', sanitize=False)
-        ui.html(f'<div class="mc-chart-wrap">{chart.get("svg") or ""}</div>', sanitize=False)
+    points = _line_points(chart.get("points") or [], "pnl")
+    with ui.element("div").classes("mc-card mc-chart-card"):
+        ui.html('<div class="mc-card-title">24h PnL Curve</div>', sanitize=False)
+        _recharts_line("pnl", points, "pnl", "#57d68d")
         ui.html(
             '<div class="mc-chart-meta">'
-            f'<span>Peak <strong>{format_pnl(chart.get("peak"))}</strong></span>'
-            f'<span>Drawdown <strong>{format_pnl(chart.get("drawdown"))}</strong></span>'
-            f'<span>Current <strong>{format_pnl(chart.get("current_pnl"))}</strong></span>'
+            f'<span>Peak <strong>{_html(format_pnl(chart.get("peak")))}</strong></span>'
+            f'<span>Drawdown <strong>{_html(format_pnl(chart.get("drawdown")))}</strong></span>'
+            f'<span>Current <strong>{_html(format_pnl(chart.get("current_pnl")))}</strong></span>'
             "</div>",
             sanitize=False,
         )
@@ -125,40 +295,39 @@ def _render_pnl_chart(chart: dict[str, Any]) -> None:
 def _render_btc_feed(feed: dict[str, Any]) -> None:
     from nicegui import ui
 
-    price = feed.get("price")
     change = feed.get("change_1h_pct")
-    change_text = "—" if change is None else f"{change:+.2f}%"
-    change_class = _pnl_class(change if change is not None else 0.0)
-    with ui.element("div").classes("mc-card"):
+    change_text = "N/A" if change is None else f"{change:+.2f}%"
+    points = _line_points(feed.get("points") or [], "price")
+    with ui.element("div").classes("mc-card mc-chart-card"):
         ui.html('<div class="mc-card-title">BTC Live Spot</div>', sanitize=False)
         ui.html(
-            f'<div class="mc-kpi"><div class="value signal">{format_price(price)}</div>'
-            f'<div class="label {change_class}">1h {change_text}</div></div>',
+            f'<div class="mc-market-price"><span>{_html(format_price(feed.get("price")))}</span>'
+            f'<small class="{_pnl_class(change if change is not None else 0.0)}">1h {change_text}</small></div>',
             sanitize=False,
         )
-        ui.html(f'<div class="mc-chart-wrap">{feed.get("svg") or ""}</div>', sanitize=False)
+        _recharts_line("btc", points, "price", "#5aa7ff")
         markers = feed.get("markers") or []
-        marker_text = f"{len(markers)} trade markers (1h)" if markers else "no recent entries"
-        ui.html(f'<div class="mc-chart-meta"><span>{marker_text}</span></div>', sanitize=False)
+        marker_text = f"{len(markers)} trade markers (1h)" if markers else "No recent entries"
+        ui.html(f'<div class="mc-chart-meta"><span>{_html(marker_text)}</span></div>', sanitize=False)
 
 
 def _render_pipeline(stages: list[dict[str, Any]]) -> None:
     from nicegui import ui
 
     with ui.element("div").classes("mc-card"):
-        ui.html('<div class="mc-card-title">6-Cycle Execution Pipeline</div>', sanitize=False)
+        ui.html('<div class="mc-card-title">Signal Pipeline</div>', sanitize=False)
         with ui.element("div").classes("mc-pipeline"):
             for stage in stages:
                 state = stage.get("state") or "idle"
                 latency = stage.get("latency_ms")
-                latency_text = f"{latency}ms" if latency is not None else "—"
-                error = stage.get("last_error") or "—"
+                latency_text = f"{latency}ms" if latency is not None else "N/A"
+                error = stage.get("last_error") or "None"
                 ui.html(
                     f'<div class="mc-stage {state}">'
-                    f'<div class="name">{stage.get("name")}</div>'
-                    f'<div class="status">{stage.get("status")}</div>'
-                    f'<div class="meta">Latency: {latency_text}<br/>{stage.get("detail")}<br/>Err: {error}</div>'
-                    f"</div>",
+                    f'<div class="name">{_html(stage.get("name"))}</div>'
+                    f'<div class="status">{_html(stage.get("status"))}</div>'
+                    f'<div class="meta">Latency {latency_text}<br>{_html(stage.get("detail"))}<br>Err { _html(error) }</div>'
+                    "</div>",
                     sanitize=False,
                 )
 
@@ -167,7 +336,7 @@ def _render_active_bet(bet: dict[str, Any] | None) -> None:
     from nicegui import ui
 
     with ui.element("div").classes("mc-card"):
-        ui.html('<div class="mc-card-title">Active Bet</div>', sanitize=False)
+        ui.html('<div class="mc-card-title">Active Opportunity</div>', sanitize=False)
         if not bet:
             ui.html('<div class="mc-empty">No open position</div>', sanitize=False)
             return
@@ -175,11 +344,11 @@ def _render_active_bet(bet: dict[str, Any] | None) -> None:
         side_class = "side-up" if side in {"up", "yes", "higher"} else "side-down"
         ui.html(
             '<div class="mc-active-bet">'
-            f'<div class="market">{bet.get("market_title")}</div>'
-            f'<div><span class="{side_class}">{bet.get("side")}</span> @ {float(bet.get("entry_price") or 0):.2f}</div>'
-            f'<div>Size {float(bet.get("size") or 0):.2f} • Edge {float(bet.get("expected_edge") or 0):.3f}</div>'
-            f'<div>Expires {bet.get("expiry_countdown")}</div>'
-            f'<div>Mark {format_pnl(bet.get("mark_value"))} • {bet.get("strategy_label") or "—"}</div>'
+            f'<div class="market">{_html(bet.get("market_title"))}</div>'
+            f'<div><span class="{side_class}">{_html(bet.get("side"))}</span> @ {float(bet.get("entry_price") or 0):.2f}</div>'
+            f'<div>Size {float(bet.get("size") or 0):.2f} / Edge {float(bet.get("expected_edge") or 0):.3f}</div>'
+            f'<div>Expires {_html(bet.get("expiry_countdown"))}</div>'
+            f'<div>Mark {_html(format_pnl(bet.get("mark_value")))} / {_html(bet.get("strategy_label") or "N/A")}</div>'
             "</div>",
             sanitize=False,
         )
@@ -208,11 +377,11 @@ def _settlement_row(row: dict[str, Any]) -> str:
     pnl = float(row.get("pnl") or 0.0)
     return (
         "<tr>"
-        f'<td>{_short_ts(row.get("settled_at"))}</td>'
-        f'<td class="{css}">{result.upper() or "—"}</td>'
-        f'<td class="{_pnl_class(pnl)}">{format_pnl(pnl)}</td>'
-        f'<td>{_truncate(row.get("market"), 28)}</td>'
-        f'<td>{_truncate(row.get("reason"), 20)}</td>'
+        f'<td>{_html(_short_ts(row.get("settled_at")))}</td>'
+        f'<td class="{css}">{_html(result.upper() or "N/A")}</td>'
+        f'<td class="{_pnl_class(pnl)}">{_html(format_pnl(pnl))}</td>'
+        f'<td>{_html(_truncate(row.get("market"), 28))}</td>'
+        f'<td>{_html(_truncate(row.get("reason"), 20))}</td>'
         "</tr>"
     )
 
@@ -221,24 +390,20 @@ def _render_risk(risk: dict[str, Any]) -> None:
     from nicegui import ui
 
     gate = risk.get("live_send_gate") or {}
-    items = [
-        ("Kill Switch", "ACTIVE" if risk.get("kill_switch") else "OFF"),
-        ("Max Stake", f'${float(risk.get("max_stake") or 0):.2f}'),
-        ("Daily Loss Limit", f'${float(risk.get("daily_loss_limit") or 0):.2f}'),
-        ("Duplicate Suppression", "ON" if risk.get("duplicate_suppression") else "OFF"),
-        ("Stale Data Guard", f'{float(risk.get("stale_data_guard_secs") or 0):.1f}s'),
-        ("Liquidity Guard", f'${float(risk.get("liquidity_guard_min") or 0):.2f}'),
-        ("Close Cutoff", f'{float(risk.get("close_cutoff_secs") or 0):.0f}s'),
-        ("Live Send Gate", f'kalshi={gate.get("kalshi")} poly={gate.get("polymarket")}'),
-    ]
     with ui.element("div").classes("mc-card"):
         ui.html('<div class="mc-card-title">Risk Engine</div>', sanitize=False)
-        with ui.element("div").classes("mc-risk-grid"):
-            for label, value in items:
-                ui.html(
-                    f'<div class="mc-risk-item"><div class="label">{label}</div><div class="value">{value}</div></div>',
-                    sanitize=False,
-                )
+        _metric_rows(
+            [
+                ("Kill Switch", "ACTIVE" if risk.get("kill_switch") else "OFF"),
+                ("Max Stake", f'${float(risk.get("max_stake") or 0):.2f}'),
+                ("Daily Loss Limit", f'${float(risk.get("daily_loss_limit") or 0):.2f}'),
+                ("Duplicate Suppression", "ON" if risk.get("duplicate_suppression") else "OFF"),
+                ("Stale Data Guard", f'{float(risk.get("stale_data_guard_secs") or 0):.1f}s'),
+                ("Liquidity Guard", f'${float(risk.get("liquidity_guard_min") or 0):.2f}'),
+                ("Close Cutoff", f'{float(risk.get("close_cutoff_secs") or 0):.0f}s'),
+                ("Live Send Gate", f'kalshi={gate.get("kalshi")} poly={gate.get("polymarket")}'),
+            ]
+        )
 
 
 def _render_system_health(health: dict[str, Any]) -> None:
@@ -249,7 +414,7 @@ def _render_system_health(health: dict[str, Any]) -> None:
         ("Short Crypto Timer", health.get("short_crypto_timer"), _service_class(health.get("short_crypto_timer"))),
         ("Settle Timer", health.get("short_crypto_settle_timer"), _service_class(health.get("short_crypto_settle_timer"))),
         ("Dashboard Service", health.get("dashboard_service"), _service_class(health.get("dashboard_service"))),
-        ("Last Scan", health.get("last_scan_time") or "—", ""),
+        ("Last Scan", health.get("last_scan_time") or "N/A", ""),
         ("Paper DB", _truncate(health.get("paper_db_path"), 42), ""),
         ("Polylens DB", _truncate(health.get("polylens_db_path"), 42), ""),
         ("Kalshi API", api.get("kalshi"), _api_class(api.get("kalshi"))),
@@ -260,9 +425,42 @@ def _render_system_health(health: dict[str, Any]) -> None:
         with ui.element("div").classes("mc-health-list"):
             for label, value, css in rows:
                 ui.html(
-                    f'<div class="mc-health-row"><span>{label}</span><span class="{css}">{value}</span></div>',
+                    f'<div class="mc-health-row"><span>{_html(label)}</span><span class="{css}">{_html(value)}</span></div>',
                     sanitize=False,
                 )
+
+
+def _metric_rows(rows: list[tuple[Any, Any]]) -> None:
+    from nicegui import ui
+
+    with ui.element("div").classes("mc-metric-list"):
+        for label, value in rows:
+            ui.html(f'<div class="mc-metric-row"><span>{_html(label)}</span><strong>{_html(value)}</strong></div>', sanitize=False)
+
+
+def _recharts_line(chart_key: str, rows: list[dict[str, Any]], value_key: str, color: str) -> None:
+    from nicegui import ui
+
+    chart_id = f"mc-chart-{chart_key}-{abs(hash(json.dumps(rows, sort_keys=True))) % 1000000}"
+    ui.html(f'<div id="{chart_id}" class="mc-rechart"></div>', sanitize=False)
+    config = {"valueKey": value_key, "xKey": "label", "color": color, "height": 260}
+    ui.add_body_html(
+        "<script>"
+        f"window.PolylensRecharts.renderLine({json.dumps(chart_id)}, {json.dumps(rows)}, {json.dumps(config)});"
+        "</script>",
+    )
+
+
+def _line_points(rows: list[dict[str, Any]], value_key: str) -> list[dict[str, Any]]:
+    points: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        label = _short_ts(row.get("ts")) if row.get("ts") else str(idx + 1)
+        try:
+            value = float(row.get(value_key) or 0.0)
+        except (TypeError, ValueError):
+            value = 0.0
+        points.append({"label": label, value_key: round(value, 4)})
+    return points or [{"label": "now", value_key: 0.0}]
 
 
 def _pnl_class(value: float | None) -> str:
@@ -307,7 +505,11 @@ def _short_ts(value: Any) -> str:
 
 
 def _truncate(value: Any, limit: int) -> str:
-    text = str(value or "—")
+    text = str(value or "N/A")
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _html(value: Any) -> str:
+    return escape(str(value if value is not None else "N/A"))
