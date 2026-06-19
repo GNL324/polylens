@@ -22,6 +22,7 @@ from src.intelligence.wallet_data_acquisition import (
     init_wallet_acquisition_db,
     run_wallet_acquisition,
 )
+from src.intelligence.falcon_source import FalconClient, FalconMarketSource, FalconWalletSource
 from src.intelligence.wallet_discovery import WalletDiscoveryConfig, WalletDiscoveryEngine
 from src.intelligence.wallet_discovery_analytics import wallet_discovery_analytics_report
 from src.intelligence.wallet_feedback_engine import FeedbackConfig, WalletFeedbackEngine, run_wallet_feedback_cycle
@@ -37,6 +38,9 @@ from src.intelligence.wallet_tracker import WalletTracker, WalletWatchlistEntry
 
 __all__ = [
     "FeedbackConfig",
+    "FalconClient",
+    "FalconMarketSource",
+    "FalconWalletSource",
     "SignalEngine",
     "StrategyClassifier",
     "StrategyProfile",

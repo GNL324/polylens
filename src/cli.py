@@ -101,6 +101,7 @@ from src.analysis.trader_signal_paper_bridge import (
     trader_signal_paper_bridge_report,
 )
 from src.analysis.trader_signal_dashboard_views import trader_signal_dashboard_views_report
+from src.intelligence.falcon_source import FalconWalletSource
 from src.intelligence.wallet_discovery import WalletDiscoveryConfig, WalletDiscoveryEngine
 from src.intelligence.wallet_discovery_analytics import wallet_discovery_analytics_report
 from src.intelligence.wallet_scoring import WalletScorer
@@ -533,6 +534,17 @@ def trader_signal_cycle_cli(
 def trader_signal_health_cli(as_json: bool = False, db_path: str = DEFAULT_TRADER_SIGNAL_DB) -> dict[str, Any]:
     result = trader_signal_health(db_path=db_path)
     print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def falcon_wallet_source_cli(limit: int = 50, sort_by: str = "h_score", as_json: bool = False) -> dict[str, Any]:
+    result = FalconWalletSource().dry_run_candidates(limit=limit, sort_by=sort_by)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"Falcon wallet source enabled: {result['enabled']}")
+        print(f"Read only: {result['read_only']}")
+        print(f"Candidates: {len(result['candidates'])}")
     return result
 
 
@@ -4317,6 +4329,11 @@ def main() -> None:
     trader_signal_health_parser.add_argument("--db-path", default=DEFAULT_TRADER_SIGNAL_DB)
     trader_signal_health_parser.add_argument("--json", action="store_true")
 
+    falcon_wallet_source_parser = sub.add_parser("falcon-wallet-source", help="dry-run Falcon read-only wallet source candidates")
+    falcon_wallet_source_parser.add_argument("--limit", type=int, default=50)
+    falcon_wallet_source_parser.add_argument("--sort-by", default="h_score")
+    falcon_wallet_source_parser.add_argument("--json", action="store_true")
+
     validate_trader_signals_parser = sub.add_parser(
         "validate-trader-signals",
         help="validate read-only trader signals and recommendations against resolved outcomes",
@@ -5061,6 +5078,8 @@ def main() -> None:
         )
     elif args.command == "trader-signal-health":
         trader_signal_health_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "falcon-wallet-source":
+        falcon_wallet_source_cli(limit=args.limit, sort_by=args.sort_by, as_json=args.json)
     elif args.command == "validate-trader-signals":
         validate_trader_signals_cli(
             outcomes=args.outcomes,
