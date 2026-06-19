@@ -57,6 +57,11 @@ def create_mission_control_page(
     polylens_db_path: str | Path = POLYLENS_DB_PATH,
 ) -> None:
     from nicegui import ui
+    from starlette.responses import RedirectResponse
+
+    @ui.page("/")
+    def mission_control_root() -> RedirectResponse:
+        return RedirectResponse("/mission-control", status_code=307)
 
     @ui.page("/mission-control")
     def mission_control_page() -> None:
@@ -128,12 +133,55 @@ def _render_overview(data: dict[str, Any]) -> None:
     from nicegui import ui
 
     _render_kpis(data["kpis"])
-    with ui.element("div").classes("mc-grid-2"):
-        _render_pnl_chart(data["pnl_chart"])
-        _render_btc_feed(data["btc_feed"])
-    with ui.element("div").classes("mc-grid-2 compact"):
-        _render_active_bet(data["active_bet"])
-        _render_risk(data["risk"])
+    with ui.element("div").classes("mc-dashboard-grid mc-overview-grid"):
+        with ui.element("div").classes("mc-span-8"):
+            _render_pnl_chart(data["pnl_chart"])
+        with ui.element("div").classes("mc-span-4"):
+            _render_btc_feed(data["btc_feed"])
+    with ui.element("div").classes("mc-dashboard-grid mc-balanced-grid"):
+        with ui.element("div").classes("mc-span-3"):
+            _render_active_bet(data["active_bet"])
+        with ui.element("div").classes("mc-span-3"):
+            _render_risk(data["risk"])
+        with ui.element("div").classes("mc-span-3"):
+            _render_wallet_alpha(data)
+        with ui.element("div").classes("mc-span-3"):
+            _render_strategy_performance(data)
+
+
+def _render_wallet_alpha(data: dict[str, Any]) -> None:
+    from nicegui import ui
+
+    kpis = data["kpis"]
+    with ui.element("div").classes("mc-card mc-fill-card"):
+        ui.html('<div class="mc-card-title">Wallet Alpha</div>', sanitize=False)
+        _metric_rows(
+            [
+                ("Wallet", _truncate(data["header"].get("wallet"), 28)),
+                ("Bankroll", f'${float(kpis.get("bankroll") or 0):.0f}'),
+                ("Free Cash", f'${float(kpis.get("available_cash") or 0):.0f}'),
+                ("Daily Loss Left", format_pnl(kpis.get("daily_loss_remaining"))),
+            ]
+        )
+
+
+def _render_strategy_performance(data: dict[str, Any]) -> None:
+    from nicegui import ui
+
+    kpis = data["kpis"]
+    header = data["header"]
+    streak = kpis.get("current_streak") or {"type": "none", "count": 0}
+    streak_label = "None" if streak.get("type") == "none" else f'{streak["count"]} {str(streak["type"]).upper()}'
+    with ui.element("div").classes("mc-card mc-fill-card"):
+        ui.html('<div class="mc-card-title">Strategy Performance</div>', sanitize=False)
+        _metric_rows(
+            [
+                ("Strategy", header.get("strategy_label")),
+                ("Win Rate", format_pct(kpis.get("win_rate"))),
+                ("Trades / Day", str(kpis.get("trades_per_day") if kpis.get("trades_per_day") is not None else "N/A")),
+                ("Current Streak", streak_label),
+            ]
+        )
 
 
 def _render_opportunities(data: dict[str, Any]) -> None:
@@ -281,7 +329,7 @@ def _render_pnl_chart(chart: dict[str, Any]) -> None:
     points = _line_points(chart.get("points") or [], "pnl")
     with ui.element("div").classes("mc-card mc-chart-card"):
         ui.html('<div class="mc-card-title">24h PnL Curve</div>', sanitize=False)
-        _recharts_line("pnl", points, "pnl", "#57d68d")
+        _recharts_line("pnl", points, "pnl", "#57d68d", height=320)
         ui.html(
             '<div class="mc-chart-meta">'
             f'<span>Peak <strong>{_html(format_pnl(chart.get("peak")))}</strong></span>'
@@ -305,7 +353,7 @@ def _render_btc_feed(feed: dict[str, Any]) -> None:
             f'<small class="{_pnl_class(change if change is not None else 0.0)}">1h {change_text}</small></div>',
             sanitize=False,
         )
-        _recharts_line("btc", points, "price", "#5aa7ff")
+        _recharts_line("btc", points, "price", "#5aa7ff", height=280)
         markers = feed.get("markers") or []
         marker_text = f"{len(markers)} trade markers (1h)" if markers else "No recent entries"
         ui.html(f'<div class="mc-chart-meta"><span>{_html(marker_text)}</span></div>', sanitize=False)
@@ -438,12 +486,12 @@ def _metric_rows(rows: list[tuple[Any, Any]]) -> None:
             ui.html(f'<div class="mc-metric-row"><span>{_html(label)}</span><strong>{_html(value)}</strong></div>', sanitize=False)
 
 
-def _recharts_line(chart_key: str, rows: list[dict[str, Any]], value_key: str, color: str) -> None:
+def _recharts_line(chart_key: str, rows: list[dict[str, Any]], value_key: str, color: str, *, height: int = 300) -> None:
     from nicegui import ui
 
     chart_id = f"mc-chart-{chart_key}-{abs(hash(json.dumps(rows, sort_keys=True))) % 1000000}"
     ui.html(f'<div id="{chart_id}" class="mc-rechart"></div>', sanitize=False)
-    config = {"valueKey": value_key, "xKey": "label", "color": color, "height": 260}
+    config = {"valueKey": value_key, "xKey": "label", "color": color, "height": height}
     ui.add_body_html(
         "<script>"
         f"window.PolylensRecharts.renderLine({json.dumps(chart_id)}, {json.dumps(rows)}, {json.dumps(config)});"
