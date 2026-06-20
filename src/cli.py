@@ -4211,6 +4211,23 @@ def main() -> None:
     short_crypto_paper_run_parser.add_argument("--strategy-label")
     short_crypto_paper_run_parser.add_argument("--json", action="store_true")
 
+    btc_5m_momentum_parser = sub.add_parser("watch-btc-5m-momentum", help="paper-only BTC 5-minute Polymarket momentum profile")
+    btc_5m_momentum_parser.add_argument("--paper", action="store_true", default=True, help="required paper mode")
+    btc_5m_momentum_parser.add_argument("--live", action="store_true", default=False, help="rejected until live implementation exists")
+    btc_5m_momentum_parser.add_argument("--minutes", type=int, default=60)
+    btc_5m_momentum_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
+    btc_5m_momentum_parser.add_argument("--entry-window-sec", type=float, default=120.0)
+    btc_5m_momentum_parser.add_argument("--exit-before-sec", type=float, default=15.0)
+    btc_5m_momentum_parser.add_argument("--max-spread", type=float, default=0.08)
+    btc_5m_momentum_parser.add_argument("--stale-quote-sec", type=float, default=10.0)
+    btc_5m_momentum_parser.add_argument("--min-liquidity", type=float, default=5.0)
+    btc_5m_momentum_parser.add_argument("--daily-loss-cap", type=float, default=10.0)
+    btc_5m_momentum_parser.add_argument("--fixed-paper-size", type=float, default=1.0)
+    btc_5m_momentum_parser.add_argument("--min-side-price", type=float, default=0.60)
+    btc_5m_momentum_parser.add_argument("--min-impulse-abs", type=float, default=25.0)
+    btc_5m_momentum_parser.add_argument("--min-impulse-pct", type=float, default=0.0015)
+    btc_5m_momentum_parser.add_argument("--json", action="store_true")
+
     short_crypto_paper_settle_parser = sub.add_parser("short-crypto-paper-settle")
     short_crypto_paper_settle_parser.add_argument("--db-path", default="data/short_crypto_paper.db")
     short_crypto_paper_settle_parser.add_argument("--json", action="store_true")
@@ -4935,6 +4952,38 @@ def main() -> None:
             strategy_label=_paper_csv_env(args.strategy_label, "POLYLENS_PAPER_STRATEGY_LABEL"),
         )
         result = run_paper(config)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(result)
+    elif args.command == "watch-btc-5m-momentum":
+        from src.analysis.btc_5m_momentum import Btc5mMomentumConfig, run_btc_5m_momentum
+
+        config = Btc5mMomentumConfig(
+            paper=bool(args.paper) and not bool(args.live),
+            live=bool(args.live),
+            minutes=args.minutes,
+            db_path=args.db_path,
+            entry_window_sec=args.entry_window_sec,
+            exit_before_sec=args.exit_before_sec,
+            max_spread=args.max_spread,
+            stale_quote_sec=args.stale_quote_sec,
+            min_liquidity=args.min_liquidity,
+            daily_loss_cap=args.daily_loss_cap,
+            fixed_paper_size=args.fixed_paper_size,
+            min_side_price=args.min_side_price,
+            min_impulse_abs=args.min_impulse_abs,
+            min_impulse_pct=args.min_impulse_pct,
+        )
+        try:
+            result = run_btc_5m_momentum(config)
+        except ValueError as exc:
+            result = {"ok": False, "strategy": "btc_5m_momentum_close", "paper_only": True, "error": str(exc)}
+            if args.json:
+                print(json.dumps(result, indent=2, sort_keys=True))
+                raise SystemExit(2)
+            print(result)
+            raise SystemExit(2)
         if args.json:
             print(json.dumps(result, indent=2, sort_keys=True))
         else:
