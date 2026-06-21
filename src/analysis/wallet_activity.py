@@ -296,14 +296,36 @@ def infer_asset(title: str, slug: str = "") -> str:
 def save_wallet_activity_export(export: WalletActivityExport, db_path: str | Path = DEFAULT_WALLET_ACTIVITY_DB) -> int:
     _init_wallet_activity_db(db_path)
     with closing_connection(Path(db_path)) as conn:
-        cur = conn.execute(
+        export_json = json.dumps(export.to_dict(), separators=(",", ":"), sort_keys=True)
+        row = conn.execute(
             """
-            INSERT INTO wallet_exports (wallet, export_timestamp, source, event_count, export_json)
-            VALUES (?, ?, ?, ?, ?)
+            SELECT id
+            FROM wallet_exports
+            WHERE wallet = ? AND source = ?
+            ORDER BY export_timestamp DESC, id DESC
+            LIMIT 1
             """,
-            (export.wallet, export.export_timestamp, export.source, export.event_count, json.dumps(export.to_dict(), sort_keys=True)),
-        )
-        export_id = int(cur.lastrowid)
+            (export.wallet, export.source),
+        ).fetchone()
+        if row is None:
+            cur = conn.execute(
+                """
+                INSERT INTO wallet_exports (wallet, export_timestamp, source, event_count, export_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (export.wallet, export.export_timestamp, export.source, export.event_count, export_json),
+            )
+            export_id = int(cur.lastrowid)
+        else:
+            export_id = int(row["id"] if hasattr(row, "keys") else row[0])
+            conn.execute(
+                """
+                UPDATE wallet_exports
+                SET export_timestamp = ?, event_count = ?, export_json = ?
+                WHERE id = ?
+                """,
+                (export.export_timestamp, export.event_count, export_json, export_id),
+            )
         for event in export.events:
             conn.execute(
                 """
@@ -370,6 +392,7 @@ def _init_wallet_activity_db(db_path: str | Path = DEFAULT_WALLET_ACTIVITY_DB) -
                 FOREIGN KEY(export_id) REFERENCES wallet_exports(id)
             );
             CREATE INDEX IF NOT EXISTS idx_wallet_exports_wallet_time ON wallet_exports(wallet, export_timestamp DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_exports_wallet_source ON wallet_exports(wallet, source);
             CREATE INDEX IF NOT EXISTS idx_wallet_events_wallet_time ON wallet_events(wallet, timestamp);
             CREATE INDEX IF NOT EXISTS idx_wallet_events_action ON wallet_events(action);
             CREATE INDEX IF NOT EXISTS idx_wallet_events_market ON wallet_events(condition_id, market_id);

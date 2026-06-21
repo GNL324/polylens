@@ -90,6 +90,22 @@ def test_export_persists_to_sqlite(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM wallet_events").fetchone()[0] == 3
 
 
+def test_repeated_export_updates_latest_snapshot_without_duplicating_blob_rows(tmp_path):
+    db_path = tmp_path / "wallet_activity.db"
+    first = export_wallet_activity(WALLET, limit=2, source=FakeSource(), db_path=db_path)
+    second = export_wallet_activity(WALLET, limit=4, source=FakeSource(), db_path=db_path)
+
+    assert first.event_count == 2
+    assert second.event_count == 4
+    with closing_connection(db_path) as conn:
+        export_rows = conn.execute("SELECT wallet, event_count, export_json FROM wallet_exports").fetchall()
+        assert len(export_rows) == 1
+        assert export_rows[0]["wallet"] == WALLET
+        assert export_rows[0]["event_count"] == 4
+        assert json.loads(export_rows[0]["export_json"])["event_count"] == 4
+        assert conn.execute("SELECT COUNT(*) FROM wallet_events").fetchone()[0] == 4
+
+
 def test_pagination_and_retry_logic(monkeypatch):
     calls = []
 

@@ -50,6 +50,20 @@ window.PolylensRecharts = window.PolylensRecharts || {
 </script>
 """
 
+MISSION_CONTROL_NAV_ITEMS = ("Overview", "Opportunities", "Wallets", "Signals", "Strategies", "System Health")
+DEFAULT_MISSION_CONTROL_TAB = MISSION_CONTROL_NAV_ITEMS[0]
+
+
+def resolve_mission_control_tab(selected: Any, tabs: tuple[str, ...] = MISSION_CONTROL_NAV_ITEMS) -> str:
+    selected_label = str(selected or "").strip()
+    return selected_label if selected_label in tabs else tabs[0]
+
+
+def set_mission_control_tab(state: dict[str, Any], selected: Any) -> str:
+    active_tab = resolve_mission_control_tab(selected)
+    state["active_tab"] = active_tab
+    return active_tab
+
 
 def create_mission_control_page(
     *,
@@ -67,7 +81,10 @@ def create_mission_control_page(
     def mission_control_page() -> None:
         ui.add_head_html(f"<style>{MISSION_CONTROL_CSS}</style>{RECHARTS_HEAD}")
         shell = ui.column().classes("mc-shell mc-body w-full")
-        state: dict[str, Any] = {"snapshot": mission_control_snapshot(paper_db_path=paper_db_path, polylens_db_path=polylens_db_path)}
+        state: dict[str, Any] = {
+            "snapshot": mission_control_snapshot(paper_db_path=paper_db_path, polylens_db_path=polylens_db_path),
+            "active_tab": DEFAULT_MISSION_CONTROL_TAB,
+        }
 
         def refresh() -> None:
             state["snapshot"] = mission_control_snapshot(paper_db_path=paper_db_path, polylens_db_path=polylens_db_path)
@@ -78,25 +95,27 @@ def create_mission_control_page(
             data = state["snapshot"]
             with shell:
                 _render_header(data)
-                with ui.tabs().classes("mc-tabs") as tabs:
-                    overview = ui.tab("Overview")
-                    opportunities = ui.tab("Opportunities")
-                    wallets = ui.tab("Wallets")
-                    signals = ui.tab("Signals")
-                    strategies = ui.tab("Strategies")
-                    health = ui.tab("System Health")
-                with ui.tab_panels(tabs, value=overview).classes("mc-tab-panels"):
-                    with ui.tab_panel(overview).classes("mc-tab-panel"):
+                active_tab = set_mission_control_tab(state, state.get("active_tab"))
+                with ui.tabs(value=active_tab).classes("mc-tabs") as tabs:
+                    tabs.on_value_change(lambda event: set_mission_control_tab(state, event.value))
+                    ui.tab("Overview")
+                    ui.tab("Opportunities")
+                    ui.tab("Wallets")
+                    ui.tab("Signals")
+                    ui.tab("Strategies")
+                    ui.tab("System Health")
+                with ui.tab_panels(tabs, value=active_tab).classes("mc-tab-panels"):
+                    with ui.tab_panel("Overview").classes("mc-tab-panel"):
                         _render_overview(data)
-                    with ui.tab_panel(opportunities).classes("mc-tab-panel"):
+                    with ui.tab_panel("Opportunities").classes("mc-tab-panel"):
                         _render_opportunities(data)
-                    with ui.tab_panel(wallets).classes("mc-tab-panel"):
+                    with ui.tab_panel("Wallets").classes("mc-tab-panel"):
                         _render_wallets(data)
-                    with ui.tab_panel(signals).classes("mc-tab-panel"):
+                    with ui.tab_panel("Signals").classes("mc-tab-panel"):
                         _render_signals(data)
-                    with ui.tab_panel(strategies).classes("mc-tab-panel"):
+                    with ui.tab_panel("Strategies").classes("mc-tab-panel"):
                         _render_strategies(data)
-                    with ui.tab_panel(health).classes("mc-tab-panel"):
+                    with ui.tab_panel("System Health").classes("mc-tab-panel"):
                         _render_system_health_page(data)
                 with ui.element("div").classes("mc-footer"):
                     ui.html(f'<span>Auto-refresh {REFRESH_SECONDS}s / {_html(data["generated_at"])}</span>', sanitize=False)

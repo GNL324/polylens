@@ -19,3 +19,14 @@ _scp_test
 .polymarket.env.generated
 
 .venv/
+
+# Runtime/generated Polylens artifacts
+data/wallets/*.json
+data/traders/*.db
+data/traders/*.db-*
+data/traders/watchlist.json
+dashboards/
+reports/validation_artifacts/
+reports/*.patch
+*_REPORT.md
+*_REPORT_FINAL.md
