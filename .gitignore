@@ -30,3 +30,6 @@ reports/validation_artifacts/
 reports/*.patch
 *_REPORT.md
 *_REPORT_FINAL.md
+
+# Runtime DB artifacts
+traders.db
