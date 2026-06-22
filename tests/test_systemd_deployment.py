@@ -29,6 +29,7 @@ def test_service_files_exist():
     assert (SYSTEMD / "polylens-prop-arb-collector-preflight.sh").exists()
     assert (SYSTEMD / "wallet-autonomy.service").exists()
     assert (SYSTEMD / "wallet-autonomy.timer").exists()
+    assert (SYSTEMD / "polylens-telegram-console.service").exists()
 
 
 def test_service_command_is_correct():
@@ -245,6 +246,20 @@ def test_wallet_autonomy_service_is_paper_only():
     assert "trade-" not in service
 
 
+def test_telegram_console_service_is_read_only_and_paper_only():
+    service = (SYSTEMD / "polylens-telegram-console.service").read_text()
+    assert "WorkingDirectory=/home/noel/polylens" in service
+    assert "Environment=PYTHONPATH=/home/noel/polylens" in service
+    assert "POLYLENS_TELEGRAM_PAPER_ONLY=true" in service
+    assert "POLYLENS_TELEGRAM_LIVE_ENABLED=false" in service
+    assert "POLYLENS_LIVE_TRADING=false" in service
+    assert "POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false" in service
+    assert "POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED=false" in service
+    assert "telegram-console" in service
+    assert "trade-" not in service
+    assert "--live" not in service
+
+
 AUTONOMOUS_SERVICE_FILES = [
     "polylens-dashboard.service",
     "polylens-trader-dashboard.service",
@@ -257,6 +272,7 @@ AUTONOMOUS_SERVICE_FILES = [
     "polylens-live-arb.service",
     "polylens-prop-watch.service",
     "kalshi-market-recorder.service",
+    "polylens-telegram-console.service",
 ]
 
 

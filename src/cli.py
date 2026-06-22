@@ -132,6 +132,7 @@ from src.trading.kalshi_strategy import scan_markets_for_signals
 from src.trading.kalshi_live_smoke import run_kalshi_live_smoke_test
 from src.trading.risk import RiskConfig
 from src.notifications.telegram import send_telegram_alert
+from src.integrations.telegram_console import run_telegram_console
 
 
 def _memory_mb() -> float:
@@ -4486,6 +4487,11 @@ def main() -> None:
     wallet_service_health_parser = sub.add_parser("wallet-service-health", help="wallet autonomy service health")
     wallet_service_health_parser.add_argument("--json", action="store_true")
 
+    telegram_console_parser = sub.add_parser("telegram-console", help="run read-only Telegram control console")
+    telegram_console_parser.add_argument("--once", action="store_true", help="poll Telegram once and exit")
+    telegram_console_parser.add_argument("--poll-timeout", type=int, default=30)
+    telegram_console_parser.add_argument("--db-path", default=None, help="audit SQLite database path")
+
     wallet_acquire_parser = sub.add_parser("wallet-acquire", help="run wallet data acquisition pipeline")
     wallet_acquire_parser.add_argument("--limit", type=int, default=100)
     wallet_acquire_parser.add_argument("--json", action="store_true")
@@ -5199,6 +5205,8 @@ def main() -> None:
         wallet_service_feedback_cli(as_json=args.json)
     elif args.command == "wallet-service-health":
         wallet_service_health_cli(as_json=args.json)
+    elif args.command == "telegram-console":
+        run_telegram_console(once=args.once, poll_timeout=args.poll_timeout, audit_db_path=args.db_path)
     elif args.command == "wallet-acquire":
         wallet_acquire_cli(as_json=args.json, limit=args.limit)
     elif args.command == "wallet-seed-import":
