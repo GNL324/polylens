@@ -263,7 +263,9 @@ def systemd_service_health(*, timeout_minutes: int = 10) -> list[Finding]:
         entered = parse_systemd_usec(props.get("ActiveEnterTimestampMonotonic"))
         uptime = system_uptime_seconds()
         activating_seconds = None if entered is None or uptime is None else max(0.0, uptime - entered)
-        if activating_seconds is not None and activating_seconds <= timeout_minutes * 60:
+        if activating_seconds is None:
+            return [Finding("info", "wallet_autonomy_activating_recent", "wallet-autonomy.service is activating; duration unknown, treating as recent.", {"seconds": activating_seconds})]
+        if activating_seconds <= timeout_minutes * 60:
             return [Finding("info", "wallet_autonomy_activating_recent", "wallet-autonomy.service is activating within timeout.", {"seconds": activating_seconds})]
         return [Finding("alert", "wallet_autonomy_activating_stale", "wallet-autonomy.service activating exceeded timeout.", {"seconds": activating_seconds})]
     if active == "active":
