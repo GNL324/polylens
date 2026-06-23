@@ -284,11 +284,10 @@ class TelegramConsole:
                 callback_query_id = callback.get("id")
                 callback_data = str(callback.get("data") or "")
                 message_id = message.get("message_id")
+                self._answer_callback_query(callback_query_id)
                 if chat_id is not None and user_id is not None:
                     response = self.handle_callback(int(user_id), callback_data)
                     self._edit_message_or_send(chat_id, message_id, response)
-                if callback_query_id is not None:
-                    self._telegram_request("answerCallbackQuery", {"callback_query_id": callback_query_id})
                 continue
             message = update.get("message") or {}
             text = str(message.get("text") or "")
@@ -361,6 +360,14 @@ class TelegramConsole:
         if response.reply_markup:
             params["reply_markup"] = json.dumps(response.reply_markup)
         return self._telegram_request("sendMessage", params)
+
+    def _answer_callback_query(self, callback_query_id: Any) -> None:
+        if callback_query_id is None:
+            return
+        try:
+            self._telegram_request("answerCallbackQuery", {"callback_query_id": callback_query_id})
+        except Exception:
+            LOGGER.warning("telegram answerCallbackQuery failed; continuing")
 
     def _edit_message_or_send(
         self,
