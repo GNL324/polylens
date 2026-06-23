@@ -54,6 +54,14 @@ CALLBACK_COMMANDS = {
     "risk": "/risk",
     "help": "/help",
 }
+MENU_CALLBACKS = {
+    "menu_main": "main",
+    "menu_intelligence": "intelligence",
+    "menu_wallets": "wallets",
+    "menu_signals": "signals",
+    "menu_system": "system",
+    "menu_reports": "reports",
+}
 LIVE_CALLBACKS = {"buy", "sell", "order", "trade", "kill_switch", "resume_trading"}
 WALLET_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
@@ -157,6 +165,8 @@ class TelegramConsole:
 
     def handle_callback(self, telegram_user_id: int, callback_data: str) -> TelegramResponse:
         callback_id = normalize_callback_id(callback_data)
+        if callback_id in MENU_CALLBACKS:
+            return self._handle_menu_callback(telegram_user_id, callback_id)
         if callback_id in LIVE_CALLBACKS:
             command = f"/{callback_id}"
             args = ""
@@ -171,6 +181,27 @@ class TelegramConsole:
             args=args,
             audit_command=f"callback:{callback_id}",
         )
+
+    def _handle_menu_callback(self, telegram_user_id: int, callback_id: str) -> TelegramResponse:
+        allowed = self._is_allowed(telegram_user_id)
+        response = "admin allowlist missing" if not self.config.admin_user_ids else "unauthorized"
+        result_status = "rejected"
+        reply_markup: dict[str, Any] | None = None
+        if allowed:
+            menu_name = MENU_CALLBACKS[callback_id]
+            response = menu_text(menu_name)
+            reply_markup = menu_reply_markup(menu_name)
+            result_status = "ok"
+        audit_telegram_command(
+            self.config.audit_db_path,
+            telegram_user_id=telegram_user_id,
+            command=f"callback:{callback_id}",
+            args="",
+            allowed=allowed,
+            result_status=result_status,
+            error_message="" if allowed else response,
+        )
+        return TelegramResponse(safe_telegram_text(response, token=self.config.bot_token), reply_markup=reply_markup)
 
     def _handle_command(
         self,
@@ -252,9 +283,10 @@ class TelegramConsole:
                 user_id = from_user.get("id")
                 callback_query_id = callback.get("id")
                 callback_data = str(callback.get("data") or "")
+                message_id = message.get("message_id")
                 if chat_id is not None and user_id is not None:
                     response = self.handle_callback(int(user_id), callback_data)
-                    self._send_message(chat_id, response)
+                    self._edit_message_or_send(chat_id, message_id, response)
                 if callback_query_id is not None:
                     self._telegram_request("answerCallbackQuery", {"callback_query_id": callback_query_id})
                 continue
@@ -280,7 +312,7 @@ class TelegramConsole:
 
     def _dispatch(self, command: str, args: str) -> TelegramResponse:
         if command in {"", "/start", "/help"}:
-            return TelegramResponse(help_text(), reply_markup=main_menu_reply_markup())
+            return TelegramResponse(help_text(), reply_markup=menu_reply_markup("main"))
         if command == "/status":
             return self._menu_response(
                 "Status: read-only; "
@@ -330,8 +362,24 @@ class TelegramConsole:
             params["reply_markup"] = json.dumps(response.reply_markup)
         return self._telegram_request("sendMessage", params)
 
+    def _edit_message_or_send(
+        self,
+        chat_id: int,
+        message_id: int | None,
+        response: TelegramResponse,
+    ) -> dict[str, Any]:
+        if message_id is not None:
+            params: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "text": response.text}
+            if response.reply_markup:
+                params["reply_markup"] = json.dumps(response.reply_markup)
+            try:
+                return self._telegram_request("editMessageText", params)
+            except Exception:
+                LOGGER.warning("telegram edit failed; falling back to sendMessage")
+        return self._send_message(chat_id, response)
+
     def _menu_response(self, text: str) -> TelegramResponse:
-        return TelegramResponse(text, reply_markup=main_menu_reply_markup())
+        return TelegramResponse(text, reply_markup=menu_reply_markup("main"))
 
 
 def init_telegram_audit_db(db_path: str | Path = DEFAULT_TELEGRAM_AUDIT_DB) -> None:
@@ -419,24 +467,99 @@ def help_text() -> str:
     return "Polylens Telegram console\nCommands:\n" + "\n".join(COMMANDS)
 
 
-def main_menu_reply_markup() -> dict[str, Any]:
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "Status", "callback_data": "status"},
-                {"text": "Health", "callback_data": "health"},
-            ],
-            [
-                {"text": "Signals", "callback_data": "signals"},
-                {"text": "Top Wallets", "callback_data": "top_wallets"},
-            ],
-            [
-                {"text": "Paper Status", "callback_data": "paper_status"},
-                {"text": "Risk", "callback_data": "risk"},
-            ],
-            [{"text": "Help", "callback_data": "help"}],
-        ]
+def menu_text(menu_name: str) -> str:
+    titles = {
+        "main": "Polylens Control Console",
+        "intelligence": "Intelligence",
+        "wallets": "Wallets",
+        "signals": "Signals",
+        "system": "System",
+        "reports": "Reports",
     }
+    subtitles = {
+        "main": "Choose a category.",
+        "intelligence": "Read-only intelligence tools.",
+        "wallets": "Wallet intelligence and lookup tools.",
+        "signals": "Read-only signal engine views.",
+        "system": "Safe service, paper, and risk status.",
+        "reports": "Concise reports and help.",
+    }
+    title = titles.get(menu_name, titles["main"])
+    subtitle = subtitles.get(menu_name, subtitles["main"])
+    return f"{title}\n{subtitle}"
+
+
+def menu_reply_markup(menu_name: str = "main") -> dict[str, Any]:
+    if menu_name == "intelligence":
+        return _menu_markup(
+            [
+                [{"text": "Health", "callback_data": "health"}],
+                [{"text": "Risk", "callback_data": "risk"}],
+                [_back_button()],
+            ]
+        )
+    if menu_name == "wallets":
+        return _menu_markup(
+            [
+                [{"text": "Top Wallets", "callback_data": "top_wallets"}],
+                [{"text": "Wallet Help", "callback_data": "help"}],
+                [_back_button()],
+            ]
+        )
+    if menu_name == "signals":
+        return _menu_markup(
+            [
+                [{"text": "Signals", "callback_data": "signals"}],
+                [_back_button()],
+            ]
+        )
+    if menu_name == "system":
+        return _menu_markup(
+            [
+                [
+                    {"text": "Status", "callback_data": "status"},
+                    {"text": "Health", "callback_data": "health"},
+                ],
+                [
+                    {"text": "Paper Status", "callback_data": "paper_status"},
+                    {"text": "Risk", "callback_data": "risk"},
+                ],
+                [_back_button()],
+            ]
+        )
+    if menu_name == "reports":
+        return _menu_markup(
+            [
+                [{"text": "Help", "callback_data": "help"}],
+                [{"text": "Top Wallets", "callback_data": "top_wallets"}],
+                [_back_button()],
+            ]
+        )
+    return _menu_markup(
+        [
+            [
+                {"text": "Intelligence", "callback_data": "menu_intelligence"},
+                {"text": "Wallets", "callback_data": "menu_wallets"},
+            ],
+            [
+                {"text": "Signals", "callback_data": "menu_signals"},
+                {"text": "System", "callback_data": "menu_system"},
+            ],
+            [{"text": "Reports", "callback_data": "menu_reports"}],
+        ]
+    )
+
+
+def main_menu_reply_markup() -> dict[str, Any]:
+    return menu_reply_markup("main")
+
+
+def _menu_markup(rows: list[list[dict[str, str]]]) -> dict[str, Any]:
+    return {"inline_keyboard": rows}
+
+
+def _back_button() -> dict[str, str]:
+    return {"text": "Back", "callback_data": "menu_main"}
 
 
 def format_health(payload: dict[str, Any]) -> str:

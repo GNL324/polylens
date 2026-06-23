@@ -8,6 +8,7 @@ from src.integrations.telegram_console import (
     TelegramConsole,
     TelegramConsoleConfig,
     TelegramConsoleConfigError,
+    TelegramResponse,
 )
 
 
@@ -82,13 +83,11 @@ def test_help_returns_main_menu_reply_markup(tmp_path):
 
     assert response.reply_markup is not None
     assert _callback_ids(response.reply_markup) == {
-        "status",
-        "health",
-        "signals",
-        "top_wallets",
-        "paper_status",
-        "risk",
-        "help",
+        "menu_intelligence",
+        "menu_wallets",
+        "menu_signals",
+        "menu_system",
+        "menu_reports",
     }
 
 
@@ -98,7 +97,39 @@ def test_start_returns_main_menu_reply_markup(tmp_path):
     response = console.handle_text(123, "/start")
 
     assert response.reply_markup is not None
-    assert "status" in _callback_ids(response.reply_markup)
+    assert "menu_system" in _callback_ids(response.reply_markup)
+
+
+def test_menu_navigation_to_system_menu(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+
+    response = console.handle_callback(123, "menu_system")
+
+    assert response == "System\nSafe service, paper, and risk status."
+    assert response.reply_markup is not None
+    assert _callback_ids(response.reply_markup) == {
+        "status",
+        "health",
+        "paper_status",
+        "risk",
+        "menu_main",
+    }
+
+
+def test_back_navigation_returns_main_menu(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+
+    response = console.handle_callback(123, "menu_main")
+
+    assert response == "Polylens Control Console\nChoose a category."
+    assert response.reply_markup is not None
+    assert _callback_ids(response.reply_markup) == {
+        "menu_intelligence",
+        "menu_wallets",
+        "menu_signals",
+        "menu_system",
+        "menu_reports",
+    }
 
 
 def test_health_uses_safe_health_path(tmp_path):
@@ -169,6 +200,25 @@ def test_callback_audit_row_written(tmp_path):
     assert row == (123, "callback:health", "", 1, "ok", None)
 
 
+def test_menu_callback_audit_row_written(tmp_path):
+    config = _config(tmp_path, admins=(123,))
+    console = TelegramConsole(config)
+
+    console.handle_callback(123, "menu_system")
+
+    with sqlite3.connect(config.audit_db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT telegram_user_id, command, args, allowed, result_status, error_message
+            FROM telegram_command_audit
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    assert row == (123, "callback:menu_system", "", 1, "ok", None)
+
+
 def test_live_like_callback_blocked(tmp_path):
     console = TelegramConsole(_config(tmp_path, admins=(123,)))
 
@@ -176,6 +226,42 @@ def test_live_like_callback_blocked(tmp_path):
 
     assert response == "live trading disabled"
     assert response.reply_markup is None
+
+
+def test_message_edit_used_when_possible(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+    calls = []
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+
+    console._edit_message_or_send(456, 789, TelegramResponse("Updated", {"inline_keyboard": []}))
+
+    assert [method for method, _params in calls] == ["editMessageText"]
+    assert calls[0][1]["chat_id"] == 456
+    assert calls[0][1]["message_id"] == 789
+    assert calls[0][1]["reply_markup"] == '{"inline_keyboard": []}'
+
+
+def test_message_edit_falls_back_to_send(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+    calls = []
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        if method == "editMessageText":
+            raise RuntimeError("edit failed")
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+
+    console._edit_message_or_send(456, 789, TelegramResponse("Updated"))
+
+    assert [method for method, _params in calls] == ["editMessageText", "sendMessage"]
+    assert calls[1][1] == {"chat_id": 456, "text": "Updated"}
 
 
 def test_audit_row_written(tmp_path):
