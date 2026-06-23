@@ -45,6 +45,16 @@ LIVE_COMMANDS = {
     "/kill_switch",
     "/resume_trading",
 }
+CALLBACK_COMMANDS = {
+    "status": "/status",
+    "health": "/health",
+    "signals": "/signals",
+    "top_wallets": "/top_wallets",
+    "paper_status": "/paper_status",
+    "risk": "/risk",
+    "help": "/help",
+}
+LIVE_CALLBACKS = {"buy", "sell", "order", "trade", "kill_switch", "resume_trading"}
 WALLET_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
 
@@ -86,6 +96,23 @@ class TelegramConsoleConfig:
 Provider = Callable[[], dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class TelegramResponse:
+    text: str
+    reply_markup: dict[str, Any] | None = None
+
+    def __str__(self) -> str:
+        return self.text
+
+    def __contains__(self, needle: str) -> bool:
+        return needle in self.text
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self.text == other
+        return super().__eq__(other)
+
+
 class TelegramConsole:
     def __init__(
         self,
@@ -118,12 +145,45 @@ class TelegramConsole:
             return False
         return int(telegram_user_id) in self.config.admin_user_ids
 
-    def handle_text(self, telegram_user_id: int, text: str) -> str:
+    def handle_text(self, telegram_user_id: int, text: str) -> TelegramResponse:
         raw = str(text or "").strip()
         command, args = split_command(raw)
+        return self._handle_command(
+            telegram_user_id=telegram_user_id,
+            command=command,
+            args=args,
+            audit_command=command,
+        )
+
+    def handle_callback(self, telegram_user_id: int, callback_data: str) -> TelegramResponse:
+        callback_id = normalize_callback_id(callback_data)
+        if callback_id in LIVE_CALLBACKS:
+            command = f"/{callback_id}"
+            args = ""
+        else:
+            command = CALLBACK_COMMANDS.get(callback_id, "")
+            args = ""
+        if not command:
+            return self._handle_unknown_callback(telegram_user_id, callback_id)
+        return self._handle_command(
+            telegram_user_id=telegram_user_id,
+            command=command,
+            args=args,
+            audit_command=f"callback:{callback_id}",
+        )
+
+    def _handle_command(
+        self,
+        *,
+        telegram_user_id: int,
+        command: str,
+        args: str,
+        audit_command: str,
+    ) -> TelegramResponse:
         allowed = self._is_allowed(telegram_user_id)
         result_status = "ok"
         error_message = ""
+        reply_markup: dict[str, Any] | None = None
         try:
             if not allowed:
                 result_status = "rejected"
@@ -132,9 +192,11 @@ class TelegramConsole:
                 result_status = "blocked"
                 response = "live trading disabled"
             else:
-                response = self._dispatch(command, args)
+                dispatched = self._dispatch(command, args)
+                response = dispatched.text
+                reply_markup = dispatched.reply_markup
         except Exception as exc:
-            LOGGER.exception("telegram console command failed command=%s user_id=%s", command, telegram_user_id)
+            LOGGER.exception("telegram console command failed command=%s user_id=%s", audit_command, telegram_user_id)
             result_status = "error"
             error_message = str(exc)
             response = "error: command failed safely"
@@ -142,13 +204,31 @@ class TelegramConsole:
         audit_telegram_command(
             self.config.audit_db_path,
             telegram_user_id=telegram_user_id,
-            command=command,
+            command=audit_command,
             args=args,
             allowed=allowed,
             result_status=result_status,
             error_message=error_message,
         )
-        return response
+        return TelegramResponse(response, reply_markup=reply_markup)
+
+    def _handle_unknown_callback(self, telegram_user_id: int, callback_id: str) -> TelegramResponse:
+        allowed = self._is_allowed(telegram_user_id)
+        response = "admin allowlist missing" if not self.config.admin_user_ids else "unauthorized"
+        result_status = "rejected"
+        if allowed:
+            response = "unknown action. Try /help"
+            result_status = "unknown_callback"
+        audit_telegram_command(
+            self.config.audit_db_path,
+            telegram_user_id=telegram_user_id,
+            command=f"callback:{callback_id}",
+            args="",
+            allowed=allowed,
+            result_status=result_status,
+            error_message="" if allowed else response,
+        )
+        return TelegramResponse(safe_telegram_text(response, token=self.config.bot_token), reply_markup=main_menu_reply_markup() if allowed else None)
 
     def poll_once(self, *, offset: int | None = None, timeout: int = 30) -> int | None:
         self.validate_startup()
@@ -157,12 +237,27 @@ class TelegramConsole:
             {
                 "timeout": max(1, int(timeout)),
                 **({"offset": offset} if offset is not None else {}),
-                "allowed_updates": json.dumps(["message"]),
+                "allowed_updates": json.dumps(["message", "callback_query"]),
             },
         )
         next_offset = offset
         for update in payload.get("result", []):
             next_offset = int(update["update_id"]) + 1
+            callback = update.get("callback_query") or {}
+            if callback:
+                from_user = callback.get("from") or {}
+                message = callback.get("message") or {}
+                chat = message.get("chat") or {}
+                chat_id = chat.get("id")
+                user_id = from_user.get("id")
+                callback_query_id = callback.get("id")
+                callback_data = str(callback.get("data") or "")
+                if chat_id is not None and user_id is not None:
+                    response = self.handle_callback(int(user_id), callback_data)
+                    self._send_message(chat_id, response)
+                if callback_query_id is not None:
+                    self._telegram_request("answerCallbackQuery", {"callback_query_id": callback_query_id})
+                continue
             message = update.get("message") or {}
             text = str(message.get("text") or "")
             chat = message.get("chat") or {}
@@ -172,7 +267,7 @@ class TelegramConsole:
             if chat_id is None or user_id is None or not text.startswith("/"):
                 continue
             response = self.handle_text(int(user_id), text)
-            self._telegram_request("sendMessage", {"chat_id": chat_id, "text": response})
+            self._send_message(chat_id, response)
         return next_offset
 
     def run_forever(self, *, poll_timeout: int = 30, sleep_seconds: float = 1.0) -> None:
@@ -183,28 +278,28 @@ class TelegramConsole:
             offset = self.poll_once(offset=offset, timeout=poll_timeout)
             time.sleep(max(0.0, sleep_seconds))
 
-    def _dispatch(self, command: str, args: str) -> str:
+    def _dispatch(self, command: str, args: str) -> TelegramResponse:
         if command in {"", "/start", "/help"}:
-            return help_text()
+            return TelegramResponse(help_text(), reply_markup=main_menu_reply_markup())
         if command == "/status":
-            return (
+            return self._menu_response(
                 "Status: read-only; "
                 f"paper-only={str(self.config.paper_only).lower()}; "
                 f"live={str(self.config.live_enabled and not self.config.paper_only).lower()}"
             )
         if command == "/health":
-            return format_health(self.health_provider())
+            return self._menu_response(format_health(self.health_provider()))
         if command == "/signals":
-            return format_signals(self.signals_provider())
+            return self._menu_response(format_signals(self.signals_provider()))
         if command == "/top_wallets":
-            return format_top_wallets(self.top_wallets_provider())
+            return self._menu_response(format_top_wallets(self.top_wallets_provider()))
         if command == "/wallet":
-            return self._wallet(args)
+            return TelegramResponse(self._wallet(args))
         if command == "/paper_status":
-            return format_paper_status(self.paper_provider())
+            return self._menu_response(format_paper_status(self.paper_provider()))
         if command == "/risk":
-            return format_risk(self.risk_provider())
-        return "unknown command. Try /help"
+            return self._menu_response(format_risk(self.risk_provider()))
+        return self._menu_response("unknown command. Try /help")
 
     def _wallet(self, args: str) -> str:
         wallet = args.strip().split()[0] if args.strip() else ""
@@ -228,6 +323,15 @@ class TelegramConsole:
         with urlopen(request, timeout=35) as response:
             text = response.read().decode("utf-8")
         return json.loads(text) if text else {}
+
+    def _send_message(self, chat_id: int, response: TelegramResponse) -> dict[str, Any]:
+        params: dict[str, Any] = {"chat_id": chat_id, "text": response.text}
+        if response.reply_markup:
+            params["reply_markup"] = json.dumps(response.reply_markup)
+        return self._telegram_request("sendMessage", params)
+
+    def _menu_response(self, text: str) -> TelegramResponse:
+        return TelegramResponse(text, reply_markup=main_menu_reply_markup())
 
 
 def init_telegram_audit_db(db_path: str | Path = DEFAULT_TELEGRAM_AUDIT_DB) -> None:
@@ -304,8 +408,35 @@ def split_command(text: str) -> tuple[str, str]:
     return command, parts[1].strip() if len(parts) > 1 else ""
 
 
+def normalize_callback_id(callback_data: str) -> str:
+    callback_id = str(callback_data or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9_]{1,32}", callback_id):
+        return "unknown"
+    return callback_id
+
+
 def help_text() -> str:
     return "Polylens Telegram console\nCommands:\n" + "\n".join(COMMANDS)
+
+
+def main_menu_reply_markup() -> dict[str, Any]:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "Status", "callback_data": "status"},
+                {"text": "Health", "callback_data": "health"},
+            ],
+            [
+                {"text": "Signals", "callback_data": "signals"},
+                {"text": "Top Wallets", "callback_data": "top_wallets"},
+            ],
+            [
+                {"text": "Paper Status", "callback_data": "paper_status"},
+                {"text": "Risk", "callback_data": "risk"},
+            ],
+            [{"text": "Help", "callback_data": "help"}],
+        ]
+    }
 
 
 def format_health(payload: dict[str, Any]) -> str:
