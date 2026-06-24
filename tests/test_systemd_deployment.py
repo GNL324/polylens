@@ -30,6 +30,8 @@ def test_service_files_exist():
     assert (SYSTEMD / "wallet-autonomy.service").exists()
     assert (SYSTEMD / "wallet-autonomy.timer").exists()
     assert (SYSTEMD / "polylens-telegram-console.service").exists()
+    assert (SYSTEMD / "polylens-telegram-daily-report.service").exists()
+    assert (SYSTEMD / "polylens-telegram-daily-report.timer").exists()
 
 
 def test_service_command_is_correct():
@@ -260,6 +262,29 @@ def test_telegram_console_service_is_read_only_and_paper_only():
     assert "--live" not in service
 
 
+def test_telegram_daily_report_service_and_timer_are_safe():
+    service = (SYSTEMD / "polylens-telegram-daily-report.service").read_text()
+    timer = (SYSTEMD / "polylens-telegram-daily-report.timer").read_text()
+    assert "Type=oneshot" in service
+    assert "WorkingDirectory=/home/noel/polylens" in service
+    assert "Environment=PYTHONPATH=/home/noel/polylens" in service
+    assert "POLYLENS_TELEGRAM_NOTIFICATIONS_ENABLED=true" in service
+    assert "POLYLENS_TELEGRAM_DAILY_REPORT_ENABLED=true" in service
+    assert "POLYLENS_TELEGRAM_PAPER_ONLY=true" in service
+    assert "POLYLENS_TELEGRAM_LIVE_ENABLED=false" in service
+    assert "LIVE_TRADING=false" in service
+    assert "DRY_RUN=true" in service
+    assert "POLYLENS_LIVE_TRADING=false" in service
+    assert "POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false" in service
+    assert "POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED=false" in service
+    assert "telegram-daily-report" in service
+    assert "trade-" not in service
+    assert "--live" not in service
+    assert "OnCalendar=*-*-* 08:00:00" in timer
+    assert "Persistent=true" in timer
+    assert "Unit=polylens-telegram-daily-report.service" in timer
+
+
 AUTONOMOUS_SERVICE_FILES = [
     "polylens-dashboard.service",
     "polylens-trader-dashboard.service",
@@ -273,6 +298,7 @@ AUTONOMOUS_SERVICE_FILES = [
     "polylens-prop-watch.service",
     "kalshi-market-recorder.service",
     "polylens-telegram-console.service",
+    "polylens-telegram-daily-report.service",
 ]
 
 

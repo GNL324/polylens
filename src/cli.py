@@ -133,6 +133,12 @@ from src.trading.kalshi_live_smoke import run_kalshi_live_smoke_test
 from src.trading.risk import RiskConfig
 from src.notifications.telegram import send_telegram_alert
 from src.integrations.telegram_console import run_telegram_console
+from src.integrations.telegram_notifications import (
+    TelegramNotificationConfig,
+    TelegramNotificationService,
+    format_daily_intelligence_report,
+    generate_daily_intelligence_report,
+)
 
 
 def _memory_mb() -> float:
@@ -4492,6 +4498,11 @@ def main() -> None:
     telegram_console_parser.add_argument("--poll-timeout", type=int, default=30)
     telegram_console_parser.add_argument("--db-path", default=None, help="audit SQLite database path")
 
+    telegram_daily_parser = sub.add_parser("telegram-daily-report", help="send read-only Telegram daily intelligence report")
+    telegram_daily_parser.add_argument("--db-path", default=None, help="audit SQLite database path")
+    telegram_daily_parser.add_argument("--dry-run", action="store_true", help="print report without Telegram delivery")
+    telegram_daily_parser.add_argument("--json", action="store_true")
+
     wallet_acquire_parser = sub.add_parser("wallet-acquire", help="run wallet data acquisition pipeline")
     wallet_acquire_parser.add_argument("--limit", type=int, default=100)
     wallet_acquire_parser.add_argument("--json", action="store_true")
@@ -5207,6 +5218,18 @@ def main() -> None:
         wallet_service_health_cli(as_json=args.json)
     elif args.command == "telegram-console":
         run_telegram_console(once=args.once, poll_timeout=args.poll_timeout, audit_db_path=args.db_path)
+    elif args.command == "telegram-daily-report":
+        report = generate_daily_intelligence_report()
+        if args.dry_run:
+            result = {"sent": False, "delivery_status": "dry_run", "report": report}
+        else:
+            config = TelegramNotificationConfig.from_env(audit_db_path=args.db_path)
+            result = TelegramNotificationService(config).send_daily_report(report)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        else:
+            print(format_daily_intelligence_report(report))
+            print(f"Delivery: {result.get('delivery_status')}")
     elif args.command == "wallet-acquire":
         wallet_acquire_cli(as_json=args.json, limit=args.limit)
     elif args.command == "wallet-seed-import":

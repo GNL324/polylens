@@ -17,6 +17,13 @@ from src.analysis.paper_trading_service import paper_trading_health
 from src.analysis.trader_registry import DEFAULT_TRADERS_DB, top_traders, trader_summary
 from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB, trader_signal_health
 from src.intelligence.wallet_service_health import wallet_service_health_summary
+from src.integrations.telegram_notifications import (
+    format_daily_intelligence_report,
+    generate_daily_intelligence_report,
+    paper_performance_report_text,
+    signal_summary_report_text,
+    wallet_summary_report_text,
+)
 from src.sqlite_utils import closing_connection
 from src.trading.kill_switch import DEFAULT_READINESS_DB, KillSwitch
 
@@ -53,6 +60,10 @@ CALLBACK_COMMANDS = {
     "paper_status": "/paper_status",
     "risk": "/risk",
     "help": "/help",
+    "report_daily": "/report_daily",
+    "report_signals": "/report_signals",
+    "report_wallets": "/report_wallets",
+    "report_paper": "/report_paper",
 }
 MENU_CALLBACKS = {
     "menu_main": "main",
@@ -284,11 +295,10 @@ class TelegramConsole:
                 callback_query_id = callback.get("id")
                 callback_data = str(callback.get("data") or "")
                 message_id = message.get("message_id")
+                self._answer_callback_query(callback_query_id)
                 if chat_id is not None and user_id is not None:
                     response = self.handle_callback(int(user_id), callback_data)
                     self._edit_message_or_send(chat_id, message_id, response)
-                if callback_query_id is not None:
-                    self._telegram_request("answerCallbackQuery", {"callback_query_id": callback_query_id})
                 continue
             message = update.get("message") or {}
             text = str(message.get("text") or "")
@@ -331,6 +341,14 @@ class TelegramConsole:
             return self._menu_response(format_paper_status(self.paper_provider()))
         if command == "/risk":
             return self._menu_response(format_risk(self.risk_provider()))
+        if command == "/report_daily":
+            return TelegramResponse(format_daily_intelligence_report(generate_daily_intelligence_report()), reply_markup=menu_reply_markup("reports"))
+        if command == "/report_signals":
+            return TelegramResponse(signal_summary_report_text(), reply_markup=menu_reply_markup("reports"))
+        if command == "/report_wallets":
+            return TelegramResponse(wallet_summary_report_text(), reply_markup=menu_reply_markup("reports"))
+        if command == "/report_paper":
+            return TelegramResponse(paper_performance_report_text(), reply_markup=menu_reply_markup("reports"))
         return self._menu_response("unknown command. Try /help")
 
     def _wallet(self, args: str) -> str:
@@ -361,6 +379,14 @@ class TelegramConsole:
         if response.reply_markup:
             params["reply_markup"] = json.dumps(response.reply_markup)
         return self._telegram_request("sendMessage", params)
+
+    def _answer_callback_query(self, callback_query_id: Any) -> None:
+        if callback_query_id is None:
+            return
+        try:
+            self._telegram_request("answerCallbackQuery", {"callback_query_id": callback_query_id})
+        except Exception:
+            LOGGER.warning("telegram answerCallbackQuery failed; continuing")
 
     def _edit_message_or_send(
         self,
@@ -394,7 +420,10 @@ def init_telegram_audit_db(db_path: str | Path = DEFAULT_TELEGRAM_AUDIT_DB) -> N
                 args TEXT NOT NULL DEFAULT '',
                 allowed INTEGER NOT NULL,
                 result_status TEXT NOT NULL,
-                error_message TEXT
+                error_message TEXT,
+                notification_sent INTEGER,
+                notification_type TEXT,
+                delivery_status TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_telegram_command_audit_timestamp
                 ON telegram_command_audit(timestamp_utc);
@@ -402,6 +431,9 @@ def init_telegram_audit_db(db_path: str | Path = DEFAULT_TELEGRAM_AUDIT_DB) -> N
                 ON telegram_command_audit(telegram_user_id);
             """
         )
+        _ensure_audit_column(conn, "notification_sent", "INTEGER")
+        _ensure_audit_column(conn, "notification_type", "TEXT")
+        _ensure_audit_column(conn, "delivery_status", "TEXT")
 
 
 def audit_telegram_command(
@@ -433,6 +465,12 @@ def audit_telegram_command(
                 error_message or None,
             ),
         )
+
+
+def _ensure_audit_column(conn: Any, column: str, definition: str) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(telegram_command_audit)").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE telegram_command_audit ADD COLUMN {column} {definition}")
 
 
 def parse_admin_user_ids(raw: str) -> frozenset[int]:
@@ -530,8 +568,10 @@ def menu_reply_markup(menu_name: str = "main") -> dict[str, Any]:
     if menu_name == "reports":
         return _menu_markup(
             [
-                [{"text": "Help", "callback_data": "help"}],
-                [{"text": "Top Wallets", "callback_data": "top_wallets"}],
+                [{"text": "Daily Brief", "callback_data": "report_daily"}],
+                [{"text": "Signal Summary", "callback_data": "report_signals"}],
+                [{"text": "Wallet Summary", "callback_data": "report_wallets"}],
+                [{"text": "Paper Performance", "callback_data": "report_paper"}],
                 [_back_button()],
             ]
         )

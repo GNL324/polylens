@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Polylens Telegram Daily Intelligence Report at 08:00 local time
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+Persistent=true
+Unit=polylens-telegram-daily-report.service
+
+[Install]
+WantedBy=timers.target
