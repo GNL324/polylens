@@ -62,10 +62,11 @@ def wallet_service_health_summary(
     *,
     traders_db_path: str = DEFAULT_TRADERS_DB,
     service: WalletAutonomyService | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     init_wallet_service_state_db(traders_db_path)
     svc = service or WalletAutonomyService(traders_db_path=traders_db_path)
-    now = _utc_now()
+    now = now or _utc_now()
     states = {row["cycle_name"]: row for row in svc.load_cycle_state()}
     service_row = states.get(SERVICE_KEY, {})
 
