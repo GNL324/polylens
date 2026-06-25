@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from src.analysis.paper_intelligence import paper_trading_intelligence
+from src.analysis.paper_portfolio import portfolio_report
 from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB
 from src.analysis.short_crypto_paper import DEFAULT_DB_PATH as DEFAULT_SHORT_CRYPTO_PAPER_DB
 from src.analysis.trader_registry import DEFAULT_TRADERS_DB
@@ -173,6 +174,7 @@ def generate_daily_intelligence_report(
     signals = trader_signal_report(db_path=signal_db_path)
     signal_health = trader_signal_health(db_path=signal_db_path)
     paper = paper_trading_intelligence(db_path=paper_db_path, short_crypto_db_path=short_crypto_db_path, limit=10)
+    portfolio = portfolio_report(db_path=paper_db_path)
     health = wallet_service_health_summary(traders_db_path=str(traders_db_path))
 
     promotions = performance.load_actions(action="promoted", limit=10)
@@ -206,6 +208,14 @@ def generate_daily_intelligence_report(
             "strategy_breakdown": paper.get("strategy_breakdown", {}),
             "top_strategy": paper.get("top_strategy"),
             "worst_strategy": paper.get("worst_strategy"),
+            "portfolio": portfolio.get("portfolio", {}),
+            "portfolio_pnl": portfolio.get("pnl", {}),
+            "largest_winner": portfolio.get("largest_winner"),
+            "largest_loser": portfolio.get("largest_loser"),
+            "most_profitable_wallet": portfolio.get("most_profitable_wallet"),
+            "worst_wallet": portfolio.get("worst_wallet"),
+            "portfolio_best_strategy": portfolio.get("best_strategy"),
+            "portfolio_worst_strategy": portfolio.get("worst_strategy"),
         },
         "system_health": {
             "wallet_autonomy_status": health.get("status", "unknown"),
@@ -220,6 +230,8 @@ def format_daily_intelligence_report(report: dict[str, Any]) -> str:
     wallets = report.get("wallet_intelligence", {})
     signals = report.get("signals", {})
     paper = report.get("paper_trading", {})
+    portfolio = paper.get("portfolio") or {}
+    portfolio_pnl = paper.get("portfolio_pnl") or {}
     system = report.get("system_health", {})
     signal_summary = signals.get("summary", {})
     by_family = signals.get("by_signal_type", [])[:5]
@@ -241,11 +253,24 @@ def format_daily_intelligence_report(report: dict[str, Any]) -> str:
         "Status: " + _compact_counts(performance, "outcome"),
         "",
         "Paper Trading",
+        f"Portfolio: {_money_signed(portfolio.get('total_equity'))}",
+        f"Cash: {_money_signed(portfolio.get('cash'))}",
+        f"Equity: {_money_signed(portfolio.get('total_equity'))}",
+        f"Buying Power: {_money_signed(portfolio.get('available_buying_power'))}",
         f"Daily PnL: {_money_signed(paper.get('daily_pnl'))}",
         f"7D PnL: {_money_signed(paper.get('pnl_7d'))}",
+        f"30D PnL: {_money_signed(portfolio_pnl.get('thirty_day'))}",
         f"Total PnL: {_money_signed(paper.get('total_pnl'))}",
         f"Open positions: {int(paper.get('open_positions') or 0)}",
         f"Closed positions: {int(paper.get('closed_positions') or 0)}",
+        f"Current drawdown: {_money_signed(portfolio.get('drawdown'))}",
+        f"Current exposure: {_pct(portfolio.get('exposure'))}",
+        "Largest winner: " + _trade_summary(paper.get("largest_winner")),
+        "Largest loser: " + _trade_summary(paper.get("largest_loser")),
+        "Best wallet: " + _wallet_attr_summary(paper.get("most_profitable_wallet")),
+        "Worst wallet: " + _wallet_attr_summary(paper.get("worst_wallet")),
+        "Best strategy: " + _strategy_summary(paper.get("portfolio_best_strategy") or paper.get("top_strategy")),
+        "Worst strategy: " + _strategy_summary(paper.get("portfolio_worst_strategy") or paper.get("worst_strategy")),
         f"Win rate: {_pct(paper.get('win_rate'))}",
         "Recent: " + _recent_trade_summary(paper.get("recent_trades", []), limit=3),
         "Top strategy: " + _strategy_summary(paper.get("top_strategy")),
@@ -400,6 +425,105 @@ def paper_strategies_report_text(report: dict[str, Any] | None = None) -> str:
             f"{row.get('strategy', 'unknown')}: {_money_signed(pnl)} "
             f"trades={int(row.get('trade_count') or 0)} "
             f"win={_pct(row.get('win_rate'))}"
+        )
+    return safe_telegram_text("\n".join(lines))
+
+
+def portfolio_report_text(report: dict[str, Any]) -> str:
+    portfolio = report.get("portfolio", {})
+    pnl = report.get("pnl", {})
+    return safe_telegram_text(
+        "\n".join(
+            [
+                "Paper Portfolio",
+                f"Cash: {_money_signed(portfolio.get('cash'))}",
+                f"Equity: {_money_signed(portfolio.get('total_equity'))}",
+                f"Buying Power: {_money_signed(portfolio.get('available_buying_power'))}",
+                f"Invested: {_money_signed(portfolio.get('invested_capital'))}",
+                f"Open: {int(portfolio.get('open_positions') or 0)}",
+                f"Closed: {int(portfolio.get('closed_positions') or 0)}",
+                f"Today: {_money_signed(pnl.get('today'))}",
+                f"7D: {_money_signed(pnl.get('seven_day'))}",
+                f"30D: {_money_signed(pnl.get('thirty_day'))}",
+                f"All time: {_money_signed(pnl.get('all_time'))}",
+            ]
+        )
+    )
+
+
+def history_report_text(report: dict[str, Any]) -> str:
+    rows = report.get("ledger") or []
+    lines = ["Paper History"]
+    if not rows:
+        lines.append("No ledger events")
+    for row in rows[:8]:
+        lines.append(
+            f"{row.get('action') or row.get('event_type')} {row.get('event_type')} "
+            f"#{row.get('paper_position_id')} {_money_signed(row.get('realized_pnl') or row.get('unrealized_pnl'))}"
+        )
+        lines.append(f"   {row.get('strategy') or 'unknown'} | {_short_text(row.get('market'), 70)}")
+    return safe_telegram_text("\n".join(lines))
+
+
+def equity_report_text(report: dict[str, Any]) -> str:
+    rows = report.get("equity_curve") or []
+    lines = ["Paper Equity Curve"]
+    if not rows:
+        lines.append("No balance history")
+    for row in rows[-8:]:
+        lines.append(f"{_short_timestamp(row.get('timestamp'))}: {_money_signed(row.get('equity'))} drawdown {_money_signed(row.get('drawdown'))}")
+    return safe_telegram_text("\n".join(lines))
+
+
+def trade_report_text(row: dict[str, Any] | None) -> str:
+    if not row:
+        return "Trade not found"
+    return safe_telegram_text(
+        "\n".join(
+            [
+                f"Paper Trade #{row.get('paper_position_id')}",
+                f"Status: CLOSED",
+                f"PnL: {_money_signed(row.get('net_pnl'))}",
+                f"Duration: {_duration(row.get('duration_seconds'))}",
+                f"Wallet: {row.get('wallet') or 'unknown'}",
+                f"Strategy: {row.get('strategy') or 'unknown'}",
+                f"Market: {_short_text(row.get('market'), 90)}",
+                f"Exit: {row.get('exit_reason') or 'unknown'}",
+            ]
+        )
+    )
+
+
+def wallet_stats_report_text(row: dict[str, Any] | None) -> str:
+    if not row:
+        return "Wallet stats: none"
+    return safe_telegram_text(
+        "\n".join(
+            [
+                "Wallet Stats",
+                f"Wallet: {row.get('wallet')}",
+                f"Trades: {int(row.get('trade_count') or row.get('trades_generated') or 0)}",
+                f"Realized: {_money_signed(row.get('realized_pnl'))}",
+                f"Unrealized: {_money_signed(row.get('unrealized_pnl'))}",
+                f"ROI: {_pct(row.get('roi'))}",
+                f"Win rate: {_pct(row.get('win_rate'))}",
+                f"Expectancy: {_money_signed(row.get('expectancy'))}",
+                f"Sharpe-style: {float(row.get('sharpe_score') or 0):.2f}",
+                f"Avg hold: {_duration(row.get('average_holding_period_seconds'))}",
+            ]
+        )
+    )
+
+
+def strategy_stats_report_text(rows: list[dict[str, Any]]) -> str:
+    lines = ["Strategy Stats"]
+    if not rows:
+        lines.append("No strategy attribution")
+    for row in rows[:8]:
+        lines.append(
+            f"{row.get('strategy')}: {_money_signed(row.get('total_pnl'))} "
+            f"trades={int(row.get('trade_count') or 0)} win={_pct(row.get('win_rate'))} "
+            f"daily={_money_signed(row.get('daily_pnl'))} weekly={_money_signed(row.get('weekly_pnl'))}"
         )
     return safe_telegram_text("\n".join(lines))
 
@@ -659,8 +783,20 @@ def _recent_trade_summary(rows: list[dict[str, Any]], *, limit: int = 3) -> str:
 def _strategy_summary(row: dict[str, Any] | None) -> str:
     if not row:
         return "n/a"
-    pnl = float(row.get("realized_pnl") or 0) + float(row.get("unrealized_pnl") or 0)
+    pnl = float(row.get("total_pnl") or 0) or (float(row.get("realized_pnl") or 0) + float(row.get("unrealized_pnl") or 0))
     return f"{row.get('strategy', 'unknown')} {_money_signed(pnl)} ({int(row.get('trade_count') or 0)} trades)"
+
+
+def _trade_summary(row: dict[str, Any] | None) -> str:
+    if not row:
+        return "n/a"
+    return f"#{row.get('paper_position_id')} {_money_signed(row.get('net_pnl'))} {row.get('strategy') or 'unknown'}"
+
+
+def _wallet_attr_summary(row: dict[str, Any] | None) -> str:
+    if not row:
+        return "n/a"
+    return f"{row.get('wallet') or 'unknown'} {_money_signed(row.get('total_pnl') or row.get('realized_pnl'))}"
 
 
 def _money(value: Any) -> str:
@@ -701,6 +837,15 @@ def _short_timestamp(value: Any) -> str:
     except ValueError:
         return _short_text(text, 32)
     return parsed.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _duration(value: Any) -> str:
+    seconds = float(value or 0)
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        return f"{seconds / 60:.1f}m"
+    return f"{seconds / 3600:.1f}h"
 
 
 def utc_now() -> str:

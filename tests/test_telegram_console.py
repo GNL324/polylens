@@ -127,6 +127,53 @@ def _empty_paper_report():
     return payload
 
 
+def _portfolio_report():
+    return {
+        "portfolio": {
+            "cash": 99.0,
+            "invested_capital": 2.0,
+            "unrealized_pnl": 0.0,
+            "realized_pnl": 1.0,
+            "total_equity": 101.0,
+            "drawdown": 0.0,
+            "exposure": 0.02,
+            "open_positions": 1,
+            "closed_positions": 1,
+            "available_buying_power": 99.0,
+        },
+        "pnl": {"today": 1.0, "seven_day": 1.0, "thirty_day": 1.0, "all_time": 1.0},
+        "ledger": [
+            {
+                "event_type": "CLOSE",
+                "action": "SELL",
+                "paper_position_id": 1,
+                "realized_pnl": 1.0,
+                "strategy": "early_entry",
+                "market": "Will BTC close above 100k?",
+            }
+        ],
+        "equity_curve": [{"timestamp": "2026-06-24T13:45:00Z", "equity": 101.0, "drawdown": 0.0}],
+        "recent_trades": [
+            {
+                "paper_position_id": 1,
+                "strategy": "early_entry",
+                "market": "Will BTC close above 100k?",
+                "net_pnl": 1.0,
+                "duration_seconds": 3600,
+                "wallet": VALID_WALLET,
+            },
+            {
+                "paper_position_id": 2,
+                "strategy": "conviction",
+                "market": "Will ETH close green?",
+                "net_pnl": -0.5,
+                "duration_seconds": 1800,
+                "wallet": VALID_WALLET,
+            },
+        ],
+    }
+
+
 def _callback_ids(reply_markup):
     return {
         button["callback_data"]
@@ -395,6 +442,10 @@ def test_reports_menu_contains_paper_intelligence_callbacks(tmp_path):
         "paper_pnl",
         "paper_positions",
         "paper_strategies",
+        "portfolio",
+        "history",
+        "equity",
+        "strategy_stats",
         "menu_main",
     }
 
@@ -463,17 +514,124 @@ def test_paper_strategies_command(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("command", "heading"),
+    [
+        ("/portfolio", "Paper Portfolio"),
+        ("/history", "Paper History"),
+        ("/equity", "Paper Equity Curve"),
+        ("/top_winners", "Top Winners"),
+        ("/top_losers", "Top Losers"),
+    ],
+)
+def test_portfolio_commands(tmp_path, command, heading):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)), portfolio_provider=_portfolio_report)
+
+    response = console.handle_text(123, command)
+
+    assert heading in response
+    assert len(response.text) <= MAX_TELEGRAM_TEXT
+    assert response.reply_markup is not None
+    assert "strategy_stats" in _callback_ids(response.reply_markup)
+
+
+def test_trade_command_includes_wallet_link(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "src.integrations.telegram_console.trade_detail",
+        lambda db_path, trade_id: {
+            "paper_position_id": trade_id,
+            "net_pnl": 1.0,
+            "duration_seconds": 3600,
+            "wallet": VALID_WALLET,
+            "strategy": "early_entry",
+            "market": "Will BTC close above 100k?",
+            "exit_reason": "simulated_exit",
+        },
+    )
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+
+    response = console.handle_text(123, "/trade 1")
+
+    assert "Paper Trade #1" in response
+    assert "PnL: +$1.00" in response
+    assert response.reply_markup is not None
+    assert WALLET_URL in _button_urls(response.reply_markup)
+
+
+def test_wallet_stats_command_validates_and_links_wallet(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "src.integrations.telegram_console.wallet_attribution",
+        lambda db_path: [
+            {
+                "wallet": VALID_WALLET,
+                "trade_count": 2,
+                "realized_pnl": 1.0,
+                "unrealized_pnl": 0.5,
+                "roi": 0.015,
+                "win_rate": 0.5,
+                "expectancy": 0.5,
+                "sharpe_score": 1.2,
+                "average_holding_period_seconds": 3600,
+            }
+        ],
+    )
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+
+    response = console.handle_text(123, f"/wallet_stats {VALID_WALLET}")
+    malformed = console.handle_text(123, "/wallet_stats wallet-123")
+
+    assert "Wallet Stats" in response
+    assert "ROI: 1.5%" in response
+    assert response.reply_markup is not None
+    assert WALLET_URL in _button_urls(response.reply_markup)
+    assert malformed == "wallet_stats: provide a valid 0x address"
+
+
+def test_strategy_stats_command(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "src.integrations.telegram_console.strategy_attribution",
+        lambda db_path: [
+            {
+                "strategy": "early_entry",
+                "total_pnl": 4.2,
+                "trade_count": 3,
+                "win_rate": 0.667,
+                "daily_pnl": 1.0,
+                "weekly_pnl": 4.2,
+                "expectancy": 1.4,
+            }
+        ],
+    )
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+
+    response = console.handle_text(123, "/strategy_stats")
+
+    assert "Strategy Stats" in response
+    assert "early_entry" in response
+    assert "+$4.20" in response
+
+
+@pytest.mark.parametrize(
     ("callback_id", "heading"),
     [
         ("paper_recent", "Recent Paper Trades"),
         ("paper_pnl", "Paper PnL"),
         ("paper_positions", "Open Paper Positions"),
         ("paper_strategies", "Paper Strategies"),
+        ("portfolio", "Paper Portfolio"),
+        ("history", "Paper History"),
+        ("equity", "Paper Equity Curve"),
+        ("strategy_stats", "Strategy Stats"),
+        ("top_winners", "Top Winners"),
+        ("top_losers", "Top Losers"),
     ],
 )
-def test_paper_callbacks_route_and_audit(tmp_path, callback_id, heading):
+def test_paper_callbacks_route_and_audit(monkeypatch, tmp_path, callback_id, heading):
     config = _config(tmp_path, admins=(123,))
-    console = TelegramConsole(config, paper_intelligence_provider=_paper_report)
+    monkeypatch.setattr(
+        "src.integrations.telegram_console.strategy_attribution",
+        lambda db_path: [{"strategy": "early_entry", "total_pnl": 1.0, "trade_count": 1, "win_rate": 1.0}],
+    )
+    console = TelegramConsole(config, paper_intelligence_provider=_paper_report, portfolio_provider=_portfolio_report)
 
     response = console.handle_callback(123, callback_id)
 
@@ -508,6 +666,48 @@ def test_paper_command_audit_rows(tmp_path, command):
             """
         ).fetchone()
     assert row == (command, 1, "ok", None)
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["/portfolio", "/history", "/equity", "/trade 1", f"/wallet_stats {VALID_WALLET}", "/strategy_stats", "/top_winners", "/top_losers"],
+)
+def test_portfolio_command_audit_rows(monkeypatch, tmp_path, command):
+    monkeypatch.setattr(
+        "src.integrations.telegram_console.trade_detail",
+        lambda db_path, trade_id: {
+            "paper_position_id": trade_id,
+            "net_pnl": 1.0,
+            "duration_seconds": 3600,
+            "wallet": VALID_WALLET,
+            "strategy": "early_entry",
+            "market": "Will BTC close above 100k?",
+        },
+    )
+    monkeypatch.setattr(
+        "src.integrations.telegram_console.wallet_attribution",
+        lambda db_path: [{"wallet": VALID_WALLET, "trade_count": 1, "realized_pnl": 1.0}],
+    )
+    monkeypatch.setattr(
+        "src.integrations.telegram_console.strategy_attribution",
+        lambda db_path: [{"strategy": "early_entry", "total_pnl": 1.0, "trade_count": 1, "win_rate": 1.0}],
+    )
+    config = _config(tmp_path, admins=(123,))
+    console = TelegramConsole(config, portfolio_provider=_portfolio_report)
+
+    console.handle_text(123, command)
+
+    expected_command = command.split()[0]
+    with sqlite3.connect(config.audit_db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT command, allowed, result_status, error_message
+            FROM telegram_command_audit
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    assert row == (expected_command, 1, "ok", None)
 
 
 def test_empty_db_behavior(tmp_path):

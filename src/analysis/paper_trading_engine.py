@@ -126,6 +126,9 @@ def init_paper_trading_db(db_path: str | Path = DEFAULT_PAPER_TRADING_DB) -> Non
             CREATE INDEX IF NOT EXISTS idx_paper_equity_run ON paper_equity_curve(run_id);
             """
         )
+    from src.analysis.paper_portfolio import init_paper_portfolio_db
+
+    init_paper_portfolio_db(db_path)
 
 
 def collect_opportunities(limit: int = 25) -> list[dict[str, Any]]:
@@ -157,7 +160,7 @@ def run_paper_trading_engine(
             continue
         order_id = _save_order(db_path, run_id, opportunity, stake)
         orders_created += 1
-        if _open_position(db_path, order_id, opportunity, stake):
+        if _open_position(db_path, order_id, opportunity, stake, starting_bankroll=config.starting_bankroll):
             positions_opened += 1
     equity = record_equity_snapshot(db_path, run_id=run_id, starting_bankroll=config.starting_bankroll)
     _update_run(
@@ -206,6 +209,7 @@ def settle_open_positions(
     init_paper_trading_db(db_path)
     prices = prices or {}
     settled = 0
+    closed_position_ids: list[int] = []
     with closing_connection(db_path) as conn:
         rows = conn.execute("SELECT * FROM paper_positions WHERE status='open' ORDER BY paper_position_id").fetchall()
         for row in rows:
@@ -239,7 +243,13 @@ def settle_open_positions(
                 """,
                 (run_id or 0, row["paper_position_id"], timestamp, exit_price, round(pnl, 6), round(roi, 6), "simulated_exit"),
             )
+            closed_position_ids.append(int(row["paper_position_id"]))
             settled += 1
+    if closed_position_ids:
+        from src.analysis.paper_portfolio import record_position_closed
+
+        for paper_position_id in closed_position_ids:
+            record_position_closed(db_path, paper_position_id=paper_position_id, exit_reason="simulated_exit")
     return settled
 
 
@@ -308,6 +318,9 @@ def record_equity_snapshot(
             """,
             (run_id, _utc_now(), report["equity"], report["realized_pnl"], report["unrealized_pnl"], report["open_positions"], round(drawdown, 6)),
         )
+    from src.analysis.paper_portfolio import record_balance_snapshot
+
+    record_balance_snapshot(db_path, run_id=run_id, starting_bankroll=starting_bankroll)
     return {
         "equity": report["equity"],
         "realized_pnl": report["realized_pnl"],
@@ -375,10 +388,11 @@ def _save_order(db_path: str | Path, run_id: int, opportunity: PaperOpportunity,
         return int(cur.lastrowid)
 
 
-def _open_position(db_path: str | Path, order_id: int, opportunity: PaperOpportunity, stake: float) -> bool:
+def _open_position(db_path: str | Path, order_id: int, opportunity: PaperOpportunity, stake: float, *, starting_bankroll: float = DEFAULT_STARTING_BANKROLL) -> bool:
     shares = stake / opportunity.entry_price if opportunity.entry_price > 0 else 0.0
     if shares <= 0:
         return False
+    position_id: int | None = None
     with closing_connection(db_path) as conn:
         cur = conn.execute(
             """
@@ -401,7 +415,15 @@ def _open_position(db_path: str | Path, order_id: int, opportunity: PaperOpportu
                 opportunity.entry_price,
             ),
         )
-        return cur.rowcount > 0
+        opened = cur.rowcount > 0
+        if opened:
+            row = conn.execute("SELECT paper_position_id FROM paper_positions WHERE opportunity_id=?", (opportunity.opportunity_id,)).fetchone()
+            position_id = int(row["paper_position_id"]) if row else None
+    if opened and position_id is not None:
+        from src.analysis.paper_portfolio import record_position_opened
+
+        record_position_opened(db_path, paper_position_id=position_id, starting_bankroll=starting_bankroll)
+    return opened
 
 
 def _create_run(db_path: str | Path, *, opportunities_seen: int, equity: float) -> int:

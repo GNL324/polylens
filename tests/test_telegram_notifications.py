@@ -8,11 +8,17 @@ from src.integrations.telegram_notifications import (
     is_valid_wallet_address,
     paper_pnl_report_text,
     paper_positions_report_text,
+    portfolio_report_text,
+    history_report_text,
+    equity_report_text,
     paper_recent_report_text,
     paper_strategies_report_text,
     polymarket_analytics_wallet_url,
+    strategy_stats_report_text,
+    trade_report_text,
     TelegramNotificationConfig,
     TelegramNotificationService,
+    wallet_stats_report_text,
 )
 
 
@@ -72,6 +78,31 @@ def _paper_report():
     }
 
 
+def _portfolio_report():
+    return {
+        "portfolio": {
+            "cash": 99.0,
+            "invested_capital": 2.0,
+            "total_equity": 101.0,
+            "available_buying_power": 99.0,
+            "open_positions": 1,
+            "closed_positions": 1,
+        },
+        "pnl": {"today": 1.0, "seven_day": 1.0, "thirty_day": 1.0, "all_time": 1.0},
+        "ledger": [
+            {
+                "event_type": "CLOSE",
+                "action": "SELL",
+                "paper_position_id": 1,
+                "realized_pnl": 1.0,
+                "strategy": "early_entry",
+                "market": "Will BTC close above 100k?",
+            }
+        ],
+        "equity_curve": [{"timestamp": "2026-06-24T13:45:00Z", "equity": 101.0, "drawdown": 0.0}],
+    }
+
+
 def test_daily_report_includes_enhanced_paper_section(monkeypatch, tmp_path):
     class FakeDiscovery:
         def __init__(self, **kwargs):
@@ -105,7 +136,14 @@ def test_daily_report_includes_enhanced_paper_section(monkeypatch, tmp_path):
     assert "Paper Trading" in text
     assert "Daily PnL: +$1.25" in text
     assert "7D PnL: +$12.84" in text
+    assert "30D PnL: $0.00" in text
     assert "Total PnL: +$103.55" in text
+    assert "Portfolio: +$100.00" in text
+    assert "Cash: +$100.00" in text
+    assert "Equity: +$100.00" in text
+    assert "Buying Power: +$100.00" in text
+    assert "Current drawdown: $0.00" in text
+    assert "Current exposure: 0.0%" in text
     assert "Open positions: 2" in text
     assert "Closed positions: 46" in text
     assert "Recent: early_entry WIN +$4.20" in text
@@ -123,6 +161,47 @@ def test_paper_report_formatters_are_concise():
 
     assert "BTC 5m momentum: +$1.00 trades=3 win=66.7%" in strategies
     assert all(len(text) < 3500 for text in (paper_recent_report_text(payload), paper_pnl_report_text(payload), paper_positions_report_text(payload), strategies))
+
+
+def test_portfolio_report_formatters_are_concise():
+    portfolio = _portfolio_report()
+    trade = {
+        "paper_position_id": 1,
+        "net_pnl": 1.0,
+        "duration_seconds": 3600,
+        "wallet": VALID_WALLET,
+        "strategy": "early_entry",
+        "market": "Will BTC close above 100k?",
+        "exit_reason": "simulated_exit",
+    }
+    wallet = {
+        "wallet": VALID_WALLET,
+        "trade_count": 1,
+        "realized_pnl": 1.0,
+        "unrealized_pnl": 0.0,
+        "roi": 0.01,
+        "win_rate": 1.0,
+        "expectancy": 1.0,
+        "sharpe_score": 0,
+        "average_holding_period_seconds": 3600,
+    }
+    strategy = [{"strategy": "early_entry", "total_pnl": 1.0, "trade_count": 1, "win_rate": 1.0, "daily_pnl": 1.0, "weekly_pnl": 1.0}]
+    texts = [
+        portfolio_report_text(portfolio),
+        history_report_text(portfolio),
+        equity_report_text(portfolio),
+        trade_report_text(trade),
+        wallet_stats_report_text(wallet),
+        strategy_stats_report_text(strategy),
+    ]
+
+    assert "Paper Portfolio" in texts[0]
+    assert "Paper History" in texts[1]
+    assert "Paper Equity Curve" in texts[2]
+    assert "Paper Trade #1" in texts[3]
+    assert "Wallet Stats" in texts[4]
+    assert "Strategy Stats" in texts[5]
+    assert all(len(text) < 3500 for text in texts)
 
 
 def test_wallet_url_creation_validates_evm_addresses():

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from src.analysis.paper_portfolio import portfolio_report
 from src.services.results_service import fetch_trades, summarize_results
 from src.web.controls import automation_status, health_badges, prop_watch_service_card, run_allowed_command
 from src.web.db import OPPORTUNITIES_DB_PATH, POLYLENS_DB_PATH, load_json, rows_or_empty
@@ -515,7 +516,52 @@ def _render_results(db_path: str | Path, prop_db_path: str | Path, ui_state: dic
         ui.label("No trades yet").classes("text-gray-600")
     else:
         ui.table(columns=[{"name": key, "label": key.replace("_", " ").title(), "field": key} for key in trades[0]], rows=trades, pagination=25).classes("w-full")
+    _render_paper_portfolio_dashboard()
     _render_paper_prop_trades(prop_db_path, ui_state or {})
+
+
+def _render_paper_portfolio_dashboard(paper_db_path: str | Path = "data/paper_trading.db") -> None:
+    from nicegui import ui
+
+    ui.separator()
+    ui.label("Paper Portfolio").classes("text-xl font-semibold")
+    try:
+        report = portfolio_report(paper_db_path)
+    except Exception as exc:
+        ui.label(f"Paper portfolio unavailable: {exc}").classes("text-red-700")
+        return
+    portfolio = report.get("portfolio") or {}
+    pnl = report.get("pnl") or {}
+    with ui.row().classes("gap-3"):
+        _metric("Cash", _money(portfolio.get("cash")))
+        _metric("Equity Curve", _money(portfolio.get("total_equity")))
+        _metric("Buying Power", _money(portfolio.get("available_buying_power")))
+        _metric("Current Exposure", _percent(portfolio.get("exposure")))
+        _metric("Today P&L", _money(pnl.get("today")))
+        _metric("30 Day P&L", _money(pnl.get("thirty_day")))
+
+    _readonly_table("Trade History", report.get("ledger") or [])
+    _readonly_table("Equity Curve", report.get("equity_curve") or [])
+    _readonly_table("Wallet Performance", report.get("wallet_attribution") or [])
+    _readonly_table("Strategy Performance", report.get("strategy_attribution") or [])
+    _readonly_table("PnL Attribution", report.get("recent_trades") or [])
+    _readonly_table("Capital Allocation", report.get("strategy_attribution") or [])
+    _readonly_table("Recent Trades", report.get("recent_trades") or [])
+
+
+def _readonly_table(title: str, rows: list[dict[str, Any]]) -> None:
+    from nicegui import ui
+
+    ui.label(title).classes("text-lg font-semibold")
+    if not rows:
+        ui.label("No rows yet").classes("text-gray-600")
+        return
+    visible_keys = list(rows[0].keys())[:10]
+    ui.table(
+        columns=[{"name": key, "label": key.replace("_", " ").title(), "field": key} for key in visible_keys],
+        rows=[{key: row.get(key) for key in visible_keys} for row in rows[:50]],
+        pagination=10,
+    ).classes("w-full")
 
 
 def _render_paper_prop_trades(prop_db_path: str | Path, ui_state: dict[str, Any]) -> None:

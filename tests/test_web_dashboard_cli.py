@@ -65,3 +65,20 @@ def test_mission_control_tabs_and_responsive_grid_are_present() -> None:
     assert "grid-template-columns: 1fr" in css
     assert ".mc-shell" in css
     assert "width: 100%;" in css
+
+
+def test_dashboard_exposes_paper_portfolio_views() -> None:
+    source = (ROOT / "src" / "web" / "dashboard.py").read_text()
+
+    for label in (
+        "Paper Portfolio",
+        "Equity Curve",
+        "Trade History",
+        "Wallet Performance",
+        "Strategy Performance",
+        "PnL Attribution",
+        "Capital Allocation",
+        "Recent Trades",
+    ):
+        assert label in source
+    assert "portfolio_report" in source

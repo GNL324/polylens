@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB
 from src.analysis.paper_intelligence import paper_trading_intelligence
+from src.analysis.paper_portfolio import portfolio_report, strategy_attribution, trade_detail, wallet_attribution
 from src.analysis.short_crypto_paper import DEFAULT_DB_PATH as DEFAULT_SHORT_CRYPTO_PAPER_DB
 from src.analysis.paper_trading_service import paper_trading_health
 from src.analysis.trader_registry import DEFAULT_TRADERS_DB, top_traders, trader_summary
@@ -22,15 +23,21 @@ from src.intelligence.wallet_service_health import wallet_service_health_summary
 from src.integrations.telegram_notifications import (
     format_daily_intelligence_report,
     generate_daily_intelligence_report,
+    equity_report_text,
+    history_report_text,
     paper_pnl_report_text,
     paper_performance_report_text,
     paper_positions_report_text,
     paper_recent_report_text,
     paper_strategies_report_text,
+    portfolio_report_text,
     polymarket_analytics_wallet_buttons,
     signal_summary_report_text,
+    strategy_stats_report_text,
+    trade_report_text,
     wallet_summary_link_buttons,
     wallet_summary_report_text,
+    wallet_stats_report_text,
 )
 from src.sqlite_utils import closing_connection
 from src.trading.kill_switch import DEFAULT_READINESS_DB, KillSwitch
@@ -53,6 +60,14 @@ COMMANDS = (
     "/paper_pnl",
     "/paper_positions",
     "/paper_strategies",
+    "/portfolio",
+    "/history",
+    "/equity",
+    "/trade <id>",
+    "/wallet_stats <wallet>",
+    "/strategy_stats",
+    "/top_winners",
+    "/top_losers",
     "/risk",
     "/kill_switch",
 )
@@ -60,7 +75,6 @@ LIVE_COMMANDS = {
     "/buy",
     "/sell",
     "/order",
-    "/trade",
     "/kill_switch",
     "/resume_trading",
 }
@@ -80,6 +94,12 @@ CALLBACK_COMMANDS = {
     "paper_pnl": "/paper_pnl",
     "paper_positions": "/paper_positions",
     "paper_strategies": "/paper_strategies",
+    "portfolio": "/portfolio",
+    "history": "/history",
+    "equity": "/equity",
+    "strategy_stats": "/strategy_stats",
+    "top_winners": "/top_winners",
+    "top_losers": "/top_losers",
 }
 MENU_CALLBACKS = {
     "menu_main": "main",
@@ -159,6 +179,7 @@ class TelegramConsole:
         signals_provider: Provider | None = None,
         paper_provider: Provider | None = None,
         paper_intelligence_provider: Provider | None = None,
+        portfolio_provider: Provider | None = None,
         risk_provider: Provider | None = None,
         top_wallets_provider: Callable[[], list[Any]] | None = None,
         wallet_provider: Callable[[str], dict[str, Any] | None] | None = None,
@@ -173,6 +194,7 @@ class TelegramConsole:
                 short_crypto_db_path=config.short_crypto_paper_db_path,
             )
         )
+        self.portfolio_provider = portfolio_provider or (lambda: portfolio_report(db_path=config.paper_db_path))
         self.risk_provider = risk_provider or (lambda: KillSwitch(db_path=config.readiness_db_path).status())
         self.top_wallets_provider = top_wallets_provider or (lambda: top_traders(limit=5, db_path=DEFAULT_TRADERS_DB))
         self.wallet_provider = wallet_provider or (lambda wallet: trader_summary(wallet, db_path=DEFAULT_TRADERS_DB))
@@ -374,6 +396,22 @@ class TelegramConsole:
             return TelegramResponse(paper_positions_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
         if command == "/paper_strategies":
             return TelegramResponse(paper_strategies_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
+        if command == "/portfolio":
+            return TelegramResponse(portfolio_report_text(self.portfolio_provider()), reply_markup=_portfolio_reply_markup())
+        if command == "/history":
+            return TelegramResponse(history_report_text(self.portfolio_provider()), reply_markup=_portfolio_reply_markup())
+        if command == "/equity":
+            return TelegramResponse(equity_report_text(self.portfolio_provider()), reply_markup=_portfolio_reply_markup())
+        if command == "/trade":
+            return self._trade_response(args)
+        if command == "/wallet_stats":
+            return self._wallet_stats_response(args)
+        if command == "/strategy_stats":
+            return TelegramResponse(strategy_stats_report_text(strategy_attribution(self.config.paper_db_path)), reply_markup=_strategy_reply_markup())
+        if command == "/top_winners":
+            return TelegramResponse(_top_trades_text(self.portfolio_provider(), winners=True), reply_markup=_portfolio_reply_markup())
+        if command == "/top_losers":
+            return TelegramResponse(_top_trades_text(self.portfolio_provider(), winners=False), reply_markup=_portfolio_reply_markup())
         if command == "/risk":
             return self._menu_response(format_risk(self.risk_provider()))
         if command == "/report_daily":
@@ -404,6 +442,24 @@ class TelegramConsole:
             f"reports={summary.get('report_count', 0)}"
         )
         return TelegramResponse(text, reply_markup=_wallet_links_reply_markup([wallet]))
+
+    def _trade_response(self, args: str) -> TelegramResponse:
+        raw = args.strip().split()[0] if args.strip() else ""
+        try:
+            trade_id = int(raw)
+        except ValueError:
+            return TelegramResponse("trade: provide a numeric paper trade id")
+        row = trade_detail(self.config.paper_db_path, trade_id)
+        wallets = [row.get("wallet")] if row else []
+        return TelegramResponse(trade_report_text(row), reply_markup=_wallet_links_reply_markup(wallets, menu_name="reports"))
+
+    def _wallet_stats_response(self, args: str) -> TelegramResponse:
+        wallet = args.strip().split()[0] if args.strip() else ""
+        if not WALLET_RE.match(wallet):
+            return TelegramResponse("wallet_stats: provide a valid 0x address")
+        rows = wallet_attribution(self.config.paper_db_path)
+        row = next((item for item in rows if str(item.get("wallet", "")).lower() == wallet.lower()), None)
+        return TelegramResponse(wallet_stats_report_text(row or {"wallet": wallet}), reply_markup=_wallet_links_reply_markup([wallet], menu_name="reports"))
 
     def _telegram_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         url = f"{TELEGRAM_API_BASE}/bot{self.config.bot_token}/{method}"
@@ -615,6 +671,10 @@ def menu_reply_markup(menu_name: str = "main") -> dict[str, Any]:
                 [{"text": "Paper PnL", "callback_data": "paper_pnl"}],
                 [{"text": "Open Positions", "callback_data": "paper_positions"}],
                 [{"text": "Paper Strategies", "callback_data": "paper_strategies"}],
+                [{"text": "Portfolio", "callback_data": "portfolio"}],
+                [{"text": "Trade History", "callback_data": "history"}],
+                [{"text": "Equity Curve", "callback_data": "equity"}],
+                [{"text": "Strategy Stats", "callback_data": "strategy_stats"}],
                 [_back_button()],
             ]
         )
@@ -641,6 +701,20 @@ def _wallet_links_reply_markup(wallets: list[Any], *, menu_name: str | None = No
     return _wallet_link_rows_reply_markup(polymarket_analytics_wallet_buttons(wallets), menu_name=menu_name)
 
 
+def _portfolio_reply_markup() -> dict[str, Any]:
+    return _menu_markup(
+        [
+            [{"text": "View Position", "callback_data": "history"}],
+            [{"text": "View Strategy", "callback_data": "strategy_stats"}],
+            *menu_reply_markup("reports")["inline_keyboard"],
+        ]
+    )
+
+
+def _strategy_reply_markup() -> dict[str, Any]:
+    return _menu_markup([[{"text": "View Strategy", "callback_data": "strategy_stats"}], *menu_reply_markup("reports")["inline_keyboard"]])
+
+
 def _wallet_link_rows_reply_markup(rows: list[list[dict[str, str]]], *, menu_name: str | None = None) -> dict[str, Any] | None:
     menu_rows = menu_reply_markup(menu_name)["inline_keyboard"] if menu_name else []
     combined = [*rows, *menu_rows]
@@ -657,6 +731,26 @@ def _wallets_from_rows(rows: Any) -> list[str]:
         if wallet:
             wallets.append(wallet)
     return wallets
+
+
+def _top_trades_text(report: dict[str, Any], *, winners: bool) -> str:
+    rows = list(report.get("recent_trades") or [])
+    rows.sort(key=lambda row: float(row.get("net_pnl") or 0), reverse=winners)
+    title = "Top Winners" if winners else "Top Losers"
+    if not rows:
+        return f"{title}\nNo closed paper trades"
+    lines = [title]
+    for row in rows[:5]:
+        lines.append(
+            f"#{row.get('paper_position_id')} {row.get('strategy') or 'unknown'} "
+            f"{float(row.get('net_pnl') or 0):+.2f} | {_truncate(row.get('market'), 70)}"
+        )
+    return safe_telegram_text("\n".join(lines))
+
+
+def _truncate(value: Any, limit: int) -> str:
+    text = str(value or "unknown").replace("\n", " ").strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "..."
 
 
 def _menu_markup(rows: list[list[dict[str, str]]]) -> dict[str, Any]:
