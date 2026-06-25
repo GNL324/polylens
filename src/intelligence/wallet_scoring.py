@@ -65,8 +65,8 @@ def _latest_activity_timestamp(wallet: str, wallet_activity_db_path: str | Path)
 
 
 def _paper_wallet_stats(wallet: str, paper_copy_db_path: str | Path) -> dict[str, Any]:
-    report = paper_copy_report(db_path=paper_copy_db_path)
-    return dict(report.get("by_wallet", {}).get(wallet.lower(), {}))
+    from src.analysis.paper_copy_trader import paper_copy_report_by_wallet
+    return paper_copy_report_by_wallet(wallet, db_path=paper_copy_db_path)
 
 
 class WalletScorer:

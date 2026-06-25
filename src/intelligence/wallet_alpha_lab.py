@@ -158,7 +158,8 @@ class WalletAlphaLab:
         wallet = str(wallet or "").strip().lower()
         perf = self._performance.score_wallet(wallet)
         validations = _wallet_validation_stats(self.signal_db_path).get(wallet, {})
-        copy = paper_copy_report(db_path=self.paper_copy_db_path).get("by_wallet", {}).get(wallet, {})
+        from src.analysis.paper_copy_trader import paper_copy_report_by_wallet
+        copy = paper_copy_report_by_wallet(wallet, db_path=self.paper_copy_db_path)
         closed = int(copy.get("closed_positions") or 0)
         roi = _safe_float(copy.get("roi"))
         win_rate = _safe_float(copy.get("win_rate") if copy.get("win_rate") is not None else perf.metrics.get("win_rate"))
@@ -326,9 +327,9 @@ class WalletAlphaLab:
         def _cohort_stats(wallets: list[str]) -> dict[str, Any]:
             if not wallets:
                 return {"count": 0, "avg_alpha": 0.0, "avg_roi": 0.0}
+            from src.analysis.paper_copy_trader import paper_copy_report_by_wallet
             alphas = [self.analyze_wallet(w).alpha_score for w in wallets[:30]]
-            copy = paper_copy_report(db_path=self.paper_copy_db_path).get("by_wallet", {})
-            rois = [_safe_float(copy.get(w, {}).get("roi")) for w in wallets[:30] if copy.get(w)]
+            rois = [_safe_float(paper_copy_report_by_wallet(w, db_path=self.paper_copy_db_path).get("roi")) for w in wallets[:30]]
             return {
                 "count": len(wallets),
                 "avg_alpha": round(statistics.mean(alphas), 4) if alphas else 0.0,

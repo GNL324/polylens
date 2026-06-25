@@ -241,6 +241,48 @@ def paper_copy_report(db_path: str | Path = DEFAULT_PAPER_COPY_DB) -> dict[str, 
     }
 
 
+def paper_copy_report_by_wallet(
+    wallet: str,
+    *,
+    db_path: str | Path = DEFAULT_PAPER_COPY_DB,
+) -> dict[str, Any]:
+    """Return paper-copy stats for a single wallet via SQL-level filtering.
+
+    Avoids loading all positions into memory when only one wallet is needed.
+    """
+    init_paper_copy_db(db_path)
+    wallet = str(wallet or "").strip().lower()
+    with closing_connection(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS copied_trades,
+                SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_positions,
+                SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) AS closed_positions,
+                ROUND(COALESCE(SUM(CASE WHEN status = 'closed' THEN COALESCE(pnl, 0.0) ELSE 0.0 END), 0.0), 6) AS realized_pnl,
+                COALESCE(SUM(CASE WHEN status = 'closed' THEN COALESCE(notional, 0.0) ELSE 0.0 END), 0.0) AS closed_notional,
+                SUM(CASE WHEN status = 'closed' AND COALESCE(pnl, 0.0) > 0 THEN 1 ELSE 0 END) AS wins
+            FROM paper_copy_positions
+            WHERE source_wallet = ?
+            """,
+            (wallet,),
+        ).fetchone()
+    copied = int(row["copied_trades"] or 0)
+    open_pos = int(row["open_positions"] or 0)
+    closed_pos = int(row["closed_positions"] or 0)
+    realized_pnl = float(row["realized_pnl"] or 0.0)
+    closed_notional = float(row["closed_notional"] or 0.0)
+    wins = int(row["wins"] or 0)
+    return {
+        "copied_trades": copied,
+        "open_positions": open_pos,
+        "closed_positions": closed_pos,
+        "realized_pnl": realized_pnl,
+        "roi": round(_ratio(realized_pnl, closed_notional), 6),
+        "win_rate": round(_ratio(wins, closed_pos), 6),
+    }
+
+
 def _create_run(db_path: str | Path, wallets_scanned: int) -> int:
     with closing_connection(db_path) as conn:
         cur = conn.execute(
@@ -394,15 +436,16 @@ def _report_segment(rows: list[Any], key: str) -> dict[str, dict[str, Any]]:
     buckets: dict[str, dict[str, Any]] = {}
     for row in rows:
         label = str(row[key] or "unknown")
-        bucket = buckets.setdefault(label, {"copied_trades": 0, "open_positions": 0, "closed_positions": 0, "realized_pnl": 0.0, "roi": 0.0})
+        bucket = buckets.setdefault(label, {"copied_trades": 0, "open_positions": 0, "closed_positions": 0, "realized_pnl": 0.0, "notional": 0.0, "roi": 0.0})
         bucket["copied_trades"] += 1
         if row["status"] == "closed":
             bucket["closed_positions"] += 1
             bucket["realized_pnl"] += float(row["pnl"] or 0.0)
+            bucket["notional"] += float(row["notional"] or 0.0)
         else:
             bucket["open_positions"] += 1
     for label, bucket in buckets.items():
-        notional = sum(float(row["notional"] or 0.0) for row in rows if str(row[key] or "unknown") == label and row["status"] == "closed")
+        notional = bucket.pop("notional", 0.0)
         bucket["realized_pnl"] = round(bucket["realized_pnl"], 6)
         bucket["roi"] = round(_ratio(bucket["realized_pnl"], notional), 6)
     return dict(sorted(buckets.items()))

@@ -133,6 +133,61 @@ def test_report_metrics_by_wallet_and_asset(tmp_path):
     assert report["by_asset"]["BTC"]["closed_positions"] == 1
 
 
+def test_report_by_wallet_matches_full_report(tmp_path):
+    """paper_copy_report_by_wallet must produce the same per-wallet stats as paper_copy_report."""
+    from src.analysis.paper_copy_trader import paper_copy_report_by_wallet
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+    run_paper_copy_trader(db_path=db_path, exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5)]))
+    run_paper_copy_trader(db_path=db_path, exporter=FakeExporter([_event("sell", timestamp=200, tx_hash="0xsell1", price=0.25)]))
+
+    full = paper_copy_report(db_path)
+    by_wallet = paper_copy_report_by_wallet(WALLET, db_path=db_path)
+    full_wallet = full["by_wallet"][WALLET]
+
+    assert by_wallet["copied_trades"] == full_wallet["copied_trades"]
+    assert by_wallet["open_positions"] == full_wallet["open_positions"]
+    assert by_wallet["closed_positions"] == full_wallet["closed_positions"]
+    assert by_wallet["realized_pnl"] == full_wallet["realized_pnl"]
+    assert by_wallet["roi"] == full_wallet["roi"]
+
+
+def test_report_by_wallet_for_nonexistent_wallet_returns_zeros(tmp_path):
+    """paper_copy_report_by_wallet for a wallet with no positions should return zeros."""
+    from src.analysis.paper_copy_trader import paper_copy_report_by_wallet
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+
+    result = paper_copy_report_by_wallet("0x" + "z" * 40, db_path=db_path)
+    assert result["copied_trades"] == 0
+    assert result["open_positions"] == 0
+    assert result["closed_positions"] == 0
+    assert result["realized_pnl"] == 0.0
+    assert result["roi"] == 0.0
+    assert result["win_rate"] == 0.0
+
+
+def test_report_segment_single_pass_notional(tmp_path):
+    """_report_segment must compute notional in a single pass, not O(N²) scan."""
+    from src.analysis.paper_copy_trader import _report_segment
+
+    rows = [
+        {"source_wallet": "0xaaa", "status": "closed", "pnl": 1.0, "notional": 10.0},
+        {"source_wallet": "0xaaa", "status": "open", "pnl": 0.0, "notional": 5.0},
+        {"source_wallet": "0xbbb", "status": "closed", "pnl": -2.0, "notional": 20.0},
+        {"source_wallet": "0xbbb", "status": "closed", "pnl": 3.0, "notional": 15.0},
+    ]
+    result = _report_segment(rows, "source_wallet")
+    assert result["0xaaa"]["realized_pnl"] == 1.0
+    assert result["0xaaa"]["closed_positions"] == 1
+    assert result["0xaaa"]["roi"] == round(1.0 / 10.0, 6)
+    assert result["0xbbb"]["realized_pnl"] == 1.0
+    assert result["0xbbb"]["closed_positions"] == 2
+    assert result["0xbbb"]["roi"] == round(1.0 / 35.0, 6)
+
+
 def test_run_respects_max_stake_per_wallet_per_run(tmp_path):
     db_path = tmp_path / "paper_copy.db"
     watch_trader(WALLET, db_path=db_path)
