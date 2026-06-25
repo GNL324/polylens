@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from src.cicd.dashboard import create_deployment_status_page
 from src.web.dashboard import create_dashboard
 from src.web.mission_control import create_mission_control_page
 
@@ -28,5 +29,5 @@ def run_web_dashboard(host: str | None = None, port: int | None = None, db_path:
 
     create_dashboard(db_path=db_path)
     create_mission_control_page(polylens_db_path=db_path)
+    create_deployment_status_page(repo_path=Path.cwd())
     ui.run(host=bind_host, port=bind_port, title="Polylens Command Center", reload=False, show=False)
-

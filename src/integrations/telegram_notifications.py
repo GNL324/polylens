@@ -144,6 +144,24 @@ class TelegramNotificationService:
         text = format_system_health_alert(event)
         return self.send_notification("system_health_alert", text, buttons=_system_buttons())
 
+    def send_deployment_success(self, report: dict[str, Any], *, report_url: str | None = None) -> dict[str, Any]:
+        from src.cicd.telegram import deployment_buttons, format_deployment_success
+
+        return self.send_notification(
+            "deployment_success",
+            format_deployment_success(report),
+            buttons=deployment_buttons(report_url),
+        )
+
+    def send_deployment_failure(self, report: dict[str, Any], *, report_url: str | None = None) -> dict[str, Any]:
+        from src.cicd.telegram import deployment_buttons, format_deployment_failure
+
+        return self.send_notification(
+            "deployment_failure",
+            format_deployment_failure(report),
+            buttons=deployment_buttons(report_url),
+        )
+
     def send_daily_report(self, report: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = report or generate_daily_intelligence_report()
         return self.send_notification(

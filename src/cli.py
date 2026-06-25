@@ -4503,6 +4503,37 @@ def main() -> None:
     telegram_daily_parser.add_argument("--dry-run", action="store_true", help="print report without Telegram delivery")
     telegram_daily_parser.add_argument("--json", action="store_true")
 
+    cicd_detect_parser = sub.add_parser("cicd-detect", help="detect new Gitea main commits and affected runtime services")
+    cicd_detect_parser.add_argument("--repo-path", default=".")
+    cicd_detect_parser.add_argument("--remote", default="origin")
+    cicd_detect_parser.add_argument("--branch", default="main")
+    cicd_detect_parser.add_argument("--state-path", default="reports/deployments/state.json")
+    cicd_detect_parser.add_argument("--no-fetch", action="store_true")
+    cicd_detect_parser.add_argument("--json", action="store_true")
+
+    cicd_smoke_parser = sub.add_parser("cicd-smoke", help="run structured deployment smoke checks")
+    cicd_smoke_parser.add_argument("--repo-path", default=".")
+    cicd_smoke_parser.add_argument("--tag", action="append", default=[])
+    cicd_smoke_parser.add_argument("--unit", action="append", default=[])
+    cicd_smoke_parser.add_argument("--json", action="store_true")
+
+    cicd_deploy_parser = sub.add_parser("cicd-deploy", help="plan or execute Predix deployment for detected Gitea main changes")
+    cicd_deploy_parser.add_argument("--repo-path", default=".")
+    cicd_deploy_parser.add_argument("--remote", default="origin")
+    cicd_deploy_parser.add_argument("--branch", default="main")
+    cicd_deploy_parser.add_argument("--runtime-host", default="noel@192.168.68.62")
+    cicd_deploy_parser.add_argument("--runtime-repo", default="/home/noel/polylens")
+    cicd_deploy_parser.add_argument("--report-dir", default="reports/deployments")
+    cicd_deploy_parser.add_argument("--execute", action="store_true", help="perform git pull, service restarts, and smoke checks on Predix")
+    cicd_deploy_parser.add_argument("--allow-rollback", action="store_true", help="allow configured rollback execution if Hermes enables it")
+    cicd_deploy_parser.add_argument("--json", action="store_true")
+
+    cicd_status_parser = sub.add_parser("cicd-status", help="read-only deployment status snapshot")
+    cicd_status_parser.add_argument("--repo-path", default=".")
+    cicd_status_parser.add_argument("--report-dir", default="reports/deployments")
+    cicd_status_parser.add_argument("--limit", type=int, default=20)
+    cicd_status_parser.add_argument("--json", action="store_true")
+
     wallet_acquire_parser = sub.add_parser("wallet-acquire", help="run wallet data acquisition pipeline")
     wallet_acquire_parser.add_argument("--limit", type=int, default=100)
     wallet_acquire_parser.add_argument("--json", action="store_true")
@@ -5230,6 +5261,61 @@ def main() -> None:
         else:
             print(format_daily_intelligence_report(report))
             print(f"Delivery: {result.get('delivery_status')}")
+    elif args.command == "cicd-detect":
+        from src.cicd.detector import GitDeploymentDetector
+
+        result = GitDeploymentDetector(
+            repo_path=args.repo_path,
+            remote=args.remote,
+            branch=args.branch,
+            state_path=args.state_path,
+        ).detect(fetch=not args.no_fetch)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        else:
+            print(f"{result['branch']} {str(result['current_commit'])[:12]} new={result['new_commits']}")
+            print("Affected units: " + (", ".join(result["affected_units"]) if result["affected_units"] else "none"))
+    elif args.command == "cicd-smoke":
+        from src.cicd.engine import run_local_smoke
+
+        result = run_local_smoke(repo_path=args.repo_path, tags=args.tag, units=args.unit)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        else:
+            print(f"Smoke {result['status']}: {result['summary']['passed']}/{result['summary']['total']} passed")
+    elif args.command == "cicd-deploy":
+        from src.cicd.detector import GitDeploymentDetector
+        from src.cicd.engine import DeploymentEngine, DeploymentEngineConfig
+
+        detection = GitDeploymentDetector(repo_path=args.repo_path, remote=args.remote, branch=args.branch).detect(fetch=True)
+        engine = DeploymentEngine(
+            DeploymentEngineConfig(
+                runtime_host=args.runtime_host,
+                runtime_repo=args.runtime_repo,
+                report_dir=args.report_dir,
+                execute=args.execute,
+                rollback_enabled=args.allow_rollback,
+            )
+        )
+        result = engine.deploy(detection)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        else:
+            report = result["report"]
+            mode = report["deployment"].get("mode")
+            print(f"Deployment {report['status']} ({mode}) for {str(report.get('commit'))[:12]}")
+            print(f"Report: {result['files']['markdown']}")
+    elif args.command == "cicd-status":
+        from src.cicd.dashboard import DeploymentStatus
+
+        result = DeploymentStatus(repo_path=args.repo_path, report_dir=args.report_dir).snapshot(limit=args.limit)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        else:
+            print(f"Branch: {result['current_branch']}")
+            print(f"Commit: {str(result['current_commit'])[:12]}")
+            print(f"Health: {result['health'].get('status', 'unknown')}")
+            print(f"Deployments: {len(result['deployment_history'])}")
     elif args.command == "wallet-acquire":
         wallet_acquire_cli(as_json=args.json, limit=args.limit)
     elif args.command == "wallet-seed-import":
