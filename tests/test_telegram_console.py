@@ -4,7 +4,10 @@ import sqlite3
 
 import pytest
 
+from src.analysis.paper_intelligence import paper_trading_intelligence
+from src.analysis.paper_trading_engine import init_paper_trading_db
 from src.integrations.telegram_console import (
+    MAX_TELEGRAM_TEXT,
     TelegramConsole,
     TelegramConsoleConfig,
     TelegramConsoleConfigError,
@@ -15,7 +18,12 @@ from src.integrations.telegram_notifications import (
     TelegramNotificationService,
     format_daily_intelligence_report,
     generate_daily_intelligence_report,
+    polymarket_analytics_wallet_buttons,
 )
+
+
+VALID_WALLET = "0x7af3f727e86394ca3986a1f786b888c7904e83fe"
+WALLET_URL = f"https://polymarketanalytics.com/traders/{VALID_WALLET}"
 
 
 def _config(tmp_path, admins=(123,), token="secret-token") -> TelegramConsoleConfig:
@@ -26,12 +34,114 @@ def _config(tmp_path, admins=(123,), token="secret-token") -> TelegramConsoleCon
     )
 
 
+def _paper_report():
+    return {
+        "read_only": True,
+        "paper_only": True,
+        "recent_trades": [
+            {
+                "strategy": "early_entry",
+                "status": "WIN",
+                "pnl": 4.2,
+                "realized_pnl": 4.2,
+                "unrealized_pnl": 0,
+                "market_title": "Will BTC close above 100k?",
+                "opened_at": "2026-06-24T10:15:00Z",
+                "closed_at": "2026-06-24T13:45:00Z",
+            },
+            {
+                "strategy": "conviction",
+                "status": "OPEN",
+                "pnl": 0,
+                "realized_pnl": 0,
+                "unrealized_pnl": 0,
+                "market_title": "Will ETH close green?",
+                "opened_at": "2026-06-24T14:00:00Z",
+                "closed_at": None,
+            },
+        ],
+        "recent_fills": [],
+        "open_positions": [
+            {
+                "strategy": "conviction",
+                "status": "OPEN",
+                "unrealized_pnl": 0,
+                "market_title": "Will ETH close green?",
+                "opened_at": "2026-06-24T14:00:00Z",
+            }
+        ],
+        "closed_positions": [],
+        "daily_pnl": 0.0,
+        "pnl_7d": 12.84,
+        "total_pnl": 103.55,
+        "win_rate": 0.583,
+        "trade_count": 48,
+        "open_positions_count": 1,
+        "closed_positions_count": 47,
+        "strategy_breakdown": {
+            "early_entry": {
+                "strategy": "early_entry",
+                "trade_count": 10,
+                "open_positions": 0,
+                "closed_positions": 10,
+                "realized_pnl": 44.2,
+                "unrealized_pnl": 0,
+                "win_rate": 0.6,
+            },
+            "conviction": {
+                "strategy": "conviction",
+                "trade_count": 12,
+                "open_positions": 1,
+                "closed_positions": 11,
+                "realized_pnl": -2.0,
+                "unrealized_pnl": 0,
+                "win_rate": 0.5,
+            },
+        },
+        "top_strategy": {"strategy": "early_entry", "realized_pnl": 44.2, "unrealized_pnl": 0, "trade_count": 10, "win_rate": 0.6},
+        "worst_strategy": {"strategy": "conviction", "realized_pnl": -2.0, "unrealized_pnl": 0, "trade_count": 12, "win_rate": 0.5},
+        "warnings": [],
+    }
+
+
+def _empty_paper_report():
+    payload = _paper_report()
+    payload.update(
+        {
+            "recent_trades": [],
+            "recent_fills": [],
+            "open_positions": [],
+            "closed_positions": [],
+            "daily_pnl": 0,
+            "pnl_7d": 0,
+            "total_pnl": 0,
+            "win_rate": 0,
+            "trade_count": 0,
+            "open_positions_count": 0,
+            "closed_positions_count": 0,
+            "strategy_breakdown": {},
+            "top_strategy": None,
+            "worst_strategy": None,
+        }
+    )
+    return payload
+
+
 def _callback_ids(reply_markup):
     return {
         button["callback_data"]
         for row in reply_markup["inline_keyboard"]
         for button in row
     }
+
+
+def _button_urls(reply_markup):
+    return [
+        button["url"]
+        for row in reply_markup["inline_keyboard"]
+        for button in row
+        if "url" in button
+    ]
 
 
 def test_unauthorized_user_rejected(tmp_path):
@@ -169,6 +279,51 @@ def test_callback_health_routes_to_health_logic(tmp_path):
     assert response.reply_markup is not None
 
 
+def test_wallet_command_adds_polymarket_analytics_button(tmp_path):
+    console = TelegramConsole(
+        _config(tmp_path, admins=(123,)),
+        wallet_provider=lambda wallet: {
+            "wallet": wallet,
+            "classification": "arbitrage_trader",
+            "watch_score": 91,
+            "confidence": 0.8,
+            "report_count": 3,
+        },
+    )
+
+    response = console.handle_text(123, f"/wallet {VALID_WALLET}")
+
+    assert "Wallet 0x7af3...83fe" in response
+    assert response.reply_markup is not None
+    assert WALLET_URL in _button_urls(response.reply_markup)
+
+
+def test_malformed_wallet_command_does_not_create_link(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+
+    response = console.handle_text(123, "/wallet not-a-wallet")
+
+    assert response == "wallet: provide a valid 0x address"
+    assert response.reply_markup is None
+
+
+def test_top_wallets_adds_valid_polymarket_analytics_buttons_only(tmp_path):
+    console = TelegramConsole(
+        _config(tmp_path, admins=(123,)),
+        top_wallets_provider=lambda: [
+            {"wallet": VALID_WALLET, "watch_score": 91, "classification": "arbitrage"},
+            {"wallet": "wallet-123", "watch_score": 12, "classification": "bad"},
+        ],
+    )
+
+    response = console.handle_text(123, "/top_wallets")
+
+    assert "Top wallets:" in response
+    assert response.reply_markup is not None
+    assert WALLET_URL in _button_urls(response.reply_markup)
+    assert all("wallet-123" not in url for url in _button_urls(response.reply_markup))
+
+
 def test_report_callback_daily_brief(monkeypatch, tmp_path):
     console = TelegramConsole(_config(tmp_path, admins=(123,)))
     report = {
@@ -183,7 +338,7 @@ def test_report_callback_daily_brief(monkeypatch, tmp_path):
     response = console.handle_callback(123, "report_daily")
 
     assert "Polylens Daily Intelligence Brief" in response
-    assert "Daily PnL: $1.50" in response
+    assert "Daily PnL: +$1.50" in response
     assert response.reply_markup is not None
     assert "report_paper" in _callback_ids(response.reply_markup)
 
@@ -223,6 +378,224 @@ def test_callback_audit_row_written(tmp_path):
         ).fetchone()
 
     assert row == (123, "callback:health", "", 1, "ok", None)
+
+
+def test_reports_menu_contains_paper_intelligence_callbacks(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+
+    response = console.handle_callback(123, "menu_reports")
+
+    assert response.reply_markup is not None
+    assert _callback_ids(response.reply_markup) == {
+        "report_daily",
+        "report_signals",
+        "report_wallets",
+        "report_paper",
+        "paper_recent",
+        "paper_pnl",
+        "paper_positions",
+        "paper_strategies",
+        "menu_main",
+    }
+
+
+def test_wallet_summary_callback_adds_wallet_link_button(monkeypatch, tmp_path):
+    monkeypatch.setattr("src.integrations.telegram_console.wallet_summary_report_text", lambda: f"Wallet Summary\nWallets: {VALID_WALLET}")
+    monkeypatch.setattr(
+        "src.integrations.telegram_console.wallet_summary_link_buttons",
+        lambda: polymarket_analytics_wallet_buttons([VALID_WALLET, "bad-wallet"]),
+    )
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+
+    response = console.handle_callback(123, "report_wallets")
+
+    assert "Wallet Summary" in response
+    assert response.reply_markup is not None
+    assert WALLET_URL in _button_urls(response.reply_markup)
+
+
+def test_paper_recent_command(tmp_path):
+    payload = _paper_report()
+    payload["recent_trades"][0]["wallet"] = VALID_WALLET
+    console = TelegramConsole(_config(tmp_path, admins=(123,)), paper_intelligence_provider=lambda: payload)
+
+    response = console.handle_text(123, "/paper_recent")
+
+    assert "Recent Paper Trades" in response
+    assert "early_entry | WIN | +$4.20" in response
+    assert "Will BTC close above 100k?" in response
+    assert f"Wallet: {VALID_WALLET}" in response
+    assert response.reply_markup is not None
+    assert WALLET_URL in _button_urls(response.reply_markup)
+
+
+def test_paper_pnl_command(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)), paper_intelligence_provider=_paper_report)
+
+    response = console.handle_text(123, "/paper_pnl")
+
+    assert "Paper PnL" in response
+    assert "Today: $0.00" in response
+    assert "7D: +$12.84" in response
+    assert "Total: +$103.55" in response
+    assert "Win rate: 58.3%" in response
+    assert "Trades: 48" in response
+
+
+def test_paper_positions_command(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)), paper_intelligence_provider=_paper_report)
+
+    response = console.handle_text(123, "/paper_positions")
+
+    assert "Open Paper Positions" in response
+    assert "Open: 1" in response
+    assert "conviction | $0.00" in response
+
+
+def test_paper_strategies_command(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)), paper_intelligence_provider=_paper_report)
+
+    response = console.handle_text(123, "/paper_strategies")
+
+    assert "Paper Strategies" in response
+    assert "early_entry: +$44.20 trades=10 win=60.0%" in response
+    assert "conviction: -$2.00 trades=12 win=50.0%" in response
+
+
+@pytest.mark.parametrize(
+    ("callback_id", "heading"),
+    [
+        ("paper_recent", "Recent Paper Trades"),
+        ("paper_pnl", "Paper PnL"),
+        ("paper_positions", "Open Paper Positions"),
+        ("paper_strategies", "Paper Strategies"),
+    ],
+)
+def test_paper_callbacks_route_and_audit(tmp_path, callback_id, heading):
+    config = _config(tmp_path, admins=(123,))
+    console = TelegramConsole(config, paper_intelligence_provider=_paper_report)
+
+    response = console.handle_callback(123, callback_id)
+
+    assert heading in response
+    assert response.reply_markup is not None
+    with sqlite3.connect(config.audit_db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT command, allowed, result_status
+            FROM telegram_command_audit
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    assert row == (f"callback:{callback_id}", 1, "ok")
+
+
+@pytest.mark.parametrize("command", ["/paper_recent", "/paper_pnl", "/paper_positions", "/paper_strategies"])
+def test_paper_command_audit_rows(tmp_path, command):
+    config = _config(tmp_path, admins=(123,))
+    console = TelegramConsole(config, paper_intelligence_provider=_paper_report)
+
+    console.handle_text(123, command)
+
+    with sqlite3.connect(config.audit_db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT command, allowed, result_status, error_message
+            FROM telegram_command_audit
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    assert row == (command, 1, "ok", None)
+
+
+def test_empty_db_behavior(tmp_path):
+    db_path = tmp_path / "empty.db"
+    db_path.write_bytes(b"")
+
+    report = paper_trading_intelligence(db_path=db_path, short_crypto_db_path=tmp_path / "missing_short.db")
+
+    assert report["trade_count"] == 0
+    assert report["recent_trades"] == []
+    assert report["open_positions_count"] == 0
+
+
+def test_no_paper_trades_behavior(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)), paper_intelligence_provider=_empty_paper_report)
+
+    recent = console.handle_text(123, "/paper_recent")
+    strategies = console.handle_text(123, "/paper_strategies")
+
+    assert recent == "Recent Paper Trades\nNone"
+    assert strategies == "Paper Strategies\nNo paper trades"
+
+
+def test_paper_outputs_are_telegram_safe(tmp_path):
+    payload = _paper_report()
+    payload["recent_trades"] = [
+        {
+            "strategy": "early_entry",
+            "status": "WIN",
+            "pnl": 1,
+            "realized_pnl": 1,
+            "unrealized_pnl": 0,
+            "market_title": "Very long market title " * 80,
+            "opened_at": "2026-06-24T10:15:00Z",
+            "closed_at": "2026-06-24T13:45:00Z",
+        }
+        for _ in range(80)
+    ]
+    console = TelegramConsole(_config(tmp_path, admins=(123,)), paper_intelligence_provider=lambda: payload)
+
+    response = console.handle_text(123, "/paper_recent")
+
+    assert len(response.text) <= MAX_TELEGRAM_TEXT
+
+
+def test_paper_intelligence_does_not_mutate_paper_tables(tmp_path):
+    db_path = tmp_path / "paper.db"
+    init_paper_trading_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO paper_orders
+            (id, run_id, opportunity_id, strategy, side, market_id, title, asset, simulated_price, stake, status, raw_json)
+            VALUES (1, 1, 'opp-1', 'early_entry', 'yes', 'm1', 'Market 1', 'BTC', 0.5, 2, 'filled', '{}')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_positions
+            (paper_position_id, order_id, opportunity_id, strategy, market_id, title, asset, side, entry_timestamp, entry_price, shares, notional, status, current_price, exit_timestamp, exit_price, realized_pnl, unrealized_pnl, roi)
+            VALUES (1, 1, 'opp-1', 'early_entry', 'm1', 'Market 1', 'BTC', 'yes', '2026-06-24T10:00:00Z', 0.5, 4, 2, 'closed', 0.5, '2026-06-24T11:00:00Z', 0.75, 1, 0, 0.5)
+            """
+        )
+        before = {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("paper_orders", "paper_positions", "paper_settlements", "paper_equity_curve")
+        }
+
+    config = _config(tmp_path, admins=(123,))
+    config = TelegramConsoleConfig(
+        bot_token=config.bot_token,
+        admin_user_ids=config.admin_user_ids,
+        audit_db_path=config.audit_db_path,
+        paper_db_path=str(db_path),
+        short_crypto_paper_db_path=str(tmp_path / "missing_short.db"),
+    )
+    console = TelegramConsole(config)
+    console.handle_text(123, "/paper_recent")
+    console.handle_text(123, "/paper_pnl")
+    console.handle_text(123, "/paper_positions")
+    console.handle_text(123, "/paper_strategies")
+
+    with sqlite3.connect(db_path) as conn:
+        after = {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("paper_orders", "paper_positions", "paper_settlements", "paper_equity_curve")
+        }
+    assert after == before
 
 
 def test_menu_callback_audit_row_written(tmp_path):
@@ -437,8 +810,17 @@ def test_daily_report_generation(monkeypatch, tmp_path):
         lambda **kwargs: {"status": "healthy", "signal_count": 5},
     )
     monkeypatch.setattr(
-        "src.integrations.telegram_notifications.performance_report",
-        lambda **kwargs: {"realized_pnl": 3.25, "open_positions": 1, "closed_positions": 4, "win_rate": 0.75, "roi": 0.1},
+        "src.integrations.telegram_notifications.paper_trading_intelligence",
+        lambda **kwargs: {
+            **_empty_paper_report(),
+            "daily_pnl": 3.25,
+            "pnl_7d": 7.5,
+            "total_pnl": 13.25,
+            "open_positions_count": 1,
+            "closed_positions_count": 4,
+            "win_rate": 0.75,
+            "trade_count": 5,
+        },
     )
     monkeypatch.setattr(
         "src.integrations.telegram_notifications.wallet_service_health_summary",
@@ -457,4 +839,6 @@ def test_daily_report_generation(monkeypatch, tmp_path):
     assert report["paper_only"] is True
     assert report["wallet_intelligence"]["new_discoveries"] == [{"wallet": "0xabc"}]
     assert "Polylens Daily Intelligence Brief" in text
-    assert "Daily PnL: $3.25" in text
+    assert "Daily PnL: +$3.25" in text
+    assert "7D PnL: +$7.50" in text
+    assert "Total PnL: +$13.25" in text

@@ -13,6 +13,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB
+from src.analysis.paper_intelligence import paper_trading_intelligence
+from src.analysis.short_crypto_paper import DEFAULT_DB_PATH as DEFAULT_SHORT_CRYPTO_PAPER_DB
 from src.analysis.paper_trading_service import paper_trading_health
 from src.analysis.trader_registry import DEFAULT_TRADERS_DB, top_traders, trader_summary
 from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB, trader_signal_health
@@ -20,8 +22,14 @@ from src.intelligence.wallet_service_health import wallet_service_health_summary
 from src.integrations.telegram_notifications import (
     format_daily_intelligence_report,
     generate_daily_intelligence_report,
+    paper_pnl_report_text,
     paper_performance_report_text,
+    paper_positions_report_text,
+    paper_recent_report_text,
+    paper_strategies_report_text,
+    polymarket_analytics_wallet_buttons,
     signal_summary_report_text,
+    wallet_summary_link_buttons,
     wallet_summary_report_text,
 )
 from src.sqlite_utils import closing_connection
@@ -41,6 +49,10 @@ COMMANDS = (
     "/top_wallets",
     "/wallet <address>",
     "/paper_status",
+    "/paper_recent",
+    "/paper_pnl",
+    "/paper_positions",
+    "/paper_strategies",
     "/risk",
     "/kill_switch",
 )
@@ -64,6 +76,10 @@ CALLBACK_COMMANDS = {
     "report_signals": "/report_signals",
     "report_wallets": "/report_wallets",
     "report_paper": "/report_paper",
+    "paper_recent": "/paper_recent",
+    "paper_pnl": "/paper_pnl",
+    "paper_positions": "/paper_positions",
+    "paper_strategies": "/paper_strategies",
 }
 MENU_CALLBACKS = {
     "menu_main": "main",
@@ -90,6 +106,7 @@ class TelegramConsoleConfig:
     audit_db_path: str = DEFAULT_TELEGRAM_AUDIT_DB
     trader_signal_db_path: str = DEFAULT_TRADER_SIGNAL_DB
     paper_db_path: str = DEFAULT_PAPER_TRADING_DB
+    short_crypto_paper_db_path: str = DEFAULT_SHORT_CRYPTO_PAPER_DB
     readiness_db_path: str = DEFAULT_READINESS_DB
 
     @classmethod
@@ -100,6 +117,7 @@ class TelegramConsoleConfig:
             paper_only=_env_bool("POLYLENS_TELEGRAM_PAPER_ONLY", default=True),
             live_enabled=_env_bool("POLYLENS_TELEGRAM_LIVE_ENABLED", default=False),
             audit_db_path=audit_db_path or os.environ.get("POLYLENS_TELEGRAM_AUDIT_DB", DEFAULT_TELEGRAM_AUDIT_DB),
+            short_crypto_paper_db_path=os.environ.get("POLYLENS_SHORT_CRYPTO_PAPER_DB", DEFAULT_SHORT_CRYPTO_PAPER_DB),
         )
 
     def safe_dict(self) -> dict[str, Any]:
@@ -140,6 +158,7 @@ class TelegramConsole:
         health_provider: Provider | None = None,
         signals_provider: Provider | None = None,
         paper_provider: Provider | None = None,
+        paper_intelligence_provider: Provider | None = None,
         risk_provider: Provider | None = None,
         top_wallets_provider: Callable[[], list[Any]] | None = None,
         wallet_provider: Callable[[str], dict[str, Any] | None] | None = None,
@@ -148,6 +167,12 @@ class TelegramConsole:
         self.health_provider = health_provider or (lambda: wallet_service_health_summary(traders_db_path=DEFAULT_TRADERS_DB))
         self.signals_provider = signals_provider or (lambda: trader_signal_health(db_path=config.trader_signal_db_path))
         self.paper_provider = paper_provider or (lambda: paper_trading_health(db_path=config.paper_db_path))
+        self.paper_intelligence_provider = paper_intelligence_provider or (
+            lambda: paper_trading_intelligence(
+                db_path=config.paper_db_path,
+                short_crypto_db_path=config.short_crypto_paper_db_path,
+            )
+        )
         self.risk_provider = risk_provider or (lambda: KillSwitch(db_path=config.readiness_db_path).status())
         self.top_wallets_provider = top_wallets_provider or (lambda: top_traders(limit=5, db_path=DEFAULT_TRADERS_DB))
         self.wallet_provider = wallet_provider or (lambda wallet: trader_summary(wallet, db_path=DEFAULT_TRADERS_DB))
@@ -334,11 +359,21 @@ class TelegramConsole:
         if command == "/signals":
             return self._menu_response(format_signals(self.signals_provider()))
         if command == "/top_wallets":
-            return self._menu_response(format_top_wallets(self.top_wallets_provider()))
+            rows = self.top_wallets_provider()
+            return TelegramResponse(format_top_wallets(rows), reply_markup=_wallet_links_reply_markup(_wallets_from_rows(rows), menu_name="main"))
         if command == "/wallet":
-            return TelegramResponse(self._wallet(args))
+            return self._wallet_response(args)
         if command == "/paper_status":
             return self._menu_response(format_paper_status(self.paper_provider()))
+        if command == "/paper_recent":
+            paper = self.paper_intelligence_provider()
+            return TelegramResponse(paper_recent_report_text(paper), reply_markup=_wallet_links_reply_markup(_wallets_from_rows(paper.get("recent_trades") or []), menu_name="reports"))
+        if command == "/paper_pnl":
+            return TelegramResponse(paper_pnl_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
+        if command == "/paper_positions":
+            return TelegramResponse(paper_positions_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
+        if command == "/paper_strategies":
+            return TelegramResponse(paper_strategies_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
         if command == "/risk":
             return self._menu_response(format_risk(self.risk_provider()))
         if command == "/report_daily":
@@ -346,25 +381,29 @@ class TelegramConsole:
         if command == "/report_signals":
             return TelegramResponse(signal_summary_report_text(), reply_markup=menu_reply_markup("reports"))
         if command == "/report_wallets":
-            return TelegramResponse(wallet_summary_report_text(), reply_markup=menu_reply_markup("reports"))
+            return TelegramResponse(
+                wallet_summary_report_text(),
+                reply_markup=_wallet_link_rows_reply_markup(wallet_summary_link_buttons(), menu_name="reports"),
+            )
         if command == "/report_paper":
-            return TelegramResponse(paper_performance_report_text(), reply_markup=menu_reply_markup("reports"))
+            return TelegramResponse(paper_performance_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
         return self._menu_response("unknown command. Try /help")
 
-    def _wallet(self, args: str) -> str:
+    def _wallet_response(self, args: str) -> TelegramResponse:
         wallet = args.strip().split()[0] if args.strip() else ""
         if not WALLET_RE.match(wallet):
-            return "wallet: provide a valid 0x address"
+            return TelegramResponse("wallet: provide a valid 0x address")
         summary = self.wallet_provider(wallet.lower())
         if not summary:
-            return f"Wallet {short_wallet(wallet)}: not found"
-        return (
+            return TelegramResponse(f"Wallet {wallet}: not found", reply_markup=_wallet_links_reply_markup([wallet]))
+        text = (
             f"Wallet {short_wallet(wallet)}: "
             f"class={summary.get('classification', 'unknown')} "
             f"score={summary.get('watch_score', 0)} "
             f"confidence={float(summary.get('confidence') or 0):.2f} "
             f"reports={summary.get('report_count', 0)}"
         )
+        return TelegramResponse(text, reply_markup=_wallet_links_reply_markup([wallet]))
 
     def _telegram_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         url = f"{TELEGRAM_API_BASE}/bot{self.config.bot_token}/{method}"
@@ -572,6 +611,10 @@ def menu_reply_markup(menu_name: str = "main") -> dict[str, Any]:
                 [{"text": "Signal Summary", "callback_data": "report_signals"}],
                 [{"text": "Wallet Summary", "callback_data": "report_wallets"}],
                 [{"text": "Paper Performance", "callback_data": "report_paper"}],
+                [{"text": "Recent Paper Trades", "callback_data": "paper_recent"}],
+                [{"text": "Paper PnL", "callback_data": "paper_pnl"}],
+                [{"text": "Open Positions", "callback_data": "paper_positions"}],
+                [{"text": "Paper Strategies", "callback_data": "paper_strategies"}],
                 [_back_button()],
             ]
         )
@@ -592,6 +635,28 @@ def menu_reply_markup(menu_name: str = "main") -> dict[str, Any]:
 
 def main_menu_reply_markup() -> dict[str, Any]:
     return menu_reply_markup("main")
+
+
+def _wallet_links_reply_markup(wallets: list[Any], *, menu_name: str | None = None) -> dict[str, Any] | None:
+    return _wallet_link_rows_reply_markup(polymarket_analytics_wallet_buttons(wallets), menu_name=menu_name)
+
+
+def _wallet_link_rows_reply_markup(rows: list[list[dict[str, str]]], *, menu_name: str | None = None) -> dict[str, Any] | None:
+    menu_rows = menu_reply_markup(menu_name)["inline_keyboard"] if menu_name else []
+    combined = [*rows, *menu_rows]
+    return _menu_markup(combined) if combined else None
+
+
+def _wallets_from_rows(rows: Any) -> list[str]:
+    wallets: list[str] = []
+    for row in rows or []:
+        item = row.to_dict() if hasattr(row, "to_dict") else row
+        if not isinstance(item, dict):
+            continue
+        wallet = str(item.get("wallet") or item.get("address") or item.get("trader_wallet") or "").strip()
+        if wallet:
+            wallets.append(wallet)
+    return wallets
 
 
 def _menu_markup(rows: list[list[dict[str, str]]]) -> dict[str, Any]:

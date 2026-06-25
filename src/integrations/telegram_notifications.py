@@ -3,15 +3,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB, performance_report
+from src.analysis.paper_intelligence import paper_trading_intelligence
+from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB
+from src.analysis.short_crypto_paper import DEFAULT_DB_PATH as DEFAULT_SHORT_CRYPTO_PAPER_DB
 from src.analysis.trader_registry import DEFAULT_TRADERS_DB
 from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB, trader_signal_health, trader_signal_report
 from src.intelligence.wallet_discovery import DEFAULT_TRADER_DISCOVERY_DB, WalletDiscoveryEngine
@@ -24,6 +27,8 @@ LOGGER = logging.getLogger(__name__)
 TELEGRAM_API_BASE = "https://api.telegram.org"
 DEFAULT_TELEGRAM_AUDIT_DB = DEFAULT_TRADERS_DB
 MAX_TELEGRAM_TEXT = 3500
+POLYMARKET_ANALYTICS_TRADER_BASE_URL = "https://polymarketanalytics.com/traders"
+WALLET_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
 
 @dataclass(frozen=True)
@@ -124,11 +129,12 @@ class TelegramNotificationService:
 
     def send_wallet_promotion(self, event: dict[str, Any]) -> dict[str, Any]:
         text = format_wallet_promotion(event)
-        return self.send_notification("wallet_promotion", text, buttons=_wallet_buttons())
+        return self.send_notification("wallet_promotion", text, buttons=_wallet_buttons([event.get("wallet")]))
 
     def send_wallet_discovery(self, event: dict[str, Any]) -> dict[str, Any]:
         text = format_wallet_discovery(event)
-        return self.send_notification("wallet_discovery", text, buttons=_wallet_buttons())
+        wallets = event.get("wallets") or event.get("new_wallets") or []
+        return self.send_notification("wallet_discovery", text, buttons=_wallet_buttons(wallets))
 
     def send_wallet_autonomy_failure(self, event: dict[str, Any]) -> dict[str, Any]:
         text = format_wallet_autonomy_failure(event)
@@ -154,6 +160,7 @@ def generate_daily_intelligence_report(
     discovery_db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB,
     signal_db_path: str | Path = DEFAULT_TRADER_SIGNAL_DB,
     paper_db_path: str | Path = DEFAULT_PAPER_TRADING_DB,
+    short_crypto_db_path: str | Path = DEFAULT_SHORT_CRYPTO_PAPER_DB,
 ) -> dict[str, Any]:
     discovery = WalletDiscoveryEngine(
         traders_db_path=traders_db_path,
@@ -165,7 +172,7 @@ def generate_daily_intelligence_report(
     )
     signals = trader_signal_report(db_path=signal_db_path)
     signal_health = trader_signal_health(db_path=signal_db_path)
-    paper = performance_report(db_path=paper_db_path)
+    paper = paper_trading_intelligence(db_path=paper_db_path, short_crypto_db_path=short_crypto_db_path, limit=10)
     health = wallet_service_health_summary(traders_db_path=str(traders_db_path))
 
     promotions = performance.load_actions(action="promoted", limit=10)
@@ -188,11 +195,17 @@ def generate_daily_intelligence_report(
             "health": signal_health,
         },
         "paper_trading": {
-            "daily_pnl": paper.get("realized_pnl", 0.0),
-            "open_positions": paper.get("open_positions", 0),
-            "closed_positions": paper.get("closed_positions", 0),
+            "daily_pnl": paper.get("daily_pnl", 0.0),
+            "pnl_7d": paper.get("pnl_7d", 0.0),
+            "total_pnl": paper.get("total_pnl", 0.0),
+            "open_positions": paper.get("open_positions_count", 0),
+            "closed_positions": paper.get("closed_positions_count", 0),
             "win_rate": paper.get("win_rate", 0.0),
-            "roi": paper.get("roi", 0.0),
+            "trade_count": paper.get("trade_count", 0),
+            "recent_trades": paper.get("recent_trades", [])[:3],
+            "strategy_breakdown": paper.get("strategy_breakdown", {}),
+            "top_strategy": paper.get("top_strategy"),
+            "worst_strategy": paper.get("worst_strategy"),
         },
         "system_health": {
             "wallet_autonomy_status": health.get("status", "unknown"),
@@ -228,10 +241,15 @@ def format_daily_intelligence_report(report: dict[str, Any]) -> str:
         "Status: " + _compact_counts(performance, "outcome"),
         "",
         "Paper Trading",
-        f"Daily PnL: {_money(paper.get('daily_pnl'))}",
+        f"Daily PnL: {_money_signed(paper.get('daily_pnl'))}",
+        f"7D PnL: {_money_signed(paper.get('pnl_7d'))}",
+        f"Total PnL: {_money_signed(paper.get('total_pnl'))}",
         f"Open positions: {int(paper.get('open_positions') or 0)}",
         f"Closed positions: {int(paper.get('closed_positions') or 0)}",
         f"Win rate: {_pct(paper.get('win_rate'))}",
+        "Recent: " + _recent_trade_summary(paper.get("recent_trades", []), limit=3),
+        "Top strategy: " + _strategy_summary(paper.get("top_strategy")),
+        "Worst strategy: " + _strategy_summary(paper.get("worst_strategy")),
         "",
         "System Health",
         f"Wallet autonomy: {system.get('wallet_autonomy_status', 'unknown')}",
@@ -263,29 +281,127 @@ def wallet_summary_report_text(
 ) -> str:
     discovery = WalletDiscoveryEngine(traders_db_path=traders_db_path, discovery_db_path=discovery_db_path)
     performance = WalletPerformanceEngine(traders_db_path=traders_db_path, discovery_db_path=discovery_db_path)
+    recent_discoveries = discovery.load_recent_discoveries(limit=10)
+    promotions = performance.load_actions(action="promoted", limit=10)
+    demotions = performance.load_actions(action="probation", limit=10)
+    retirements = performance.load_actions(action="retired", limit=10)
+    wallets = _valid_wallets_from_items([*recent_discoveries, *promotions])[:3]
     return "\n".join(
         [
             "Wallet Summary",
-            f"New discoveries: {len(discovery.load_recent_discoveries(limit=10))}",
-            f"Promotions: {len(performance.load_actions(action='promoted', limit=10))}",
-            f"Demotions: {len(performance.load_actions(action='probation', limit=10))}",
-            f"Retirements: {len(performance.load_actions(action='retired', limit=10))}",
+            f"New discoveries: {len(recent_discoveries)}",
+            f"Promotions: {len(promotions)}",
+            f"Demotions: {len(demotions)}",
+            f"Retirements: {len(retirements)}",
+            "Wallets: " + (", ".join(wallets) if wallets else "none"),
         ]
     )
 
 
-def paper_performance_report_text(db_path: str | Path = DEFAULT_PAPER_TRADING_DB) -> str:
-    paper = performance_report(db_path=db_path)
-    return "\n".join(
+def wallet_summary_link_buttons(
+    *,
+    traders_db_path: str | Path = DEFAULT_TRADERS_DB,
+    discovery_db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB,
+) -> list[list[dict[str, str]]]:
+    discovery = WalletDiscoveryEngine(traders_db_path=traders_db_path, discovery_db_path=discovery_db_path)
+    performance = WalletPerformanceEngine(traders_db_path=traders_db_path, discovery_db_path=discovery_db_path)
+    wallets = _valid_wallets_from_items(
+        [
+            *discovery.load_recent_discoveries(limit=10),
+            *performance.load_actions(action="promoted", limit=10),
+        ]
+    )
+    return polymarket_analytics_wallet_buttons(wallets, limit=3)
+
+
+def paper_performance_report_text(report: dict[str, Any] | None = None, db_path: str | Path = DEFAULT_PAPER_TRADING_DB) -> str:
+    if isinstance(report, (str, Path)):
+        db_path = report
+        report = None
+    paper = report or paper_trading_intelligence(db_path=db_path)
+    return safe_telegram_text("\n".join(
         [
             "Paper Performance",
-            f"Daily PnL: {_money(paper.get('realized_pnl'))}",
-            f"Open positions: {int(paper.get('open_positions') or 0)}",
-            f"Closed positions: {int(paper.get('closed_positions') or 0)}",
+            f"Today: {_money_signed(paper.get('daily_pnl'))}",
+            f"7D: {_money_signed(paper.get('pnl_7d'))}",
+            f"Total: {_money_signed(paper.get('total_pnl'))}",
+            f"Open positions: {int(paper.get('open_positions_count') or 0)}",
+            f"Closed positions: {int(paper.get('closed_positions_count') or 0)}",
             f"Win rate: {_pct(paper.get('win_rate'))}",
-            f"ROI: {_pct(paper.get('roi'))}",
+            f"Trades: {int(paper.get('trade_count') or 0)}",
         ]
+    ))
+
+
+def paper_recent_report_text(report: dict[str, Any] | None = None) -> str:
+    paper = report or paper_trading_intelligence()
+    rows = paper.get("recent_trades") or []
+    if not rows:
+        return "Recent Paper Trades\nNone"
+    lines = ["Recent Paper Trades"]
+    for index, row in enumerate(rows[:5], start=1):
+        status = str(row.get("status") or "UNKNOWN")
+        pnl = _money_signed(row.get("pnl")) if status != "OPEN" else f"unrealized {_money_signed(row.get('unrealized_pnl'))}"
+        lines.append("")
+        lines.append(f"{index}. {row.get('strategy', 'unknown')} | {status} | {pnl}")
+        lines.append(f"   Market: {_short_text(row.get('market_title'), 80)}")
+        if row.get("opened_at"):
+            lines.append(f"   Opened: {_short_timestamp(row.get('opened_at'))}")
+        if row.get("closed_at"):
+            lines.append(f"   Closed: {_short_timestamp(row.get('closed_at'))}")
+        if is_valid_wallet_address(row.get("wallet")):
+            lines.append(f"   Wallet: {row.get('wallet')}")
+    return safe_telegram_text("\n".join(lines))
+
+
+def paper_pnl_report_text(report: dict[str, Any] | None = None) -> str:
+    paper = report or paper_trading_intelligence()
+    return safe_telegram_text(
+        "\n".join(
+            [
+                "Paper PnL",
+                "",
+                f"Today: {_money_signed(paper.get('daily_pnl'))}",
+                f"7D: {_money_signed(paper.get('pnl_7d'))}",
+                f"Total: {_money_signed(paper.get('total_pnl'))}",
+                f"Win rate: {_pct(paper.get('win_rate'))}",
+                f"Trades: {int(paper.get('trade_count') or 0)}",
+            ]
+        )
     )
+
+
+def paper_positions_report_text(report: dict[str, Any] | None = None) -> str:
+    paper = report or paper_trading_intelligence()
+    rows = paper.get("open_positions") or []
+    lines = ["Open Paper Positions", f"Open: {int(paper.get('open_positions_count') or 0)}", f"Closed: {int(paper.get('closed_positions_count') or 0)}"]
+    if not rows:
+        lines.append("None")
+    for index, row in enumerate(rows[:5], start=1):
+        lines.append("")
+        lines.append(f"{index}. {row.get('strategy', 'unknown')} | {_money_signed(row.get('unrealized_pnl'))}")
+        lines.append(f"   Market: {_short_text(row.get('market_title'), 80)}")
+        if row.get("opened_at"):
+            lines.append(f"   Opened: {_short_timestamp(row.get('opened_at'))}")
+    return safe_telegram_text("\n".join(lines))
+
+
+def paper_strategies_report_text(report: dict[str, Any] | None = None) -> str:
+    paper = report or paper_trading_intelligence()
+    breakdown = paper.get("strategy_breakdown") or {}
+    rows = [row for row in breakdown.values() if int(row.get("trade_count") or 0) > 0]
+    rows.sort(key=lambda row: (float(row.get("realized_pnl") or 0) + float(row.get("unrealized_pnl") or 0)), reverse=True)
+    lines = ["Paper Strategies"]
+    if not rows:
+        lines.append("No paper trades")
+    for row in rows[:8]:
+        pnl = float(row.get("realized_pnl") or 0) + float(row.get("unrealized_pnl") or 0)
+        lines.append(
+            f"{row.get('strategy', 'unknown')}: {_money_signed(pnl)} "
+            f"trades={int(row.get('trade_count') or 0)} "
+            f"win={_pct(row.get('win_rate'))}"
+        )
+    return safe_telegram_text("\n".join(lines))
 
 
 def format_high_conviction_signal(signal: dict[str, Any]) -> str:
@@ -443,8 +559,8 @@ def _signal_buttons() -> list[list[dict[str, str]]]:
     return [[{"text": "Signal Summary", "callback_data": "report_signals"}]]
 
 
-def _wallet_buttons() -> list[list[dict[str, str]]]:
-    return [[{"text": "Wallet Summary", "callback_data": "report_wallets"}]]
+def _wallet_buttons(wallets: list[Any] | tuple[Any, ...] | None = None) -> list[list[dict[str, str]]]:
+    return [[{"text": "Wallet Summary", "callback_data": "report_wallets"}], *polymarket_analytics_wallet_buttons(wallets or [])]
 
 
 def _system_buttons() -> list[list[dict[str, str]]]:
@@ -453,6 +569,42 @@ def _system_buttons() -> list[list[dict[str, str]]]:
 
 def _report_buttons() -> list[list[dict[str, str]]]:
     return [[{"text": "Reports", "callback_data": "menu_reports"}]]
+
+
+def is_valid_wallet_address(wallet: Any) -> bool:
+    return bool(WALLET_RE.fullmatch(str(wallet or "").strip()))
+
+
+def polymarket_analytics_wallet_url(wallet: Any) -> str | None:
+    text = str(wallet or "").strip()
+    if not is_valid_wallet_address(text):
+        return None
+    return f"{POLYMARKET_ANALYTICS_TRADER_BASE_URL}/{text}"
+
+
+def polymarket_analytics_wallet_button(wallet: Any) -> dict[str, str] | None:
+    url = polymarket_analytics_wallet_url(wallet)
+    if not url:
+        return None
+    return {"text": "View on Polymarket Analytics", "url": url}
+
+
+def polymarket_analytics_wallet_buttons(wallets: Iterable[Any], *, limit: int = 5) -> list[list[dict[str, str]]]:
+    rows: list[list[dict[str, str]]] = []
+    seen: set[str] = set()
+    for wallet in wallets:
+        text = str(wallet or "").strip()
+        key = text.lower()
+        if key in seen:
+            continue
+        button = polymarket_analytics_wallet_button(text)
+        if button is None:
+            continue
+        seen.add(key)
+        rows.append([button])
+        if len(rows) >= limit:
+            break
+    return rows
 
 
 def _critical_warnings(health: dict[str, Any], signal_health: dict[str, Any]) -> list[str]:
@@ -478,6 +630,39 @@ def _compact_dict(payload: dict[str, Any]) -> str:
     return ", ".join(f"{key}={value}" for key, value in list(payload.items())[:5])
 
 
+def _valid_wallets_from_items(items: Iterable[Any]) -> list[str]:
+    wallets: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        payload = item.to_dict() if hasattr(item, "to_dict") else item
+        if not isinstance(payload, dict):
+            continue
+        wallet = str(payload.get("wallet") or payload.get("address") or payload.get("trader_wallet") or "").strip()
+        key = wallet.lower()
+        if key in seen or not is_valid_wallet_address(wallet):
+            continue
+        seen.add(key)
+        wallets.append(wallet)
+    return wallets
+
+
+def _recent_trade_summary(rows: list[dict[str, Any]], *, limit: int = 3) -> str:
+    if not rows:
+        return "none"
+    parts = []
+    for row in rows[:limit]:
+        status = str(row.get("status") or "UNKNOWN")
+        parts.append(f"{row.get('strategy', 'unknown')} {status} {_money_signed(row.get('pnl'))}")
+    return "; ".join(parts)
+
+
+def _strategy_summary(row: dict[str, Any] | None) -> str:
+    if not row:
+        return "n/a"
+    pnl = float(row.get("realized_pnl") or 0) + float(row.get("unrealized_pnl") or 0)
+    return f"{row.get('strategy', 'unknown')} {_money_signed(pnl)} ({int(row.get('trade_count') or 0)} trades)"
+
+
 def _money(value: Any) -> str:
     try:
         return f"${float(value or 0):.2f}"
@@ -485,11 +670,37 @@ def _money(value: Any) -> str:
         return "$0.00"
 
 
+def _money_signed(value: Any) -> str:
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        number = 0.0
+    if number > 0:
+        return f"+${number:.2f}"
+    if number < 0:
+        return f"-${abs(number):.2f}"
+    return "$0.00"
+
+
 def _pct(value: Any) -> str:
     try:
         return f"{float(value or 0) * 100:.1f}%"
     except (TypeError, ValueError):
         return "0.0%"
+
+
+def _short_text(value: Any, limit: int) -> str:
+    text = str(value or "unknown").replace("\n", " ").strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "..."
+
+
+def _short_timestamp(value: Any) -> str:
+    text = str(value or "")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return _short_text(text, 32)
+    return parsed.strftime("%Y-%m-%d %H:%M UTC")
 
 
 def utc_now() -> str:
