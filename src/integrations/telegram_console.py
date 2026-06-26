@@ -509,6 +509,8 @@ class TelegramConsole:
             return TelegramResponse(paper_strategies_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
         if command == "/portfolio_analytics":
             return TelegramResponse(portfolio_analytics_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
+        if command in {"/paper_opportunities", "/opportunity_rankings"}:
+            return self._opportunity_rankings_response()
         if command == "/risk":
             return self._menu_response(format_risk(self.risk_provider()))
         if command == "/report_daily":
@@ -560,6 +562,16 @@ class TelegramConsole:
             f"reports={summary.get('report_count', 0)}"
         )
         return TelegramResponse(text, reply_markup=_wallet_links_reply_markup([wallet]))
+
+    def _opportunity_rankings_response(self) -> TelegramResponse:
+        from src.analysis.opportunity_feed import get_paper_trading_opportunities
+        from src.analysis.opportunity_scoring_v3 import format_opportunity_ranking_text
+
+        rows = get_paper_trading_opportunities(limit=10, portfolio_db_path=self.config.paper_db_path)
+        return TelegramResponse(
+            format_opportunity_ranking_text(rows, limit=10),
+            reply_markup=menu_reply_markup("reports"),
+        )
 
     def _telegram_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         url = f"{TELEGRAM_API_BASE}/bot{self.config.bot_token}/{method}"
@@ -1452,6 +1464,7 @@ V4_CONTEXT_CALLBACKS = {
     "quick_disk": "disk",
     "quick_memory": "memory",
     "quick_services": "services",
+    "quick_opportunity_rankings": "opportunity_rankings",
 }
 V4_PAGE_TITLES = {
     "home": "🏠 Home",
@@ -1473,6 +1486,8 @@ V4_PAGE_TITLES = {
     "disk": "💾 Disk",
     "memory": "🧠 Memory",
     "services": "⚙️ Services",
+    "opportunity_rankings": "🏆 Opportunity Rankings",
+    "trades_log": "📜 Trades Log",
 }
 V4_WALLET_PAGES = {"wallets", "wallet_stats", "top_wallet", "new_wallets"}
 
@@ -1592,6 +1607,13 @@ def _v4_detail_rows(page: str, context: ConsolePageContext) -> list[str]:
             f"Paper Trading: {status_icon(context.paper_health.get('status'))} {service_status_label(context.paper_health.get('status'))}",
             "Live Trading: 🔴 Disabled",
         ]
+    if page == "opportunity_rankings":
+        from src.analysis.opportunity_feed import get_paper_trading_opportunities
+        from src.analysis.opportunity_scoring_v3 import format_opportunity_ranking_text
+        from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB
+
+        rows = get_paper_trading_opportunities(limit=10, portfolio_db_path=DEFAULT_PAPER_TRADING_DB)
+        return format_opportunity_ranking_text(rows, limit=10).splitlines()
     return ["Read-only detail unavailable."]
 
 

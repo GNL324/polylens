@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import hashlib
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from src.analysis.opportunity_ranker import rank_opportunities
+from src.analysis.opportunity_scoring_v3 import load_portfolio_context, rank_opportunities_v3
 from src.sqlite_utils import closing_connection
 
 DEFAULT_OPPORTUNITY_DBS = ("data/opportunities.db", "data/polylens.db")
@@ -14,6 +16,7 @@ DEFAULT_REPORT_GLOBS = ("data/reports/*.json",)
 DEFAULT_PAPER_COPY_DB = "data/paper_copy_trader.db"
 DEFAULT_SHORT_CRYPTO_PAPER_DB = "data/short_crypto_paper.db"
 DEFAULT_TRADER_SIGNAL_DB = "data/trader_signals.db"
+DEFAULT_PAPER_TRADING_DB = "data/paper_trading.db"
 
 
 @dataclass
@@ -64,13 +67,19 @@ def get_paper_trading_opportunities(
     report_globs: tuple[str, ...] = DEFAULT_REPORT_GLOBS,
     limit: int | None = None,
     include_auxiliary: bool = True,
+    portfolio_db_path: str | Path = DEFAULT_PAPER_TRADING_DB,
+    use_v3_scoring: bool = True,
+    now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     rows = [
         row
         for row in get_live_opportunities(db_paths=db_paths, report_globs=report_globs, include_auxiliary=include_auxiliary)
         if row["eligible_for_paper_trading"]
     ]
-    if limit is not None:
+    if use_v3_scoring:
+        portfolio = load_portfolio_context(portfolio_db_path)
+        rows = rank_opportunities_v3(rows, portfolio=portfolio, now=now, limit=limit)
+    elif limit is not None:
         rows = rows[: max(int(limit), 0)]
     return rows
 

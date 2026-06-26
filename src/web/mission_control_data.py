@@ -812,6 +812,7 @@ def mission_control_snapshot(
     portfolio_db_path: str | Path = "data/paper_trading.db",
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    from src.analysis.opportunity_feed import get_paper_trading_opportunities
     from src.analysis.paper_trading_engine import performance_report as canonical_paper_performance
     from src.analysis.paper_execution_analytics import execution_quality_report
 
@@ -847,6 +848,26 @@ def mission_control_snapshot(
             "execution_quality": execution_quality_report(portfolio_db_path),
         }
     )
+    snapshot["top_opportunities"] = [
+        {
+            "rank": row.get("rank"),
+            "score": row.get("final_score") or row.get("ranking_score"),
+            "expected_edge": row.get("expected_edge"),
+            "confidence": row.get("confidence"),
+            "expected_execution_quality": row.get("expected_execution_quality"),
+            "projected_risk": row.get("projected_risk"),
+            "explanation_summary": row.get("explanation_summary"),
+            "title": row.get("title"),
+            "strategy": row.get("strategy"),
+            "market_id": row.get("market_id"),
+        }
+        for row in get_paper_trading_opportunities(
+            limit=10,
+            portfolio_db_path=portfolio_db_path,
+            include_auxiliary=False,
+            now=now,
+        )
+    ]
     snapshot["header"]["wallet"] = f"${portfolio['open_position_value']:.2f} deployed"
     equity_points = [
         {"ts": row.get("timestamp"), "equity": float(row.get("equity") or 0.0)}
