@@ -1418,3 +1418,379 @@ def run_telegram_console(
     else:
         console.run_forever(poll_timeout=poll_timeout)
     return console
+from dataclasses import field as _v4_field
+from time import perf_counter as _v4_perf_counter
+
+
+V4_FAVORITE_TOGGLE_CALLBACK = "favorite_toggle"
+V4_FAVORITE_PAGE_CALLBACKS = {
+    "fav_paper_trades": "paper_trades",
+    "fav_wallet_stats": "wallet_stats",
+    "fav_performance": "performance",
+    "fav_intelligence": "intelligence",
+    "fav_wallets": "wallets",
+    "fav_reports": "reports",
+    "fav_system": "system",
+}
+V4_CONTEXT_CALLBACKS = {
+    "quick_paper_trades": "paper_trades",
+    "quick_win_rate": "win_rate",
+    "quick_validation": "validation_accuracy",
+    "quick_signals_today": "signals_today",
+    "quick_top_wallet": "top_wallet",
+    "quick_new_wallets": "new_wallets",
+    "quick_wallet_stats": "wallet_stats",
+    "quick_report_daily": "daily_report",
+    "quick_report_weekly": "weekly_report",
+    "quick_report_monthly": "monthly_report",
+    "quick_disk": "disk",
+    "quick_memory": "memory",
+    "quick_services": "services",
+}
+V4_PAGE_TITLES = {
+    "home": "🏠 Home",
+    "performance": "📈 Performance",
+    "intelligence": "🧠 Intelligence",
+    "wallets": "👛 Wallets",
+    "reports": "📊 Reports",
+    "system": "⚙️ System",
+    "paper_trades": "📄 Paper Trades",
+    "signals_today": "Signals Today",
+    "wallet_stats": "Wallet Stats",
+    "validation_accuracy": "🎯 Validation",
+    "win_rate": "📈 Win Rate",
+    "top_wallet": "⭐ Top Wallet",
+    "new_wallets": "🆕 New Wallets",
+    "daily_report": "📅 Daily",
+    "weekly_report": "📆 Weekly",
+    "monthly_report": "📈 Monthly",
+    "disk": "💾 Disk",
+    "memory": "🧠 Memory",
+    "services": "⚙️ Services",
+}
+V4_WALLET_PAGES = {"wallets", "wallet_stats", "top_wallet", "new_wallets"}
+
+
+@dataclass
+class ConsoleNavigationState:
+    current_page: str = HOME_PAGE
+    history: list[str] = _v4_field(default_factory=list)
+    favorites: list[str] = _v4_field(default_factory=list)
+    recent_pages: list[str] = _v4_field(default_factory=list)
+
+
+_v3_console_init = TelegramConsole.__init__
+_v3_handle_text = TelegramConsole.handle_text
+_v3_handle_callback = TelegramConsole.handle_callback
+_v3_handle_console_callback = TelegramConsole.handle_console_callback
+_v3_page_context = TelegramConsole._page_context
+_v3_render_dashboard_text = render_dashboard_text
+_v3_render_console_page = render_console_page
+_v3_render_metric_page = _render_metric_page
+_v3_render_detail_page = _render_detail_page
+
+
+def render_timing_ms(render: Callable[[], Any]) -> tuple[Any, float]:
+    """Render a read-only page and return its elapsed wall-clock time in milliseconds."""
+    started = _v4_perf_counter()
+    result = render()
+    return result, (_v4_perf_counter() - started) * 1000
+
+
+def _v4_console_init(self: TelegramConsole, *args: Any, **kwargs: Any) -> None:
+    _v3_console_init(self, *args, **kwargs)
+    self._v4_navigation_states: dict[int, ConsoleNavigationState] = {}
+    self._v4_context_cache: dict[bool, tuple[float, ConsolePageContext]] = {}
+
+
+def _v4_state(self: TelegramConsole, telegram_user_id: int) -> ConsoleNavigationState:
+    return self._v4_navigation_states.setdefault(int(telegram_user_id), ConsoleNavigationState())
+
+
+def _v4_is_page_callback(self: TelegramConsole, callback_id: str) -> bool:
+    return (
+        callback_id in PAGE_NAV_CALLBACKS
+        or callback_id in DRILLDOWN_CALLBACKS
+        or callback_id in REFRESH_CALLBACKS
+        or callback_id in BACK_CALLBACKS
+        or callback_id == V4_FAVORITE_TOGGLE_CALLBACK
+        or callback_id in V4_FAVORITE_PAGE_CALLBACKS
+        or callback_id in V4_CONTEXT_CALLBACKS
+    )
+
+
+def _v4_remember_recent(state: ConsoleNavigationState, page: str) -> None:
+    if page == HOME_PAGE:
+        return
+    state.recent_pages = [page, *[item for item in state.recent_pages if item != page]][:5]
+
+
+def _v4_breadcrumb(page: str, history: list[str]) -> str:
+    path = [item for item in [*history, page] if item]
+    if not path or path[0] != HOME_PAGE:
+        path.insert(0, HOME_PAGE)
+    return " › ".join(V4_PAGE_TITLES.get(item, item.replace("_", " ").title()) for item in path)
+
+
+def _v4_chrome(
+    *,
+    page: str,
+    history: list[str],
+    favorites: list[str],
+    recent_pages: list[str],
+) -> list[str]:
+    lines = [_v4_breadcrumb(page, history)]
+    if favorites:
+        lines.extend(["", "⭐ Favorites", *[f"• {V4_PAGE_TITLES.get(item, item.replace('_', ' ').title())}" for item in favorites]])
+    visible_recent = [item for item in recent_pages if item != page][:5]
+    if visible_recent:
+        lines.extend(["", "🕒 Recent", *[f"• {V4_PAGE_TITLES.get(item, item.replace('_', ' ').title())}" for item in visible_recent]])
+    return lines
+
+
+def _v4_wrap_page(text: str, *, page: str, history: list[str], favorites: list[str], recent_pages: list[str]) -> str:
+    return "\n".join([*_v4_chrome(page=page, history=history, favorites=favorites, recent_pages=recent_pages), "", text])
+
+
+def _v4_detail_rows(page: str, context: ConsolePageContext) -> list[str]:
+    if page == "win_rate":
+        return [
+            f"Paper Win Rate: {format_pct_metric(context.paper.get('win_rate'))}",
+            f"Closed Paper Trades: {format_count_metric(context.paper.get('closed_positions_count'))}",
+            f"Validation Accuracy: {format_pct_metric(_validation_accuracy(context.paper, context.signals))}",
+        ]
+    if page == "top_wallet":
+        details = _wallet_detail_rows(context.top_wallets or [])
+        return details[:1] or ["No tracked wallet is available."]
+    if page == "new_wallets":
+        return [
+            f"Tracked Wallets: {format_count_metric(len(context.top_wallets or []))}",
+            "New-wallet discovery is read-only.",
+            *_wallet_detail_rows(context.top_wallets or [])[:3],
+        ]
+    if page in {"daily_report", "weekly_report", "monthly_report"}:
+        period = V4_PAGE_TITLES[page]
+        return [
+            f"{period} PnL: {_format_money(context.paper.get('daily_pnl') if page == 'daily_report' else context.paper.get('pnl_7d'))}",
+            f"Signals Today: {format_count_metric(_signals_today(context.signals, context.now))}",
+            f"Paper Trades: {format_count_metric(context.paper.get('trade_count'))}",
+            "Report data is read-only.",
+        ]
+    if page == "disk":
+        return ["Disk telemetry: not exposed by the read-only health provider.", "Service health remains read-only."]
+    if page == "memory":
+        return ["Memory telemetry: not exposed by the read-only health provider.", "Service health remains read-only."]
+    if page == "services":
+        return [
+            f"Wallet Autonomy: {status_icon(context.health.get('status'))} {service_status_label(context.health.get('status'))}",
+            f"Paper Trading: {status_icon(context.paper_health.get('status'))} {service_status_label(context.paper_health.get('status'))}",
+            "Live Trading: 🔴 Disabled",
+        ]
+    return ["Read-only detail unavailable."]
+
+
+def render_console_page(
+    page: str,
+    *,
+    config: TelegramConsoleConfig,
+    context: ConsolePageContext,
+    history: list[str] | None = None,
+    favorites: list[str] | None = None,
+    recent_pages: list[str] | None = None,
+) -> str:
+    history = list(history or [])
+    favorites = list(favorites or [])
+    recent_pages = list(recent_pages or [])
+    if page == HOME_PAGE:
+        body = _v3_render_dashboard_text(
+            config=config,
+            health=context.health,
+            signals=context.signals,
+            paper_health=context.paper_health,
+            paper=context.paper,
+            risk=context.risk,
+            now=context.now,
+        )
+    elif page in {"win_rate", "top_wallet", "new_wallets", "daily_report", "weekly_report", "monthly_report", "disk", "memory", "services"}:
+        body = _v3_render_detail_page(V4_PAGE_TITLES[page], _v4_detail_rows(page, context), context.now)
+    else:
+        body = _v3_render_console_page(page, config=config, context=context)
+    return _v4_wrap_page(body, page=page, history=history, favorites=favorites, recent_pages=recent_pages)
+
+
+def _v4_favorite_buttons(favorites: list[str]) -> list[list[dict[str, str]]]:
+    rows: list[list[dict[str, str]]] = []
+    for page in favorites:
+        callback_id = next((key for key, value in V4_FAVORITE_PAGE_CALLBACKS.items() if value == page), None)
+        if callback_id:
+            rows.append([{"text": f"⭐ {V4_PAGE_TITLES.get(page, page)}", "callback_data": callback_id}])
+    return rows
+
+
+def page_reply_markup(page: str, state: ConsoleNavigationState | None = None) -> dict[str, Any]:
+    state = state or ConsoleNavigationState(current_page=page)
+    home_rows = [
+        [
+            {"text": "📈 Performance", "callback_data": "nav_performance"},
+            {"text": "🧠 Intelligence", "callback_data": "nav_intelligence"},
+        ],
+        [
+            {"text": "👛 Wallets", "callback_data": "nav_wallets"},
+            {"text": "📊 Reports", "callback_data": "nav_reports"},
+        ],
+        [{"text": "⚙️ System", "callback_data": "nav_system"}],
+    ]
+    context_rows = {
+        "performance": [[
+            {"text": "📄 Paper Trades", "callback_data": "quick_paper_trades"},
+            {"text": "📈 Win Rate", "callback_data": "quick_win_rate"},
+        ], [{"text": "🎯 Validation", "callback_data": "quick_validation"}]],
+        "intelligence": [[
+            {"text": "Signals Today", "callback_data": "quick_signals_today"},
+            {"text": "🎯 Validation", "callback_data": "quick_validation"},
+        ]],
+        "wallets": [[
+            {"text": "⭐ Top Wallet", "callback_data": "quick_top_wallet"},
+            {"text": "🆕 New Wallets", "callback_data": "quick_new_wallets"},
+        ], [{"text": "📊 Wallet Stats", "callback_data": "quick_wallet_stats"}]],
+        "reports": [[
+            {"text": "📅 Daily", "callback_data": "quick_report_daily"},
+            {"text": "📆 Weekly", "callback_data": "quick_report_weekly"},
+        ], [{"text": "📈 Monthly", "callback_data": "quick_report_monthly"}]],
+        "system": [[
+            {"text": "💾 Disk", "callback_data": "quick_disk"},
+            {"text": "🧠 Memory", "callback_data": "quick_memory"},
+        ], [{"text": "⚙️ Services", "callback_data": "quick_services"}]],
+    }
+    rows = [*(home_rows if page == HOME_PAGE else context_rows.get(page, []))]
+    rows.extend(_v4_favorite_buttons(state.favorites))
+    label = "★ Unpin Page" if page in state.favorites else "⭐ Favorite Page"
+    rows.append([{"text": label, "callback_data": V4_FAVORITE_TOGGLE_CALLBACK}])
+    bottom = [{"text": "🏠 Home", "callback_data": "nav_home"}]
+    if page != HOME_PAGE:
+        bottom.append({"text": "◀ Back", "callback_data": "nav_back"})
+    bottom.append({"text": "🔄 Refresh", "callback_data": "refresh_page"})
+    rows.append(bottom)
+    return _menu_markup(rows)
+
+
+def _v4_page_context(self: TelegramConsole, *, include_wallets: bool) -> ConsolePageContext:
+    now = _as_utc_datetime(self.now_provider())
+    cached = self._v4_context_cache.get(include_wallets)
+    if cached and cached[0] > _v4_perf_counter():
+        snapshot = cached[1]
+        return ConsolePageContext(
+            now=now,
+            health=snapshot.health,
+            signals=snapshot.signals,
+            paper_health=snapshot.paper_health,
+            paper=snapshot.paper,
+            risk=snapshot.risk,
+            top_wallets=snapshot.top_wallets,
+        )
+    snapshot = _v3_page_context(self, include_wallets=include_wallets)
+    self._v4_context_cache[include_wallets] = (_v4_perf_counter() + 7.5, snapshot)
+    return snapshot
+
+
+def _v4_page_response(self: TelegramConsole, page: str, state: ConsoleNavigationState | None = None) -> TelegramResponse:
+    state = state or ConsoleNavigationState(current_page=page)
+    context = self._page_context(include_wallets=page in V4_WALLET_PAGES)
+    return TelegramResponse(
+        render_console_page(
+            page,
+            config=self.config,
+            context=context,
+            history=state.history,
+            favorites=state.favorites,
+            recent_pages=state.recent_pages,
+        ),
+        reply_markup=page_reply_markup(page, state),
+    )
+
+
+def _v4_handle_page_callback(self: TelegramConsole, telegram_user_id: int, callback_id: str) -> TelegramResponse:
+    allowed = self._is_allowed(telegram_user_id)
+    response: TelegramResponse | str = "admin allowlist missing" if not self.config.admin_user_ids else "unauthorized"
+    result_status = "rejected"
+    error_message = ""
+    try:
+        if allowed:
+            state = _v4_state(self, telegram_user_id)
+            page = state.current_page
+            if callback_id in REFRESH_CALLBACKS:
+                target = page
+            elif callback_id in BACK_CALLBACKS:
+                _v4_remember_recent(state, page)
+                target = state.history.pop() if state.history else HOME_PAGE
+            elif callback_id == V4_FAVORITE_TOGGLE_CALLBACK:
+                if page in state.favorites:
+                    state.favorites.remove(page)
+                elif page != HOME_PAGE:
+                    state.favorites.append(page)
+                target = page
+            else:
+                target = (
+                    PAGE_NAV_CALLBACKS.get(callback_id)
+                    or DRILLDOWN_CALLBACKS.get(callback_id)
+                    or V4_FAVORITE_PAGE_CALLBACKS.get(callback_id)
+                    or V4_CONTEXT_CALLBACKS.get(callback_id)
+                )
+                if target == HOME_PAGE:
+                    _v4_remember_recent(state, page)
+                    state.history.clear()
+                elif target and target != page:
+                    _v4_remember_recent(state, page)
+                    state.history.append(page)
+            state.current_page = target or HOME_PAGE
+            response = _v4_page_response(self, state.current_page, state)
+            result_status = "ok"
+    except Exception as exc:
+        LOGGER.exception("telegram console v4 page failed callback=%s user_id=%s", callback_id, telegram_user_id)
+        response = "error: command failed safely"
+        result_status = "error"
+        error_message = str(exc)
+    audit_telegram_command(
+        self.config.audit_db_path,
+        telegram_user_id=telegram_user_id,
+        command=f"callback:{callback_id}",
+        args="",
+        allowed=allowed,
+        result_status=result_status,
+        error_message=error_message if result_status == "error" else ("" if allowed else str(response)),
+    )
+    return response if isinstance(response, TelegramResponse) else TelegramResponse(safe_telegram_text(response, token=self.config.bot_token))
+
+
+def _v4_handle_callback(self: TelegramConsole, telegram_user_id: int, callback_data: str) -> TelegramResponse:
+    callback_id = normalize_callback_id(callback_data)
+    if self._is_page_callback(callback_id):
+        return _v4_handle_page_callback(self, telegram_user_id, callback_id)
+    return _v3_handle_callback(self, telegram_user_id, callback_data)
+
+
+def _v4_handle_console_callback(
+    self: TelegramConsole,
+    chat_id: int,
+    telegram_user_id: int,
+    callback_data: str,
+) -> TelegramResponse:
+    return _v4_handle_callback(self, telegram_user_id, callback_data)
+
+
+def _v4_handle_text(self: TelegramConsole, telegram_user_id: int, text: str) -> TelegramResponse:
+    command, _args = split_command(text)
+    if command in {"/start", "/console"}:
+        state = _v4_state(self, telegram_user_id)
+        state.current_page = HOME_PAGE
+        state.history.clear()
+    return _v3_handle_text(self, telegram_user_id, text)
+
+
+TelegramConsole.__init__ = _v4_console_init
+TelegramConsole._is_page_callback = _v4_is_page_callback
+TelegramConsole._page_context = _v4_page_context
+TelegramConsole._page_response = _v4_page_response
+TelegramConsole.handle_callback = _v4_handle_callback
+TelegramConsole.handle_console_callback = _v4_handle_console_callback
+TelegramConsole.handle_text = _v4_handle_text

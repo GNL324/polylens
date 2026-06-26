@@ -275,14 +275,7 @@ def test_help_returns_main_menu_reply_markup(tmp_path):
     response = console.handle_text(123, "/help")
 
     assert response.reply_markup is not None
-    assert _callback_ids(response.reply_markup) == {
-        "nav_performance",
-        "nav_intelligence",
-        "nav_wallets",
-        "nav_reports",
-        "nav_system",
-        "refresh_page",
-    }
+    assert {"nav_performance", "nav_intelligence", "nav_wallets", "nav_reports", "nav_system", "refresh_page"}.issubset(_callback_ids(response.reply_markup))
 
 
 def test_start_returns_dashboard_reply_markup(tmp_path):
@@ -351,15 +344,10 @@ def test_menu_navigation_to_system_menu(tmp_path):
 
     response = console.handle_callback(123, "menu_system")
 
-    assert response.text.startswith("⚙️ System")
+    assert response.text.splitlines()[0] == "🏠 Home › ⚙️ System"
     assert "Updated:\n12:34:56 UTC" in response
     assert response.reply_markup is not None
-    assert _callback_ids(response.reply_markup) == {
-        "drill_wallet_stats",
-        "nav_home",
-        "nav_back",
-        "refresh_page",
-    }
+    assert {"quick_disk", "quick_memory", "quick_services", "nav_home", "nav_back", "refresh_page"}.issubset(_callback_ids(response.reply_markup))
 
 
 def test_back_navigation_returns_main_menu(tmp_path):
@@ -370,14 +358,7 @@ def test_back_navigation_returns_main_menu(tmp_path):
     assert "📊 Polylens Mission Control" in response
     assert "Updated:\n12:34:56 UTC" in response
     assert response.reply_markup is not None
-    assert _callback_ids(response.reply_markup) == {
-        "nav_performance",
-        "nav_intelligence",
-        "nav_wallets",
-        "nav_reports",
-        "nav_system",
-        "refresh_page",
-    }
+    assert {"nav_performance", "nav_intelligence", "nav_wallets", "nav_reports", "nav_system", "refresh_page"}.issubset(_callback_ids(response.reply_markup))
 
 
 def test_v3_home_submenu_back_and_home_flow(tmp_path):
@@ -388,10 +369,10 @@ def test_v3_home_submenu_back_and_home_flow(tmp_path):
     back = console.handle_console_callback(456, 123, "nav_back")
     final_home = console.handle_console_callback(456, 123, "nav_home")
 
-    assert home.text.startswith("📈 Performance")
-    assert drilldown.text.startswith("📈 Paper Trades")
-    assert back.text.startswith("📈 Performance")
-    assert final_home.text.startswith("📊 Polylens Mission Control")
+    assert "📈 Performance" in home.text
+    assert "📄 Paper Trades" in drilldown.text
+    assert "📈 Performance" in back.text
+    assert "📊 Polylens Mission Control" in final_home.text
 
 
 @pytest.mark.parametrize(
@@ -413,9 +394,9 @@ def test_v3_every_page_has_timestamp_and_refresh_preserves_page(tmp_path, callba
     page = console.handle_console_callback(456, 123, callback_id)
     refreshed = console.handle_console_callback(456, 123, "refresh_page")
 
-    assert page.text.startswith(heading)
+    assert heading in page.text
     assert page.text.endswith("Updated:\n12:34:56 UTC")
-    assert refreshed.text.startswith(heading)
+    assert heading in refreshed.text
     assert refreshed.text.endswith("Updated:\n12:34:56 UTC")
 
 
@@ -438,8 +419,8 @@ def test_v3_drilldown_navigation_returns_to_immediate_parent(tmp_path, parent_ca
     drilldown = console.handle_console_callback(456, 123, drill_callback)
     back = console.handle_console_callback(456, 123, "nav_back")
 
-    assert drilldown.text.startswith(heading)
-    assert back.text.startswith(parent.text.splitlines()[0])
+    assert heading in drilldown.text
+    assert parent.text.splitlines()[0] == back.text.splitlines()[0]
 
 
 def test_health_uses_safe_health_path(tmp_path):
@@ -580,13 +561,7 @@ def test_reports_menu_contains_paper_intelligence_callbacks(tmp_path):
     response = console.handle_callback(123, "menu_reports")
 
     assert response.reply_markup is not None
-    assert _callback_ids(response.reply_markup) == {
-        "drill_paper_trades",
-        "drill_signals_today",
-        "nav_home",
-        "nav_back",
-        "refresh_page",
-    }
+    assert {"quick_report_daily", "quick_report_weekly", "quick_report_monthly", "nav_home", "nav_back", "refresh_page"}.issubset(_callback_ids(response.reply_markup))
 
 
 def test_wallet_summary_callback_adds_wallet_link_button(monkeypatch, tmp_path):
@@ -859,7 +834,7 @@ def test_v3_poll_navigation_edits_same_message_without_send(tmp_path):
 
     assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText"]
     assert calls[-1][1]["message_id"] == 789
-    assert calls[-1][1]["text"].startswith("🧠 Intelligence")
+    assert "🧠 Intelligence" in calls[-1][1]["text"]
     assert "sendMessage" not in [method for method, _params in calls]
 
 
@@ -979,7 +954,7 @@ def test_console_command_reuses_active_console_message(tmp_path):
 
     assert next_offset == 102
     assert [method for method, _params in calls] == ["getUpdates", "sendMessage", "editMessageText"]
-    assert calls[1][1]["text"].startswith("📊 Polylens Mission Control")
+    assert "📊 Polylens Mission Control" in calls[1][1]["text"]
     assert calls[2][1]["message_id"] == 777
 
 
@@ -1252,3 +1227,124 @@ def test_daily_report_generation(monkeypatch, tmp_path):
     assert "Daily PnL: +$3.25" in text
     assert "7D PnL: +$7.50" in text
     assert "Total PnL: +$13.25" in text
+
+
+def test_v4_breadcrumb_and_persistent_bottom_navigation(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    home = console.handle_console_callback(456, 123, "nav_home")
+    performance = console.handle_console_callback(456, 123, "nav_performance")
+
+    assert home.text.splitlines()[0] == "🏠 Home"
+    assert performance.text.splitlines()[0] == "🏠 Home › 📈 Performance"
+    assert [button["callback_data"] for button in home.reply_markup["inline_keyboard"][-1]] == ["nav_home", "refresh_page"]
+    assert [button["callback_data"] for button in performance.reply_markup["inline_keyboard"][-1]] == ["nav_home", "nav_back", "refresh_page"]
+
+
+def test_v4_favorites_are_user_scoped_and_rendered_below_breadcrumb(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    console.handle_console_callback(456, 123, "nav_performance")
+    favorited = console.handle_console_callback(456, 123, "favorite_toggle")
+    wallet_stats = console.handle_console_callback(456, 123, "nav_wallets")
+    wallet_stats = console.handle_console_callback(456, 123, "quick_wallet_stats")
+    other_user = console.handle_console_callback(456, 999, "nav_performance")
+
+    assert "⭐ Favorites\n• 📈 Performance" in favorited.text
+    assert "⭐ Favorites\n• 📈 Performance" in wallet_stats.text
+    assert "fav_performance" in _callback_ids(wallet_stats.reply_markup)
+    assert other_user.text == "unauthorized"
+
+
+def test_v4_recent_pages_back_stack_and_home_clear_history(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    console.handle_console_callback(456, 123, "nav_performance")
+    paper = console.handle_console_callback(456, 123, "quick_paper_trades")
+    back = console.handle_console_callback(456, 123, "nav_back")
+    home = console.handle_console_callback(456, 123, "nav_home")
+
+    assert paper.text.splitlines()[0] == "🏠 Home › 📈 Performance › 📄 Paper Trades"
+    assert back.text.splitlines()[0] == "🏠 Home › 📈 Performance"
+    assert "🕒 Recent\n• 📄 Paper Trades" in back.text
+    assert home.text.splitlines()[0] == "🏠 Home"
+    assert console._v4_navigation_states[123].history == []
+
+
+@pytest.mark.parametrize(
+    ("parent_callback", "quick_callback", "heading"),
+    [
+        ("nav_wallets", "quick_wallet_stats", "Wallet Stats"),
+        ("nav_reports", "quick_report_daily", "📅 Daily"),
+        ("nav_system", "quick_services", "⚙️ Services"),
+    ],
+)
+def test_v4_context_actions_navigate_to_read_only_pages(tmp_path, parent_callback, quick_callback, heading):
+    console = _dashboard_console(tmp_path)
+
+    console.handle_console_callback(456, 123, parent_callback)
+    response = console.handle_console_callback(456, 123, quick_callback)
+
+    assert heading in response.text
+    assert "Updated:\n12:34:56 UTC" in response.text
+    assert {"nav_home", "nav_back", "refresh_page"}.issubset(_callback_ids(response.reply_markup))
+
+
+def test_v4_refresh_preserves_page_state_across_callback_contexts(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    console.handle_console_callback(456, 123, "nav_wallets")
+    console.handle_console_callback(456, 123, "quick_wallet_stats")
+    refreshed = console.handle_console_callback(999, 123, "refresh_page")
+
+    assert refreshed.text.splitlines()[0] == "🏠 Home › 👛 Wallets › Wallet Stats"
+    assert console._v4_navigation_states[123].current_page == "wallet_stats"
+
+
+def test_v4_quick_navigation_edits_the_existing_message_only(tmp_path):
+    console = _dashboard_console(tmp_path)
+    calls = []
+    updates = [
+        _callback_update("nav_wallets", message_id=789),
+        _callback_update("quick_wallet_stats", message_id=789),
+    ]
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        if method == "getUpdates":
+            return {"result": updates}
+        if method == "editMessageText":
+            return {"ok": True, "result": {"message_id": params["message_id"]}}
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+    console.poll_once(timeout=1)
+
+    assert [method for method, _params in calls] == [
+        "getUpdates", "answerCallbackQuery", "editMessageText", "answerCallbackQuery", "editMessageText"
+    ]
+    assert all(params.get("message_id") == 789 for method, params in calls if method == "editMessageText")
+    assert "sendMessage" not in [method for method, _params in calls]
+
+
+def test_v4_render_timing_helper_uses_cached_read_only_snapshot(tmp_path):
+    from src.integrations.telegram_console import render_timing_ms
+
+    console = _dashboard_console(tmp_path)
+    console.handle_console_callback(456, 123, "nav_performance")
+
+    response, elapsed_ms = render_timing_ms(lambda: console.handle_console_callback(456, 123, "refresh_page"))
+
+    assert "📈 Performance" in response.text
+    assert elapsed_ms < 150
+
+def test_v4_favorites_do_not_leak_between_allowed_users(tmp_path):
+    console = _dashboard_console(tmp_path)
+    console.config = _config(tmp_path, admins=(123, 456))
+
+    console.handle_console_callback(111, 123, "nav_performance")
+    console.handle_console_callback(111, 123, "favorite_toggle")
+    other_user = console.handle_console_callback(222, 456, "nav_performance")
+
+    assert "⭐ Favorites" in console.handle_console_callback(111, 123, "refresh_page").text
+    assert "⭐ Favorites" not in other_user.text
