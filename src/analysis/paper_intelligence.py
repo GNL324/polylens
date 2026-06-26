@@ -351,3 +351,67 @@ def _float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+_legacy_paper_trading_intelligence = paper_trading_intelligence
+
+
+def paper_trading_intelligence(
+    *,
+    db_path: str | Path = DEFAULT_PAPER_TRADING_DB,
+    short_crypto_db_path: str | Path = DEFAULT_SHORT_CRYPTO_PAPER_DB,
+    now: datetime | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    from src.analysis.paper_portfolio import portfolio_trade_log
+    from src.analysis.paper_trading_engine import init_paper_trading_db, performance_report
+
+    now = _as_utc(now or datetime.now(timezone.utc))
+    init_paper_trading_db(db_path)
+    base = _legacy_paper_trading_intelligence(
+        db_path=db_path,
+        short_crypto_db_path=short_crypto_db_path,
+        now=now,
+        limit=limit,
+    )
+    portfolio = performance_report(db_path)
+    log = portfolio_trade_log(db_path, limit=max(int(limit), 1) * 5)
+    open_rows = [row for row in log if row["status"] == "open"]
+    closed_rows = [row for row in log if row["status"] == "closed"]
+    today_start = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
+    seven_days_ago = now - timedelta(days=7)
+    daily_pnl = sum(float(row["realized_pnl"] or 0.0) for row in closed_rows if _timestamp_at_or_after(row.get("closed_at"), today_start))
+    pnl_7d = sum(float(row["realized_pnl"] or 0.0) for row in closed_rows if _timestamp_at_or_after(row.get("closed_at"), seven_days_ago))
+    strategy_breakdown = portfolio["by_strategy"]
+    ranked = [item for item in strategy_breakdown.values() if item["trade_count"]]
+    top = max(ranked, key=lambda item: (item["realized_pnl"] + item["unrealized_pnl"], item["win_rate"], item["strategy"]), default=None)
+    worst = min(ranked, key=lambda item: (item["realized_pnl"] + item["unrealized_pnl"], item["win_rate"], item["strategy"]), default=None)
+    base.update(
+        {
+            "recent_trades": log[:limit],
+            "open_positions": open_rows[:limit],
+            "closed_positions": closed_rows[:limit],
+            "daily_pnl": round(daily_pnl, 6),
+            "pnl_7d": round(pnl_7d, 6),
+            "total_pnl": portfolio["total_pnl"],
+            "win_rate": portfolio["win_rate"],
+            "trade_count": portfolio["trade_count"],
+            "open_positions_count": portfolio["open_positions"],
+            "closed_positions_count": portfolio["closed_positions"],
+            "strategy_breakdown": strategy_breakdown,
+            "top_strategy": top,
+            "worst_strategy": worst,
+            "starting_bankroll": portfolio["starting_bankroll"],
+            "cash_balance": portfolio["cash_balance"],
+            "open_position_value": portfolio["open_position_value"],
+            "realized_pnl": portfolio["realized_pnl"],
+            "unrealized_pnl": portfolio["unrealized_pnl"],
+            "current_equity": portfolio["total_equity"],
+            "total_equity": portfolio["total_equity"],
+            "roi_pct": portfolio["roi_pct"],
+            "legacy_anomalous_count": portfolio["legacy_anomalous_count"],
+        }
+    )
+    if portfolio["legacy_anomalous_count"]:
+        base["warnings"] = [*base.get("warnings", []), f"{portfolio['legacy_anomalous_count']} legacy rows excluded from the $100 portfolio"]
+    return base

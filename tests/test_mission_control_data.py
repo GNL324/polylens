@@ -173,7 +173,7 @@ def test_mission_control_snapshot(tmp_path, monkeypatch) -> None:
         lambda symbol: {"last": "65000", "open": "64000"},
     )
     now = datetime(2026, 6, 9, 12, 0, tzinfo=timezone.utc)
-    snapshot = mission_control_snapshot(paper_db_path=db_path, polylens_db_path=polylens_db, now=now)
+    snapshot = mission_control_snapshot(paper_db_path=db_path, polylens_db_path=polylens_db, portfolio_db_path=tmp_path / "missing-canonical.db", now=now)
     assert snapshot["header"]["strategy_label"] == "test_strategy"
     assert snapshot["kpis"]["total_trades"] == 3
     assert snapshot["active_bet"] is not None

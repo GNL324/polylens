@@ -800,3 +800,69 @@ def _float_env(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
+
+
+_legacy_mission_control_snapshot = mission_control_snapshot
+
+
+def mission_control_snapshot(
+    *,
+    paper_db_path: str | Path = SHORT_CRYPTO_PAPER_DB_PATH,
+    polylens_db_path: str | Path = POLYLENS_DB_PATH,
+    portfolio_db_path: str | Path = "data/paper_trading.db",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    from src.analysis.paper_trading_engine import performance_report as canonical_paper_performance
+
+    snapshot = _legacy_mission_control_snapshot(
+        paper_db_path=paper_db_path,
+        polylens_db_path=polylens_db_path,
+        now=now,
+    )
+    portfolio = canonical_paper_performance(portfolio_db_path)
+    kpis = snapshot["kpis"]
+    kpis.update(
+        {
+            "starting_bankroll": portfolio["starting_bankroll"],
+            "current_equity": portfolio["total_equity"],
+            "cash_balance": portfolio["cash_balance"],
+            "open_position_value": portfolio["open_position_value"],
+            "realized_pnl": portfolio["realized_pnl"],
+            "unrealized_pnl": portfolio["unrealized_pnl"],
+            "total_pnl": portfolio["total_pnl"],
+            "roi_pct": portfolio["roi_pct"],
+            "total_trades": portfolio["trade_count"],
+            "open_trades": portfolio["open_positions"],
+            "closed_trades": portfolio["closed_positions"],
+            "win_rate": portfolio["win_rate"],
+            "bankroll": portfolio["starting_bankroll"],
+            "available_cash": portfolio["cash_balance"],
+        }
+    )
+    snapshot["header"]["wallet"] = f"${portfolio['open_position_value']:.2f} deployed"
+    return snapshot
+
+
+
+_canonical_mission_control_snapshot = mission_control_snapshot
+
+
+def mission_control_snapshot(
+    *,
+    paper_db_path: str | Path = SHORT_CRYPTO_PAPER_DB_PATH,
+    polylens_db_path: str | Path = POLYLENS_DB_PATH,
+    portfolio_db_path: str | Path = "data/paper_trading.db",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    if not Path(portfolio_db_path).exists():
+        return _legacy_mission_control_snapshot(
+            paper_db_path=paper_db_path,
+            polylens_db_path=polylens_db_path,
+            now=now,
+        )
+    return _canonical_mission_control_snapshot(
+        paper_db_path=paper_db_path,
+        polylens_db_path=polylens_db_path,
+        portfolio_db_path=portfolio_db_path,
+        now=now,
+    )

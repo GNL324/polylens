@@ -1794,3 +1794,73 @@ TelegramConsole._page_response = _v4_page_response
 TelegramConsole.handle_callback = _v4_handle_callback
 TelegramConsole.handle_console_callback = _v4_handle_console_callback
 TelegramConsole.handle_text = _v4_handle_text
+
+
+V4_CONTEXT_CALLBACKS["quick_trades_log"] = "trades_log"
+V4_PAGE_TITLES["trades_log"] = "📜 Trades Log"
+_v4_render_console_page_with_navigation = render_console_page
+_v4_page_reply_markup_with_navigation = page_reply_markup
+
+
+def _paper_trades_log_details(paper: dict[str, Any]) -> list[str]:
+    rows: list[str] = []
+    for trade in (paper.get("recent_trades") or [])[:8]:
+        if not isinstance(trade, dict):
+            continue
+        rows.append(
+            f"{trade.get('status', 'unknown')} | {trade.get('strategy', 'paper')} | "
+            f"{_format_money(trade.get('pnl'))} | stake=${float(trade.get('stake') or trade.get('notional') or 0):.2f}"
+        )
+        rows.append(str(trade.get("market_title") or "unknown")[:90])
+    return rows or ["No canonical paper trades recorded."]
+
+
+def render_console_page(
+    page: str,
+    *,
+    config: TelegramConsoleConfig,
+    context: ConsolePageContext,
+    history: list[str] | None = None,
+    favorites: list[str] | None = None,
+    recent_pages: list[str] | None = None,
+) -> str:
+    if page == "performance":
+        body = _v3_render_metric_page(
+            "📈 Performance",
+            [
+                ("Starting Bankroll", _format_money(context.paper.get("starting_bankroll"))),
+                ("Current Equity", _format_money(context.paper.get("current_equity") or context.paper.get("total_equity"))),
+                ("Cash", _format_money(context.paper.get("cash_balance"))),
+                ("Open Position Value", _format_money(context.paper.get("open_position_value"))),
+                ("Realized PnL", _format_money(context.paper.get("realized_pnl"))),
+                ("Unrealized PnL", _format_money(context.paper.get("unrealized_pnl"))),
+                ("Total PnL", _format_money(context.paper.get("total_pnl"))),
+                ("ROI", format_pct_metric(context.paper.get("roi_pct"))),
+                ("Open Positions", format_count_metric(context.paper.get("open_positions_count"))),
+                ("Closed Trades", format_count_metric(context.paper.get("closed_positions_count"))),
+                ("Win Rate", format_pct_metric(context.paper.get("win_rate"))),
+                ("Top Strategy", _strategy_label(context.paper.get("top_strategy"))),
+            ],
+            context.now,
+        )
+        return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
+    if page == "trades_log":
+        body = _v3_render_detail_page("📜 Trades Log", _paper_trades_log_details(context.paper), context.now)
+        return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
+    return _v4_render_console_page_with_navigation(
+        page,
+        config=config,
+        context=context,
+        history=history,
+        favorites=favorites,
+        recent_pages=recent_pages,
+    )
+
+
+def page_reply_markup(page: str, state: ConsoleNavigationState | None = None) -> dict[str, Any]:
+    markup = _v4_page_reply_markup_with_navigation(page, state)
+    if page == "performance":
+        rows = list(markup["inline_keyboard"])
+        rows.insert(2, [{"text": "📜 Trades Log", "callback_data": "quick_trades_log"}])
+        markup = {"inline_keyboard": rows}
+    return markup

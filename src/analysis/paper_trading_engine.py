@@ -530,3 +530,162 @@ def _safe_float(value: Any) -> float:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+_legacy_init_paper_trading_db = init_paper_trading_db
+
+
+def init_paper_trading_db(db_path: str | Path = DEFAULT_PAPER_TRADING_DB) -> None:
+    _legacy_init_paper_trading_db(db_path)
+    from src.analysis.paper_portfolio import migrate_paper_portfolio
+
+    migrate_paper_portfolio(db_path)
+
+
+def calculate_position_size(
+    *,
+    db_path: str | Path,
+    strategy: str,
+    config: PaperTradingConfig,
+) -> float:
+    from src.analysis.paper_portfolio import portfolio_report
+
+    portfolio = portfolio_report(db_path, starting_bankroll=config.starting_bankroll)
+    base = min(config.starting_bankroll * config.risk_per_trade, 5.0)
+    max_strategy_exposure = config.starting_bankroll * config.max_strategy_exposure
+    current_strategy_exposure = _strategy_open_notional(db_path, strategy)
+    remaining_strategy_capacity = max(0.0, max_strategy_exposure - current_strategy_exposure)
+    return round(max(0.0, min(base, portfolio["available_cash"], remaining_strategy_capacity)), 6)
+
+
+def _open_position(db_path: str | Path, order_id: int, opportunity: PaperOpportunity, stake: float) -> bool:
+    from src.analysis.paper_portfolio import portfolio_report
+
+    if stake <= 0 or stake > portfolio_report(db_path)["available_cash"] + 0.000001:
+        return False
+    shares = stake / opportunity.entry_price if opportunity.entry_price > 0 else 0.0
+    if shares <= 0:
+        return False
+    raw = opportunity.raw or {}
+    source_wallet = str(raw.get("source_wallet") or raw.get("wallet") or raw.get("trader_address") or "") or None
+    reason = str(raw.get("reason") or raw.get("recommendation_reason") or "") or None
+    signal_family = str(raw.get("signal_family") or raw.get("signal_type") or opportunity.strategy)
+    with closing_connection(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO paper_positions
+            (order_id, opportunity_id, strategy, market_id, title, asset, side, entry_timestamp, entry_price, shares, notional, status, current_price, signal_family, source_wallet, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
+            """,
+            (
+                order_id,
+                opportunity.opportunity_id,
+                opportunity.strategy,
+                opportunity.market_id,
+                opportunity.title,
+                opportunity.asset,
+                opportunity.side,
+                _utc_now(),
+                opportunity.entry_price,
+                round(shares, 8),
+                round(stake, 6),
+                opportunity.entry_price,
+                signal_family,
+                source_wallet,
+                reason,
+            ),
+        )
+        return cur.rowcount > 0
+
+
+def performance_report(db_path: str | Path = DEFAULT_PAPER_TRADING_DB, starting_bankroll: float = DEFAULT_STARTING_BANKROLL) -> dict[str, Any]:
+    init_paper_trading_db(db_path)
+    from src.analysis.paper_portfolio import portfolio_report
+
+    portfolio = portfolio_report(db_path, starting_bankroll=starting_bankroll)
+    with closing_connection(db_path) as conn:
+        rows = conn.execute("SELECT * FROM paper_positions WHERE status IN ('open', 'closed') ORDER BY paper_position_id").fetchall()
+    closed = [row for row in rows if row["status"] == "closed"]
+    pnl_values = [float(row["realized_pnl"] or 0.0) for row in closed]
+    wins = [value for value in pnl_values if value > 0]
+    losses = [value for value in pnl_values if value < 0]
+    portfolio.update(
+        {
+            "expectancy": round(mean(pnl_values), 6) if pnl_values else 0.0,
+            "sharpe_ratio": round(_sharpe(pnl_values), 6),
+            "max_drawdown": round(_max_drawdown(_equity_values(db_path, starting_bankroll)), 6),
+            "profit_factor": round(_ratio(sum(wins), abs(sum(losses))), 6) if losses else (round(sum(wins), 6) if wins else 0.0),
+            "by_asset": _segment(rows, "asset"),
+        }
+    )
+    return portfolio
+
+
+
+def _save_blocked_order(db_path: str | Path, run_id: int, opportunity: PaperOpportunity, reason: str) -> None:
+    raw = {**(opportunity.raw or {}), "blocked_reason": reason}
+    with closing_connection(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO paper_orders
+            (run_id, opportunity_id, strategy, side, market_id, title, asset, simulated_price, stake, status, raw_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'blocked', ?)
+            """,
+            (run_id, opportunity.opportunity_id, opportunity.strategy, opportunity.side, opportunity.market_id, opportunity.title, opportunity.asset, opportunity.entry_price, json.dumps(raw, sort_keys=True)),
+        )
+
+
+def run_paper_trading_engine(
+    *,
+    db_path: str | Path = DEFAULT_PAPER_TRADING_DB,
+    config: PaperTradingConfig | None = None,
+    collectors: list[Callable[[], list[dict[str, Any]]]] | None = None,
+) -> dict[str, Any]:
+    init_paper_trading_db(db_path)
+    config = config or PaperTradingConfig()
+    raw = _collect_all(collectors, config.opportunity_limit)
+    opportunities = sorted((_normalize_opportunity(item) for item in raw), key=lambda item: (-item.ranking_score, item.opportunity_id))
+    equity_before = _current_equity(db_path, config.starting_bankroll)
+    run_id = _create_run(db_path, opportunities_seen=len(opportunities), equity=equity_before)
+    settled = settle_open_positions(db_path=db_path, run_id=run_id)
+    orders_created = 0
+    positions_opened = 0
+    for opportunity in opportunities:
+        if _has_position(db_path, opportunity.opportunity_id):
+            continue
+        if _open_position_count(db_path) >= config.max_open_positions:
+            _save_blocked_order(db_path, run_id, opportunity, "max open position limit reached")
+            continue
+        stake = calculate_position_size(db_path=db_path, strategy=opportunity.strategy, config=config)
+        if stake <= 0:
+            _save_blocked_order(db_path, run_id, opportunity, "insufficient paper cash or strategy capacity")
+            continue
+        order_id = _save_order(db_path, run_id, opportunity, stake)
+        if _open_position(db_path, order_id, opportunity, stake):
+            orders_created += 1
+            positions_opened += 1
+        else:
+            with closing_connection(db_path) as conn:
+                conn.execute("UPDATE paper_orders SET status='blocked' WHERE id=?", (order_id,))
+    equity = record_equity_snapshot(db_path, run_id=run_id, starting_bankroll=config.starting_bankroll)
+    _update_run(
+        db_path,
+        run_id,
+        opportunities_seen=len(opportunities),
+        orders_created=orders_created,
+        positions_opened=positions_opened,
+        positions_settled=settled,
+        equity=equity["equity"],
+        raw={"opportunity_ids": [item.opportunity_id for item in opportunities]},
+    )
+    return {
+        "run_id": run_id,
+        "opportunities_seen": len(opportunities),
+        "orders_created": orders_created,
+        "positions_opened": positions_opened,
+        "positions_settled": settled,
+        "open_positions": _open_position_count(db_path),
+        "equity": equity["equity"],
+        "realized_pnl": equity["realized_pnl"],
+        "unrealized_pnl": equity["unrealized_pnl"],
+    }
