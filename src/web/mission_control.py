@@ -481,6 +481,8 @@ def _render_system_health(health: dict[str, Any]) -> None:
         ("Short Crypto Timer", health.get("short_crypto_timer"), _service_class(health.get("short_crypto_timer"))),
         ("Settle Timer", health.get("short_crypto_settle_timer"), _service_class(health.get("short_crypto_settle_timer"))),
         ("Dashboard Service", health.get("dashboard_service"), _service_class(health.get("dashboard_service"))),
+        ("Telegram Console", health.get("telegram_console_service"), _service_class(health.get("telegram_console_service"))),
+        ("TG Health Timer", health.get("telegram_console_health_timer"), _service_class(health.get("telegram_console_health_timer"))),
         ("Last Scan", health.get("last_scan_time") or "N/A", ""),
         ("Paper DB", _truncate(health.get("paper_db_path"), 42), ""),
         ("Polylens DB", _truncate(health.get("polylens_db_path"), 42), ""),

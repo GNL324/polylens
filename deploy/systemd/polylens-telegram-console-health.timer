@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Polylens Telegram Console Health Check every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Unit=polylens-telegram-console-health.service
+
+[Install]
+WantedBy=timers.target

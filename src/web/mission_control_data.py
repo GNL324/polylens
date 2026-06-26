@@ -353,6 +353,8 @@ def system_health(
         "short_crypto_timer": _systemd_state("polylens-short-crypto-paper.timer"),
         "short_crypto_settle_timer": _systemd_state("polylens-short-crypto-paper-settle.timer"),
         "dashboard_service": _systemd_state("polylens-dashboard.service"),
+        "telegram_console_service": _systemd_state("polylens-telegram-console.service"),
+        "telegram_console_health_timer": _systemd_state("polylens-telegram-console-health.timer"),
         "last_scan_time": _last_paper_run_time(paper_db_path),
         "paper_db_path": str(Path(paper_db_path).resolve()),
         "polylens_db_path": str(Path(polylens_db_path).resolve()),

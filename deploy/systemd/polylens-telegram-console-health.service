@@ -1,0 +1,15 @@
+[Unit]
+Description=Polylens Telegram Console SRE Health Check
+After=polylens-telegram-console.service
+Wants=polylens-telegram-console.service
+
+[Service]
+Type=oneshot
+User=noel
+WorkingDirectory=/home/noel/polylens
+Environment=PYTHONPATH=/home/noel/polylens
+ExecStart=/home/noel/polylens/.venv/bin/python /home/noel/polylens/scripts/telegram_console_health_check.py --json --no-alert
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
