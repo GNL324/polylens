@@ -145,6 +145,18 @@ def _button_urls(reply_markup):
     ]
 
 
+def _callback_update(callback_data, *, chat_id=456, user_id=123, message_id=789):
+    return {
+        "update_id": 100,
+        "callback_query": {
+            "id": "callback-1",
+            "from": {"id": user_id},
+            "message": {"message_id": message_id, "chat": {"id": chat_id}},
+            "data": callback_data,
+        },
+    }
+
+
 def test_unauthorized_user_rejected(tmp_path):
     console = TelegramConsole(_config(tmp_path, admins=(123,)))
 
@@ -625,6 +637,110 @@ def test_live_like_callback_blocked(tmp_path):
 
     assert response == "live trading disabled"
     assert response.reply_markup is None
+
+
+def test_poll_paper_performance_callback_edits_existing_message(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)), paper_intelligence_provider=_paper_report)
+    calls = []
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        if method == "getUpdates":
+            return {"result": [_callback_update("report_paper", message_id=789)]}
+        if method == "editMessageText":
+            return {"ok": True, "result": {"message_id": params["message_id"]}}
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+
+    next_offset = console.poll_once(timeout=1)
+
+    assert next_offset == 101
+    assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText"]
+    edit_params = calls[2][1]
+    assert edit_params["chat_id"] == 456
+    assert edit_params["message_id"] == 789
+    assert "Paper Performance" in edit_params["text"]
+    assert "sendMessage" not in [method for method, _params in calls]
+
+
+def test_poll_back_callback_edits_same_message(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+    calls = []
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        if method == "getUpdates":
+            return {"result": [_callback_update("menu_main", message_id=789)]}
+        if method == "editMessageText":
+            return {"ok": True, "result": {"message_id": params["message_id"]}}
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+
+    console.poll_once(timeout=1)
+
+    assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText"]
+    assert calls[2][1]["message_id"] == 789
+    assert calls[2][1]["text"] == "Polylens Control Console\nChoose a category."
+
+
+def test_poll_navigation_fallback_sends_only_if_edit_fails(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+    calls = []
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        if method == "getUpdates":
+            return {"result": [_callback_update("menu_system", message_id=789)]}
+        if method == "editMessageText":
+            raise RuntimeError("edit failed")
+        if method == "sendMessage":
+            return {"ok": True, "result": {"message_id": 990}}
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+
+    console.poll_once(timeout=1)
+
+    assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText", "sendMessage"]
+    assert calls[3][1]["chat_id"] == 456
+    assert calls[3][1]["text"] == "System\nSafe service, paper, and risk status."
+    assert console._active_console_messages[(456, 123)] == 990
+
+
+def test_console_command_reuses_active_console_message(tmp_path):
+    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+    calls = []
+    updates = [
+        {
+            "update_id": 100,
+            "message": {"text": "/start", "chat": {"id": 456}, "from": {"id": 123}},
+        },
+        {
+            "update_id": 101,
+            "message": {"text": "/console", "chat": {"id": 456}, "from": {"id": 123}},
+        },
+    ]
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        if method == "getUpdates":
+            return {"result": updates}
+        if method == "sendMessage":
+            return {"ok": True, "result": {"message_id": 777}}
+        if method == "editMessageText":
+            return {"ok": True, "result": {"message_id": params["message_id"]}}
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+
+    next_offset = console.poll_once(timeout=1)
+
+    assert next_offset == 102
+    assert [method for method, _params in calls] == ["getUpdates", "sendMessage", "editMessageText"]
+    assert calls[1][1]["text"].startswith("Polylens Telegram console")
+    assert calls[2][1]["message_id"] == 777
 
 
 def test_message_edit_used_when_possible(tmp_path):

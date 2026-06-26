@@ -42,6 +42,7 @@ TELEGRAM_API_BASE = "https://api.telegram.org"
 MAX_TELEGRAM_TEXT = 3500
 COMMANDS = (
     "/start",
+    "/console",
     "/help",
     "/status",
     "/health",
@@ -176,6 +177,7 @@ class TelegramConsole:
         self.risk_provider = risk_provider or (lambda: KillSwitch(db_path=config.readiness_db_path).status())
         self.top_wallets_provider = top_wallets_provider or (lambda: top_traders(limit=5, db_path=DEFAULT_TRADERS_DB))
         self.wallet_provider = wallet_provider or (lambda wallet: trader_summary(wallet, db_path=DEFAULT_TRADERS_DB))
+        self._active_console_messages: dict[tuple[int, int], int] = {}
         init_telegram_audit_db(config.audit_db_path)
 
     def validate_startup(self) -> None:
@@ -323,7 +325,7 @@ class TelegramConsole:
                 self._answer_callback_query(callback_query_id)
                 if chat_id is not None and user_id is not None:
                     response = self.handle_callback(int(user_id), callback_data)
-                    self._edit_message_or_send(chat_id, message_id, response)
+                    self._edit_console_message(int(chat_id), int(user_id), _optional_int(message_id), response)
                 continue
             message = update.get("message") or {}
             text = str(message.get("text") or "")
@@ -334,7 +336,7 @@ class TelegramConsole:
             if chat_id is None or user_id is None or not text.startswith("/"):
                 continue
             response = self.handle_text(int(user_id), text)
-            self._send_message(chat_id, response)
+            self._send_or_edit_console_message(int(chat_id), int(user_id), response)
         return next_offset
 
     def run_forever(self, *, poll_timeout: int = 30, sleep_seconds: float = 1.0) -> None:
@@ -346,7 +348,7 @@ class TelegramConsole:
             time.sleep(max(0.0, sleep_seconds))
 
     def _dispatch(self, command: str, args: str) -> TelegramResponse:
-        if command in {"", "/start", "/help"}:
+        if command in {"", "/start", "/console", "/help"}:
             return TelegramResponse(help_text(), reply_markup=menu_reply_markup("main"))
         if command == "/status":
             return self._menu_response(
@@ -419,6 +421,20 @@ class TelegramConsole:
             params["reply_markup"] = json.dumps(response.reply_markup)
         return self._telegram_request("sendMessage", params)
 
+    def _send_or_edit_console_message(
+        self,
+        chat_id: int,
+        telegram_user_id: int,
+        response: TelegramResponse,
+    ) -> dict[str, Any]:
+        key = self._active_console_key(chat_id, telegram_user_id)
+        active_message_id = self._active_console_messages.get(key)
+        if active_message_id is not None:
+            return self._edit_console_message(chat_id, telegram_user_id, active_message_id, response)
+        result = self._send_message(chat_id, response)
+        self._remember_console_message(chat_id, telegram_user_id, result)
+        return result
+
     def _answer_callback_query(self, callback_query_id: Any) -> None:
         if callback_query_id is None:
             return
@@ -433,15 +449,47 @@ class TelegramConsole:
         message_id: int | None,
         response: TelegramResponse,
     ) -> dict[str, Any]:
+        result, _message_id = self._edit_message_or_send_with_id(chat_id, message_id, response)
+        return result
+
+    def _edit_console_message(
+        self,
+        chat_id: int,
+        telegram_user_id: int,
+        message_id: int | None,
+        response: TelegramResponse,
+    ) -> dict[str, Any]:
+        key = self._active_console_key(chat_id, telegram_user_id)
+        target_message_id = message_id or self._active_console_messages.get(key)
+        result, active_message_id = self._edit_message_or_send_with_id(chat_id, target_message_id, response)
+        if active_message_id is not None:
+            self._active_console_messages[key] = active_message_id
+        return result
+
+    def _edit_message_or_send_with_id(
+        self,
+        chat_id: int,
+        message_id: int | None,
+        response: TelegramResponse,
+    ) -> tuple[dict[str, Any], int | None]:
         if message_id is not None:
             params: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "text": response.text}
             if response.reply_markup:
                 params["reply_markup"] = json.dumps(response.reply_markup)
             try:
-                return self._telegram_request("editMessageText", params)
+                return self._telegram_request("editMessageText", params), int(message_id)
             except Exception:
                 LOGGER.warning("telegram edit failed; falling back to sendMessage")
-        return self._send_message(chat_id, response)
+        result = self._send_message(chat_id, response)
+        return result, _telegram_result_message_id(result)
+
+    def _remember_console_message(self, chat_id: int, telegram_user_id: int, result: dict[str, Any]) -> None:
+        message_id = _telegram_result_message_id(result)
+        if message_id is not None:
+            self._active_console_messages[self._active_console_key(chat_id, telegram_user_id)] = message_id
+
+    def _active_console_key(self, chat_id: int, telegram_user_id: int) -> tuple[int, int]:
+        return int(chat_id), int(telegram_user_id)
 
     def _menu_response(self, text: str) -> TelegramResponse:
         return TelegramResponse(text, reply_markup=menu_reply_markup("main"))
@@ -538,6 +586,22 @@ def normalize_callback_id(callback_data: str) -> str:
     if not re.fullmatch(r"[a-z0-9_]{1,32}", callback_id):
         return "unknown"
     return callback_id
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _telegram_result_message_id(result: dict[str, Any]) -> int | None:
+    payload = result.get("result") if isinstance(result, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    return _optional_int(payload.get("message_id"))
 
 
 def help_text() -> str:
