@@ -276,12 +276,12 @@ def test_help_returns_main_menu_reply_markup(tmp_path):
 
     assert response.reply_markup is not None
     assert _callback_ids(response.reply_markup) == {
-        "report_paper",
-        "menu_intelligence",
-        "menu_wallets",
-        "menu_reports",
-        "menu_system",
-        "dashboard_refresh",
+        "nav_performance",
+        "nav_intelligence",
+        "nav_wallets",
+        "nav_reports",
+        "nav_system",
+        "refresh_page",
     }
 
 
@@ -292,8 +292,8 @@ def test_start_returns_dashboard_reply_markup(tmp_path):
 
     assert "📊 Polylens Mission Control" in response
     assert response.reply_markup is not None
-    assert "menu_system" in _callback_ids(response.reply_markup)
-    assert "dashboard_refresh" in _callback_ids(response.reply_markup)
+    assert "nav_system" in _callback_ids(response.reply_markup)
+    assert "refresh_page" in _callback_ids(response.reply_markup)
 
 
 def test_dashboard_rendering_includes_statuses_metrics_and_timestamp(tmp_path):
@@ -347,18 +347,18 @@ def test_render_dashboard_text_uses_supplied_utc_timestamp():
 
 
 def test_menu_navigation_to_system_menu(tmp_path):
-    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+    console = _dashboard_console(tmp_path)
 
     response = console.handle_callback(123, "menu_system")
 
-    assert response == "System\nSafe service, paper, and risk status."
+    assert response.text.startswith("⚙️ System")
+    assert "Updated:\n12:34:56 UTC" in response
     assert response.reply_markup is not None
     assert _callback_ids(response.reply_markup) == {
-        "status",
-        "health",
-        "paper_status",
-        "risk",
-        "menu_main",
+        "drill_wallet_stats",
+        "nav_home",
+        "nav_back",
+        "refresh_page",
     }
 
 
@@ -371,13 +371,75 @@ def test_back_navigation_returns_main_menu(tmp_path):
     assert "Updated:\n12:34:56 UTC" in response
     assert response.reply_markup is not None
     assert _callback_ids(response.reply_markup) == {
-        "report_paper",
-        "menu_intelligence",
-        "menu_wallets",
-        "menu_reports",
-        "menu_system",
-        "dashboard_refresh",
+        "nav_performance",
+        "nav_intelligence",
+        "nav_wallets",
+        "nav_reports",
+        "nav_system",
+        "refresh_page",
     }
+
+
+def test_v3_home_submenu_back_and_home_flow(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    home = console.handle_console_callback(456, 123, "nav_performance")
+    drilldown = console.handle_console_callback(456, 123, "drill_paper_trades")
+    back = console.handle_console_callback(456, 123, "nav_back")
+    final_home = console.handle_console_callback(456, 123, "nav_home")
+
+    assert home.text.startswith("📈 Performance")
+    assert drilldown.text.startswith("📈 Paper Trades")
+    assert back.text.startswith("📈 Performance")
+    assert final_home.text.startswith("📊 Polylens Mission Control")
+
+
+@pytest.mark.parametrize(
+    ("callback_id", "heading"),
+    [
+        ("nav_performance", "📈 Performance"),
+        ("nav_intelligence", "🧠 Intelligence"),
+        ("nav_wallets", "👛 Wallets"),
+        ("nav_reports", "📊 Reports"),
+        ("nav_system", "⚙️ System"),
+    ],
+)
+def test_v3_every_page_has_timestamp_and_refresh_preserves_page(tmp_path, callback_id, heading):
+    console = _dashboard_console(
+        tmp_path,
+        top_wallets_provider=lambda: [{"wallet": VALID_WALLET, "watch_score": 91, "classification": "arbitrage"}],
+    )
+
+    page = console.handle_console_callback(456, 123, callback_id)
+    refreshed = console.handle_console_callback(456, 123, "refresh_page")
+
+    assert page.text.startswith(heading)
+    assert page.text.endswith("Updated:\n12:34:56 UTC")
+    assert refreshed.text.startswith(heading)
+    assert refreshed.text.endswith("Updated:\n12:34:56 UTC")
+
+
+@pytest.mark.parametrize(
+    ("parent_callback", "drill_callback", "heading"),
+    [
+        ("nav_performance", "drill_paper_trades", "📈 Paper Trades"),
+        ("nav_intelligence", "drill_signals_today", "🧠 Signals Today"),
+        ("nav_wallets", "drill_wallet_stats", "👛 Wallet Stats"),
+        ("nav_intelligence", "drill_validation", "🧠 Validation Accuracy"),
+    ],
+)
+def test_v3_drilldown_navigation_returns_to_immediate_parent(tmp_path, parent_callback, drill_callback, heading):
+    console = _dashboard_console(
+        tmp_path,
+        top_wallets_provider=lambda: [{"wallet": VALID_WALLET, "watch_score": 91, "classification": "arbitrage"}],
+    )
+
+    parent = console.handle_console_callback(456, 123, parent_callback)
+    drilldown = console.handle_console_callback(456, 123, drill_callback)
+    back = console.handle_console_callback(456, 123, "nav_back")
+
+    assert drilldown.text.startswith(heading)
+    assert back.text.startswith(parent.text.splitlines()[0])
 
 
 def test_health_uses_safe_health_path(tmp_path):
@@ -513,21 +575,17 @@ def test_callback_audit_row_written(tmp_path):
 
 
 def test_reports_menu_contains_paper_intelligence_callbacks(tmp_path):
-    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+    console = _dashboard_console(tmp_path)
 
     response = console.handle_callback(123, "menu_reports")
 
     assert response.reply_markup is not None
     assert _callback_ids(response.reply_markup) == {
-        "report_daily",
-        "report_signals",
-        "report_wallets",
-        "report_paper",
-        "paper_recent",
-        "paper_pnl",
-        "paper_positions",
-        "paper_strategies",
-        "menu_main",
+        "drill_paper_trades",
+        "drill_signals_today",
+        "nav_home",
+        "nav_back",
+        "refresh_page",
     }
 
 
@@ -783,6 +841,28 @@ def test_poll_paper_performance_callback_edits_existing_message(tmp_path):
     assert "sendMessage" not in [method for method, _params in calls]
 
 
+def test_v3_poll_navigation_edits_same_message_without_send(tmp_path):
+    console = _dashboard_console(tmp_path)
+    calls = []
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        if method == "getUpdates":
+            return {"result": [_callback_update("nav_intelligence", message_id=789)]}
+        if method == "editMessageText":
+            return {"ok": True, "result": {"message_id": params["message_id"]}}
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+
+    console.poll_once(timeout=1)
+
+    assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText"]
+    assert calls[-1][1]["message_id"] == 789
+    assert calls[-1][1]["text"].startswith("🧠 Intelligence")
+    assert "sendMessage" not in [method for method, _params in calls]
+
+
 def test_poll_back_callback_edits_same_message(tmp_path):
     console = _dashboard_console(tmp_path)
     calls = []
@@ -847,8 +927,8 @@ def test_poll_refresh_callback_never_sends_new_message_if_edit_fails(tmp_path):
     assert "sendMessage" not in [method for method, _params in calls]
 
 
-def test_poll_navigation_fallback_sends_only_if_edit_fails(tmp_path):
-    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+def test_poll_page_navigation_never_sends_if_edit_fails(tmp_path):
+    console = _dashboard_console(tmp_path)
     calls = []
 
     def fake_request(method, params):
@@ -865,10 +945,8 @@ def test_poll_navigation_fallback_sends_only_if_edit_fails(tmp_path):
 
     console.poll_once(timeout=1)
 
-    assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText", "sendMessage"]
-    assert calls[3][1]["chat_id"] == 456
-    assert calls[3][1]["text"] == "System\nSafe service, paper, and risk status."
-    assert console._active_console_messages[(456, 123)] == 990
+    assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText"]
+    assert "sendMessage" not in [method for method, _params in calls]
 
 
 def test_console_command_reuses_active_console_message(tmp_path):

@@ -89,10 +89,32 @@ MENU_CALLBACKS = {
     "menu_system": "system",
     "menu_reports": "reports",
 }
-DASHBOARD_CALLBACKS = {"menu_main", "dashboard_refresh"}
+PAGE_NAV_CALLBACKS = {
+    "menu_main": "home",
+    "nav_home": "home",
+    "nav_performance": "performance",
+    "nav_intelligence": "intelligence",
+    "nav_wallets": "wallets",
+    "nav_reports": "reports",
+    "nav_system": "system",
+    "menu_intelligence": "intelligence",
+    "menu_wallets": "wallets",
+    "menu_signals": "intelligence",
+    "menu_system": "system",
+    "menu_reports": "reports",
+}
+DRILLDOWN_CALLBACKS = {
+    "drill_paper_trades": "paper_trades",
+    "drill_signals_today": "signals_today",
+    "drill_wallet_stats": "wallet_stats",
+    "drill_validation": "validation_accuracy",
+}
+REFRESH_CALLBACKS = {"dashboard_refresh", "refresh_page"}
+BACK_CALLBACKS = {"nav_back"}
 LIVE_CALLBACKS = {"buy", "sell", "order", "trade", "kill_switch", "resume_trading"}
 WALLET_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 DASHBOARD_DIVIDER = "━━━━━━━━━━━━━━━━━━"
+HOME_PAGE = "home"
 
 
 class TelegramConsoleConfigError(ValueError):
@@ -152,6 +174,17 @@ class TelegramResponse:
         return super().__eq__(other)
 
 
+@dataclass(frozen=True)
+class ConsolePageContext:
+    now: datetime
+    health: dict[str, Any]
+    signals: dict[str, Any]
+    paper_health: dict[str, Any]
+    paper: dict[str, Any]
+    risk: dict[str, Any]
+    top_wallets: list[Any] | None = None
+
+
 class TelegramConsole:
     def __init__(
         self,
@@ -181,6 +214,7 @@ class TelegramConsole:
         self.wallet_provider = wallet_provider or (lambda wallet: trader_summary(wallet, db_path=DEFAULT_TRADERS_DB))
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self._active_console_messages: dict[tuple[int, int], int] = {}
+        self._page_states: dict[tuple[int, int], tuple[str, list[str]]] = {}
         init_telegram_audit_db(config.audit_db_path)
 
     def validate_startup(self) -> None:
@@ -206,13 +240,8 @@ class TelegramConsole:
 
     def handle_callback(self, telegram_user_id: int, callback_data: str) -> TelegramResponse:
         callback_id = normalize_callback_id(callback_data)
-        if callback_id in DASHBOARD_CALLBACKS:
-            return self._handle_command(
-                telegram_user_id=telegram_user_id,
-                command="/console",
-                args="",
-                audit_command=f"callback:{callback_id}",
-            )
+        if self._is_page_callback(callback_id):
+            return self._handle_page_callback(telegram_user_id, callback_id)
         if callback_id in MENU_CALLBACKS:
             return self._handle_menu_callback(telegram_user_id, callback_id)
         if callback_id in LIVE_CALLBACKS:
@@ -229,6 +258,82 @@ class TelegramConsole:
             args=args,
             audit_command=f"callback:{callback_id}",
         )
+
+    def handle_console_callback(
+        self,
+        chat_id: int,
+        telegram_user_id: int,
+        callback_data: str,
+    ) -> TelegramResponse:
+        callback_id = normalize_callback_id(callback_data)
+        if self._is_page_callback(callback_id):
+            return self._handle_page_callback(
+                telegram_user_id,
+                callback_id,
+                state_key=self._active_console_key(chat_id, telegram_user_id),
+            )
+        return self.handle_callback(telegram_user_id, callback_data)
+
+    def _is_page_callback(self, callback_id: str) -> bool:
+        return callback_id in (
+            set(PAGE_NAV_CALLBACKS)
+            | set(DRILLDOWN_CALLBACKS)
+            | REFRESH_CALLBACKS
+            | BACK_CALLBACKS
+        )
+
+    def _handle_page_callback(
+        self,
+        telegram_user_id: int,
+        callback_id: str,
+        *,
+        state_key: tuple[int, int] | None = None,
+    ) -> TelegramResponse:
+        allowed = self._is_allowed(telegram_user_id)
+        response = "admin allowlist missing" if not self.config.admin_user_ids else "unauthorized"
+        result_status = "rejected"
+        try:
+            if allowed:
+                page, history = self._page_state(state_key)
+                if callback_id in REFRESH_CALLBACKS:
+                    target_page = page
+                elif callback_id in BACK_CALLBACKS:
+                    target_page = history.pop() if history else HOME_PAGE
+                else:
+                    target_page = PAGE_NAV_CALLBACKS.get(callback_id) or DRILLDOWN_CALLBACKS[callback_id]
+                    if target_page == HOME_PAGE:
+                        history = []
+                    elif target_page != page:
+                        history.append(page)
+                if state_key is not None:
+                    self._page_states[state_key] = (target_page, history)
+                response = self._page_response(target_page)
+                result_status = "ok"
+        except Exception as exc:
+            LOGGER.exception("telegram console page failed callback=%s user_id=%s", callback_id, telegram_user_id)
+            response = "error: command failed safely"
+            result_status = "error"
+            error_message = str(exc)
+        else:
+            error_message = ""
+        audit_telegram_command(
+            self.config.audit_db_path,
+            telegram_user_id=telegram_user_id,
+            command=f"callback:{callback_id}",
+            args="",
+            allowed=allowed,
+            result_status=result_status,
+            error_message=error_message if result_status == "error" else ("" if allowed else response),
+        )
+        if isinstance(response, TelegramResponse):
+            return response
+        return TelegramResponse(safe_telegram_text(response, token=self.config.bot_token))
+
+    def _page_state(self, state_key: tuple[int, int] | None) -> tuple[str, list[str]]:
+        if state_key is None:
+            return HOME_PAGE, []
+        page, history = self._page_states.get(state_key, (HOME_PAGE, []))
+        return page, list(history)
 
     def _handle_menu_callback(self, telegram_user_id: int, callback_id: str) -> TelegramResponse:
         allowed = self._is_allowed(telegram_user_id)
@@ -334,13 +439,14 @@ class TelegramConsole:
                 message_id = message.get("message_id")
                 self._answer_callback_query(callback_query_id)
                 if chat_id is not None and user_id is not None:
-                    response = self.handle_callback(int(user_id), callback_data)
+                    callback_id = normalize_callback_id(callback_data)
+                    response = self.handle_console_callback(int(chat_id), int(user_id), callback_data)
                     self._edit_console_message(
                         int(chat_id),
                         int(user_id),
                         _optional_int(message_id),
                         response,
-                        allow_send_fallback=normalize_callback_id(callback_data) != "dashboard_refresh",
+                        allow_send_fallback=not self._is_page_callback(callback_id),
                     )
                 continue
             message = update.get("message") or {}
@@ -351,6 +457,9 @@ class TelegramConsole:
             user_id = from_user.get("id")
             if chat_id is None or user_id is None or not text.startswith("/"):
                 continue
+            command, _args = split_command(text)
+            if command in {"/start", "/console"}:
+                self._page_states[self._active_console_key(int(chat_id), int(user_id))] = (HOME_PAGE, [])
             response = self.handle_text(int(user_id), text)
             self._send_or_edit_console_message(int(chat_id), int(user_id), response)
         return next_offset
@@ -365,7 +474,7 @@ class TelegramConsole:
 
     def _dispatch(self, command: str, args: str) -> TelegramResponse:
         if command in {"", "/start", "/console"}:
-            return self._dashboard_response()
+            return self._page_response(HOME_PAGE)
         if command == "/help":
             return TelegramResponse(help_text(), reply_markup=menu_reply_markup("main"))
         if command == "/status":
@@ -410,23 +519,24 @@ class TelegramConsole:
         return self._menu_response("unknown command. Try /help")
 
     def _dashboard_response(self) -> TelegramResponse:
-        now = _as_utc_datetime(self.now_provider())
-        health = self.health_provider()
-        signals = self.signals_provider()
-        paper_health = self.paper_provider()
-        paper = self.paper_intelligence_provider()
-        risk = self.risk_provider()
+        return self._page_response(HOME_PAGE)
+
+    def _page_response(self, page: str) -> TelegramResponse:
+        context = self._page_context(include_wallets=page in {"wallets", "wallet_stats"})
         return TelegramResponse(
-            render_dashboard_text(
-                config=self.config,
-                health=health,
-                signals=signals,
-                paper_health=paper_health,
-                paper=paper,
-                risk=risk,
-                now=now,
-            ),
-            reply_markup=menu_reply_markup("main"),
+            render_console_page(page, config=self.config, context=context),
+            reply_markup=page_reply_markup(page),
+        )
+
+    def _page_context(self, *, include_wallets: bool) -> ConsolePageContext:
+        return ConsolePageContext(
+            now=_as_utc_datetime(self.now_provider()),
+            health=self.health_provider(),
+            signals=self.signals_provider(),
+            paper_health=self.paper_provider(),
+            paper=self.paper_intelligence_provider(),
+            risk=self.risk_provider(),
+            top_wallets=self.top_wallets_provider() if include_wallets else None,
         )
 
     def _wallet_response(self, args: str) -> TelegramResponse:
@@ -727,6 +837,225 @@ def render_dashboard_text(
     return "\n".join(lines)
 
 
+def render_console_page(
+    page: str,
+    *,
+    config: TelegramConsoleConfig,
+    context: ConsolePageContext,
+) -> str:
+    if page == HOME_PAGE:
+        return render_dashboard_text(
+            config=config,
+            health=context.health,
+            signals=context.signals,
+            paper_health=context.paper_health,
+            paper=context.paper,
+            risk=context.risk,
+            now=context.now,
+        )
+    if page == "performance":
+        return _render_metric_page(
+            "📈 Performance",
+            [
+                ("Paper Trades", format_count_metric(context.paper.get("trade_count"))),
+                ("Open Positions", format_count_metric(context.paper.get("open_positions_count"))),
+                ("7D PnL", _format_money(context.paper.get("pnl_7d"))),
+                ("Total PnL", _format_money(context.paper.get("total_pnl"))),
+                ("Paper Win Rate", format_pct_metric(context.paper.get("win_rate"))),
+                ("Top Strategy", _strategy_label(context.paper.get("top_strategy"))),
+            ],
+            context.now,
+        )
+    if page == "intelligence":
+        return _render_metric_page(
+            "🧠 Intelligence",
+            [
+                ("Signals Today", format_count_metric(_signals_today(context.signals, context.now))),
+                ("Signals Scored", format_count_metric(context.signals.get("scored_count"))),
+                ("Recommendations", format_count_metric(context.signals.get("recommendation_count"))),
+                ("Validation Accuracy", format_pct_metric(_validation_accuracy(context.paper, context.signals))),
+                ("Last Signal Cycle", relative_time(_last_cycle_at(context.health, context.signals, context.paper_health), context.now)),
+            ],
+            context.now,
+        )
+    if page == "wallets":
+        rows = [
+            ("Tracked Wallets", format_count_metric(len(context.top_wallets or []))),
+            ("Wallet Service", f"{status_icon(context.health.get('status'))} {service_status_label(context.health.get('status'))}"),
+            ("Service Uptime", relative_duration(_parse_datetime(context.health.get("service_uptime_anchor")), context.now)),
+        ]
+        rows.extend(_wallet_metric_rows(context.top_wallets or []))
+        return _render_metric_page("👛 Wallets", rows, context.now)
+    if page == "reports":
+        return _render_metric_page(
+            "📊 Reports",
+            [
+                ("Daily PnL", _format_money(context.paper.get("daily_pnl"))),
+                ("7D PnL", _format_money(context.paper.get("pnl_7d"))),
+                ("Total PnL", _format_money(context.paper.get("total_pnl"))),
+                ("Signals Today", format_count_metric(_signals_today(context.signals, context.now))),
+                ("Validated Families", format_count_metric(_validated_families(context.paper, context.signals))),
+            ],
+            context.now,
+        )
+    if page == "system":
+        return _render_metric_page(
+            "⚙️ System",
+            [
+                ("Wallet Autonomy", f"{status_icon(context.health.get('status'))} {service_status_label(context.health.get('status'))}"),
+                ("Health Timer", f"{status_icon(context.health.get('status'))} {_health_timer_label(context.health, context.now)}"),
+                ("Paper Trading", f"{status_icon(context.paper_health.get('status'))} {service_status_label(context.paper_health.get('status'))}"),
+                ("Live Trading", "🔴 Disabled"),
+                ("Last Cycle", relative_time(_last_cycle_at(context.health, context.signals, context.paper_health), context.now)),
+            ],
+            context.now,
+        )
+    if page == "paper_trades":
+        return _render_detail_page(
+            "📈 Paper Trades",
+            _paper_trade_details(context.paper),
+            context.now,
+        )
+    if page == "signals_today":
+        return _render_detail_page(
+            "🧠 Signals Today",
+            [
+                f"Generated: {format_count_metric(_signals_today(context.signals, context.now))}",
+                f"Scored: {format_count_metric(context.signals.get('scored_count'))}",
+                f"Recommendations: {format_count_metric(context.signals.get('recommendation_count'))}",
+                f"Last Cycle: {relative_time(_last_cycle_at(context.health, context.signals, context.paper_health), context.now)}",
+            ],
+            context.now,
+        )
+    if page == "wallet_stats":
+        return _render_detail_page(
+            "👛 Wallet Stats",
+            _wallet_detail_rows(context.top_wallets or []),
+            context.now,
+        )
+    if page == "validation_accuracy":
+        return _render_detail_page(
+            "🧠 Validation Accuracy",
+            [
+                f"Accuracy: {format_pct_metric(_validation_accuracy(context.paper, context.signals))}",
+                f"Validated Families: {format_count_metric(_validated_families(context.paper, context.signals))}",
+                f"Paper Win Rate: {format_pct_metric(context.paper.get('win_rate'))}",
+            ],
+            context.now,
+        )
+    return _render_metric_page("Polylens", [("Status", "Unknown page")], context.now)
+
+
+def page_reply_markup(page: str) -> dict[str, Any]:
+    if page == HOME_PAGE:
+        return _menu_markup(
+            [
+                [
+                    {"text": "📈 Performance", "callback_data": "nav_performance"},
+                    {"text": "🧠 Intelligence", "callback_data": "nav_intelligence"},
+                ],
+                [
+                    {"text": "👛 Wallets", "callback_data": "nav_wallets"},
+                    {"text": "📊 Reports", "callback_data": "nav_reports"},
+                ],
+                [
+                    {"text": "⚙️ System", "callback_data": "nav_system"},
+                    {"text": "🔄 Refresh", "callback_data": "refresh_page"},
+                ],
+            ]
+        )
+    page_rows = {
+        "performance": [
+            [{"text": "Paper Trades", "callback_data": "drill_paper_trades"}],
+            [{"text": "Validation", "callback_data": "drill_validation"}],
+        ],
+        "intelligence": [
+            [{"text": "Signals Today", "callback_data": "drill_signals_today"}],
+            [{"text": "Validation", "callback_data": "drill_validation"}],
+        ],
+        "wallets": [[{"text": "Wallet Stats", "callback_data": "drill_wallet_stats"}]],
+        "reports": [
+            [{"text": "Paper Trades", "callback_data": "drill_paper_trades"}],
+            [{"text": "Signals Today", "callback_data": "drill_signals_today"}],
+        ],
+        "system": [[{"text": "Wallet Stats", "callback_data": "drill_wallet_stats"}]],
+    }
+    return _menu_markup(
+        [
+            *page_rows.get(page, []),
+            [
+                {"text": "🏠 Home", "callback_data": "nav_home"},
+                {"text": "⬅️ Back", "callback_data": "nav_back"},
+            ],
+            [{"text": "🔄 Refresh", "callback_data": "refresh_page"}],
+        ]
+    )
+
+
+def _render_metric_page(title: str, rows: list[tuple[str, str]], now: datetime) -> str:
+    lines = [title, "", DASHBOARD_DIVIDER, ""]
+    for label, value in rows:
+        lines.extend([label, value, ""])
+    lines.extend([DASHBOARD_DIVIDER, "", "Updated:", _as_utc_datetime(now).strftime("%H:%M:%S UTC")])
+    return "\n".join(lines)
+
+
+def _render_detail_page(title: str, details: list[str], now: datetime) -> str:
+    lines = [title, "", DASHBOARD_DIVIDER, "", *details, "", DASHBOARD_DIVIDER, "", "Updated:", _as_utc_datetime(now).strftime("%H:%M:%S UTC")]
+    return "\n".join(lines)
+
+
+def _format_money(value: Any) -> str:
+    try:
+        amount = float(value or 0.0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    return f"{'+' if amount > 0 else ''}${amount:.2f}"
+
+
+def _strategy_label(strategy: Any) -> str:
+    if not isinstance(strategy, dict):
+        return "N/A"
+    return str(strategy.get("strategy") or "N/A")
+
+
+def _wallet_metric_rows(wallets: list[Any]) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    for index, item in enumerate(wallets[:3], start=1):
+        row = item.to_dict() if hasattr(item, "to_dict") else item
+        if not isinstance(row, dict):
+            continue
+        rows.append((f"Wallet {index}", f"{short_wallet(row.get('wallet') or row.get('address'))} score={row.get('watch_score', 0)}"))
+    return rows or [("Top Wallets", "None")]
+
+
+def _wallet_detail_rows(wallets: list[Any]) -> list[str]:
+    rows: list[str] = []
+    for index, item in enumerate(wallets[:5], start=1):
+        row = item.to_dict() if hasattr(item, "to_dict") else item
+        if not isinstance(row, dict):
+            continue
+        rows.append(
+            f"{index}. {short_wallet(row.get('wallet') or row.get('address'))} "
+            f"score={row.get('watch_score', 0)} class={row.get('classification', 'unknown')}"
+        )
+    return rows or ["No wallet metrics available."]
+
+
+def _paper_trade_details(paper: dict[str, Any]) -> list[str]:
+    rows = [
+        f"Total: {format_count_metric(paper.get('trade_count'))}",
+        f"Open: {format_count_metric(paper.get('open_positions_count'))}",
+        f"Closed: {format_count_metric(paper.get('closed_positions_count'))}",
+    ]
+    for trade in (paper.get("recent_trades") or [])[:3]:
+        if isinstance(trade, dict):
+            rows.append(
+                f"{trade.get('strategy', 'paper')} | {trade.get('status', 'unknown')} | {_format_money(trade.get('pnl'))}"
+            )
+    return rows
+
+
 def status_icon(status: Any) -> str:
     text = str(status or "").strip().lower()
     if text in {"healthy", "running", "ok", "online", "enabled", "success"}:
@@ -907,6 +1236,8 @@ def menu_text(menu_name: str) -> str:
 
 
 def menu_reply_markup(menu_name: str = "main") -> dict[str, Any]:
+    if menu_name == "main":
+        return page_reply_markup(HOME_PAGE)
     if menu_name == "intelligence":
         return _menu_markup(
             [
@@ -958,22 +1289,7 @@ def menu_reply_markup(menu_name: str = "main") -> dict[str, Any]:
                 [_back_button()],
             ]
         )
-    return _menu_markup(
-        [
-            [
-                {"text": "📈 Performance", "callback_data": "report_paper"},
-                {"text": "🧠 Intelligence", "callback_data": "menu_intelligence"},
-            ],
-            [
-                {"text": "💼 Wallets", "callback_data": "menu_wallets"},
-                {"text": "📊 Reports", "callback_data": "menu_reports"},
-            ],
-            [
-                {"text": "⚙ System", "callback_data": "menu_system"},
-                {"text": "🔄 Refresh", "callback_data": "dashboard_refresh"},
-            ],
-        ]
-    )
+    return page_reply_markup(HOME_PAGE)
 
 
 def main_menu_reply_markup() -> dict[str, Any]:
@@ -1007,7 +1323,7 @@ def _menu_markup(rows: list[list[dict[str, str]]]) -> dict[str, Any]:
 
 
 def _back_button() -> dict[str, str]:
-    return {"text": "Back", "callback_data": "menu_main"}
+    return {"text": "⬅️ Back", "callback_data": "nav_back"}
 
 
 def format_health(payload: dict[str, Any]) -> str:
