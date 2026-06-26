@@ -59,6 +59,7 @@ def migrate_paper_portfolio(
                 "blocked_reason": "TEXT",
             },
         )
+        _add_columns(conn, "paper_equity_curve", {"canonical": "INTEGER NOT NULL DEFAULT 1"})
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS paper_position_transitions (
@@ -77,6 +78,10 @@ def migrate_paper_portfolio(
             );
             CREATE INDEX IF NOT EXISTS idx_paper_position_transitions_position
                 ON paper_position_transitions(paper_position_id, id);
+            CREATE TABLE IF NOT EXISTS paper_portfolio_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
         rows = conn.execute("SELECT * FROM paper_positions ORDER BY paper_position_id").fetchall()
@@ -105,6 +110,17 @@ def migrate_paper_portfolio(
             conn.execute(
                 "UPDATE paper_positions SET status=?, reason=COALESCE(reason, ?) WHERE paper_position_id=?",
                 (ANOMALOUS_STATUS, "excluded from canonical paper portfolio", position_id),
+            )
+        # Historic snapshots may have incorporated rows that are now quarantined.
+        # Preserve them for forensics but omit them from the canonical V2 curve.
+        reset_done = conn.execute(
+            "SELECT 1 FROM paper_portfolio_metadata WHERE key='legacy_equity_curve_quarantined_v2'"
+        ).fetchone()
+        if anomalous and not reset_done:
+            conn.execute("UPDATE paper_equity_curve SET canonical=0")
+            conn.execute(
+                "INSERT INTO paper_portfolio_metadata (key, value) VALUES (?, ?)",
+                ("legacy_equity_curve_quarantined_v2", _utc_now()),
             )
     return {"legacy_anomalous": len(anomalous)}
 
@@ -247,7 +263,7 @@ def portfolio_report(
     migrate_paper_portfolio(db_path, starting_bankroll=starting_bankroll)
     with closing_connection(db_path) as conn:
         rows = conn.execute("SELECT * FROM paper_positions ORDER BY paper_position_id").fetchall()
-        curve = conn.execute("SELECT * FROM paper_equity_curve ORDER BY id").fetchall()
+        curve = conn.execute("SELECT * FROM paper_equity_curve WHERE COALESCE(canonical, 1)=1 ORDER BY id").fetchall()
     normal = [row for row in rows if str(row["status"] or "").lower() in VALID_POSITION_STATUSES]
     open_rows = [row for row in normal if str(row["status"] or "").lower() in OPEN_STATUSES]
     closed_rows = [row for row in normal if str(row["status"] or "").lower() in CLOSED_STATUSES]

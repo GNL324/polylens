@@ -140,7 +140,8 @@ def init_paper_trading_db(db_path: str | Path = DEFAULT_PAPER_TRADING_DB) -> Non
             CREATE TABLE IF NOT EXISTS paper_equity_curve (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, timestamp TEXT NOT NULL,
                 equity REAL NOT NULL, realized_pnl REAL NOT NULL, unrealized_pnl REAL NOT NULL,
-                open_positions INTEGER NOT NULL, drawdown REAL NOT NULL, FOREIGN KEY(run_id) REFERENCES paper_runs(id)
+                open_positions INTEGER NOT NULL, drawdown REAL NOT NULL, canonical INTEGER NOT NULL DEFAULT 1,
+                FOREIGN KEY(run_id) REFERENCES paper_runs(id)
             );
             CREATE INDEX IF NOT EXISTS idx_paper_positions_status ON paper_positions(status);
             CREATE INDEX IF NOT EXISTS idx_paper_positions_strategy ON paper_positions(strategy, status);

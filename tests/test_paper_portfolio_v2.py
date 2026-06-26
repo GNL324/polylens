@@ -14,6 +14,7 @@ from src.analysis.paper_trading_engine import (
 )
 from src.integrations.telegram_notifications import portfolio_analytics_report_text
 from src.integrations.telegram_console import TelegramConsole, TelegramConsoleConfig
+from src.sqlite_utils import closing_connection
 from src.web.mission_control_data import mission_control_snapshot
 
 
@@ -128,6 +129,19 @@ def test_equity_drawdown_statistics_and_attribution(tmp_path):
     assert report["by_signal_family"]["wallet_signal"]["trade_count"] == 2
     assert report["by_source_wallet"]["0xgood"]["total_pnl"] == 1
     assert report["by_market_category"]["politics"]["total_pnl"] == -1
+
+
+def test_legacy_anomalies_do_not_pollute_canonical_equity_curve(tmp_path):
+    db_path = tmp_path / "paper.db"
+    init_paper_trading_db(db_path)
+    with closing_connection(db_path) as conn:
+        conn.execute("INSERT INTO paper_runs (run_timestamp, opportunities_seen, orders_created, positions_opened, positions_settled, equity, raw_json) VALUES ('2026-01-01T00:00:00Z', 0, 0, 0, 0, 100, '{}')")
+        conn.execute("INSERT INTO paper_orders (run_id, opportunity_id, strategy, side, market_id, title, asset, simulated_price, stake, status, raw_json) VALUES (1, 'legacy', 'legacy', 'yes', 'legacy', 'Legacy', 'BTC', 0.5, 2, 'filled', '{}')")
+        conn.execute("INSERT INTO paper_positions (order_id, opportunity_id, strategy, market_id, title, asset, side, entry_timestamp, entry_price, shares, notional, status, current_price, exit_timestamp, exit_price, realized_pnl, unrealized_pnl) VALUES (1, 'legacy', 'legacy', 'legacy', 'Legacy', 'BTC', 'yes', '2026-01-01T00:00:00Z', 0.5, 4, 2, 'closed', 0.5, '2026-01-01T01:00:00Z', 1, 999999, 0)")
+        conn.execute("INSERT INTO paper_equity_curve (run_id, timestamp, equity, realized_pnl, unrealized_pnl, open_positions, drawdown) VALUES (1, '2026-01-01T01:00:00Z', 1000099, 999999, 0, 0, 0)")
+    report = performance_report(db_path)
+    assert report["equity_curve"] == []
+    assert report["max_drawdown"] == 0
 
 
 def test_mission_control_and_telegram_render_portfolio_analytics(tmp_path, monkeypatch):
