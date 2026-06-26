@@ -409,6 +409,17 @@ def paper_trading_intelligence(
             "current_equity": portfolio["total_equity"],
             "total_equity": portfolio["total_equity"],
             "roi_pct": portfolio["roi_pct"],
+            "exposure": portfolio.get("exposure", 0.0),
+            "drawdown": portfolio.get("drawdown", 0.0),
+            "max_drawdown": portfolio.get("max_drawdown", 0.0),
+            "today_return": portfolio.get("today_return", 0.0),
+            "weekly_return": portfolio.get("weekly_return", 0.0),
+            "monthly_return": portfolio.get("monthly_return", 0.0),
+            "best_wallet": portfolio.get("best_wallet"),
+            "worst_wallet": portfolio.get("worst_wallet"),
+            "by_signal_family": portfolio.get("by_signal_family", {}),
+            "by_source_wallet": portfolio.get("by_source_wallet", {}),
+            "by_market_category": portfolio.get("by_market_category", {}),
             "legacy_anomalous_count": portfolio["legacy_anomalous_count"],
         }
     )

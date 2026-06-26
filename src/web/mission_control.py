@@ -50,7 +50,7 @@ window.PolylensRecharts = window.PolylensRecharts || {
 </script>
 """
 
-MISSION_CONTROL_NAV_ITEMS = ("Overview", "Opportunities", "Wallets", "Signals", "Strategies", "System Health")
+MISSION_CONTROL_NAV_ITEMS = ("Overview", "Paper Portfolio", "Opportunities", "Wallets", "Signals", "Strategies", "System Health")
 DEFAULT_MISSION_CONTROL_TAB = MISSION_CONTROL_NAV_ITEMS[0]
 
 
@@ -99,6 +99,7 @@ def create_mission_control_page(
                 with ui.tabs(value=active_tab).classes("mc-tabs") as tabs:
                     tabs.on_value_change(lambda event: set_mission_control_tab(state, event.value))
                     ui.tab("Overview")
+                    ui.tab("Paper Portfolio")
                     ui.tab("Opportunities")
                     ui.tab("Wallets")
                     ui.tab("Signals")
@@ -107,6 +108,8 @@ def create_mission_control_page(
                 with ui.tab_panels(tabs, value=active_tab).classes("mc-tab-panels"):
                     with ui.tab_panel("Overview").classes("mc-tab-panel"):
                         _render_overview(data)
+                    with ui.tab_panel("Paper Portfolio").classes("mc-tab-panel"):
+                        _render_paper_portfolio(data)
                     with ui.tab_panel("Opportunities").classes("mc-tab-panel"):
                         _render_opportunities(data)
                     with ui.tab_panel("Wallets").classes("mc-tab-panel"):
@@ -166,6 +169,42 @@ def _render_overview(data: dict[str, Any]) -> None:
             _render_wallet_alpha(data)
         with ui.element("div").classes("mc-span-3"):
             _render_strategy_performance(data)
+
+
+def _render_paper_portfolio(data: dict[str, Any]) -> None:
+    from nicegui import ui
+
+    portfolio = data.get("paper_portfolio") or {}
+    curve = portfolio.get("equity_curve") or {}
+    points = _line_points(curve.get("points") or [], "equity")
+    with ui.element("div").classes("mc-card mc-chart-card"):
+        ui.html('<div class="mc-card-title">Paper Portfolio — Equity Curve</div>', sanitize=False)
+        _recharts_line("paper-equity", points, "equity", "#57d68d", height=300)
+    with ui.element("div").classes("mc-kpi-grid"):
+        for label_text, value, css in [
+            ("Cash", f'${float(portfolio.get("cash") or 0):.2f}', ""),
+            ("Exposure", f'${float(portfolio.get("exposure") or 0):.2f}', ""),
+            ("Today", format_pct(portfolio.get("today_return")), _pnl_class(float(portfolio.get("today_return") or 0))),
+            ("Weekly", format_pct(portfolio.get("weekly_return")), _pnl_class(float(portfolio.get("weekly_return") or 0))),
+            ("Monthly", format_pct(portfolio.get("monthly_return")), _pnl_class(float(portfolio.get("monthly_return") or 0))),
+            ("Drawdown", format_pnl(portfolio.get("drawdown")), _pnl_class(float(portfolio.get("drawdown") or 0))),
+        ]:
+            _mini_card(label_text, value, css)
+    def label(item: Any) -> str:
+        if not isinstance(item, dict):
+            return "N/A"
+        return f'{item.get("label") or "unknown"} ({format_pnl(item.get("total_pnl"))})'
+    with ui.element("div").classes("mc-card"):
+        ui.html('<div class="mc-card-title">Attribution</div>', sanitize=False)
+        _metric_rows(
+            [
+                ("Best Strategy", label(portfolio.get("best_strategy"))),
+                ("Worst Strategy", label(portfolio.get("worst_strategy"))),
+                ("Best Copied Wallet", label(portfolio.get("best_wallet"))),
+                ("Worst Copied Wallet", label(portfolio.get("worst_wallet"))),
+                ("Maximum Drawdown", format_pnl(portfolio.get("max_drawdown"))),
+            ]
+        )
 
 
 def _render_wallet_alpha(data: dict[str, Any]) -> None:

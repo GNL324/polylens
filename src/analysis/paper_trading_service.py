@@ -30,7 +30,9 @@ def run_paper_trading_service(
     logger = _structured_logger(log_path)
     started = _utc_now()
     try:
-        result = run_paper_trading_engine(db_path=db_path, config=PaperTradingConfig(opportunity_limit=limit))
+        config = PaperTradingConfig.from_env()
+        config.opportunity_limit = limit
+        result = run_paper_trading_engine(db_path=db_path, config=config)
         health = paper_trading_health(db_path=db_path)
         payload = {
             "accepted": True,

@@ -24,6 +24,7 @@ from src.integrations.telegram_notifications import (
     generate_daily_intelligence_report,
     paper_pnl_report_text,
     paper_performance_report_text,
+    portfolio_analytics_report_text,
     paper_positions_report_text,
     paper_recent_report_text,
     paper_strategies_report_text,
@@ -54,6 +55,7 @@ COMMANDS = (
     "/paper_pnl",
     "/paper_positions",
     "/paper_strategies",
+    "/portfolio_analytics",
     "/risk",
     "/kill_switch",
 )
@@ -81,6 +83,7 @@ CALLBACK_COMMANDS = {
     "paper_pnl": "/paper_pnl",
     "paper_positions": "/paper_positions",
     "paper_strategies": "/paper_strategies",
+    "portfolio_analytics": "/portfolio_analytics",
 }
 MENU_CALLBACKS = {
     "menu_intelligence": "intelligence",
@@ -93,6 +96,7 @@ PAGE_NAV_CALLBACKS = {
     "menu_main": "home",
     "nav_home": "home",
     "nav_performance": "performance",
+    "nav_portfolio": "portfolio_analytics",
     "nav_intelligence": "intelligence",
     "nav_wallets": "wallets",
     "nav_reports": "reports",
@@ -503,6 +507,8 @@ class TelegramConsole:
             return TelegramResponse(paper_positions_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
         if command == "/paper_strategies":
             return TelegramResponse(paper_strategies_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
+        if command == "/portfolio_analytics":
+            return TelegramResponse(portfolio_analytics_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
         if command == "/risk":
             return self._menu_response(format_risk(self.risk_provider()))
         if command == "/report_daily":
@@ -1798,6 +1804,7 @@ TelegramConsole.handle_text = _v4_handle_text
 
 V4_CONTEXT_CALLBACKS["quick_trades_log"] = "trades_log"
 V4_PAGE_TITLES["trades_log"] = "📜 Trades Log"
+V4_PAGE_TITLES["portfolio_analytics"] = "📊 Portfolio Analytics"
 _v4_render_console_page_with_navigation = render_console_page
 _v4_page_reply_markup_with_navigation = page_reply_markup
 
@@ -1824,6 +1831,13 @@ def render_console_page(
     favorites: list[str] | None = None,
     recent_pages: list[str] | None = None,
 ) -> str:
+    if page == "portfolio_analytics":
+        body = _v3_render_detail_page(
+            "📊 Portfolio Analytics",
+            portfolio_analytics_report_text(context.paper).split("\n")[1:],
+            context.now,
+        )
+        return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
     if page == "performance":
         body = _v3_render_metric_page(
             "📈 Performance",
@@ -1859,6 +1873,10 @@ def render_console_page(
 
 def page_reply_markup(page: str, state: ConsoleNavigationState | None = None) -> dict[str, Any]:
     markup = _v4_page_reply_markup_with_navigation(page, state)
+    if page == HOME_PAGE:
+        rows = list(markup["inline_keyboard"])
+        rows.insert(2, [{"text": "📊 Portfolio Analytics", "callback_data": "nav_portfolio"}])
+        markup = {"inline_keyboard": rows}
     if page == "performance":
         rows = list(markup["inline_keyboard"])
         rows.insert(2, [{"text": "📜 Trades Log", "callback_data": "quick_trades_log"}])

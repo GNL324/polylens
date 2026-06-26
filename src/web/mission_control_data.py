@@ -837,9 +837,38 @@ def mission_control_snapshot(
             "win_rate": portfolio["win_rate"],
             "bankroll": portfolio["starting_bankroll"],
             "available_cash": portfolio["cash_balance"],
+            "exposure": portfolio.get("exposure", 0.0),
+            "today_return": portfolio.get("today_return", 0.0),
+            "weekly_return": portfolio.get("weekly_return", 0.0),
+            "monthly_return": portfolio.get("monthly_return", 0.0),
+            "drawdown": portfolio.get("drawdown", 0.0),
+            "max_drawdown": portfolio.get("max_drawdown", 0.0),
         }
     )
     snapshot["header"]["wallet"] = f"${portfolio['open_position_value']:.2f} deployed"
+    equity_points = [
+        {"ts": row.get("timestamp"), "equity": float(row.get("equity") or 0.0)}
+        for row in portfolio.get("equity_curve", [])
+    ]
+    if not equity_points:
+        equity_points = [{"ts": snapshot["generated_at"], "equity": float(portfolio["total_equity"])}]
+    snapshot["paper_portfolio"] = {
+        "equity_curve": {
+            "points": equity_points,
+            "svg": render_line_svg(equity_points, value_key="equity", height=140, stroke="#1f7a3f"),
+        },
+        "cash": portfolio["cash_balance"],
+        "exposure": portfolio.get("exposure", 0.0),
+        "today_return": portfolio.get("today_return", 0.0),
+        "weekly_return": portfolio.get("weekly_return", 0.0),
+        "monthly_return": portfolio.get("monthly_return", 0.0),
+        "drawdown": portfolio.get("drawdown", 0.0),
+        "max_drawdown": portfolio.get("max_drawdown", 0.0),
+        "best_strategy": portfolio.get("best_strategy"),
+        "worst_strategy": portfolio.get("worst_strategy"),
+        "best_wallet": portfolio.get("best_wallet"),
+        "worst_wallet": portfolio.get("worst_wallet"),
+    }
     return snapshot
 
 

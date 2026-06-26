@@ -351,6 +351,35 @@ def paper_performance_report_text(report: dict[str, Any] | None = None, db_path:
     ))
 
 
+def portfolio_analytics_report_text(report: dict[str, Any] | None = None) -> str:
+    """Compact, read-only canonical portfolio view for the Telegram console."""
+    paper = report or paper_trading_intelligence()
+    def label(item: Any) -> str:
+        return str(item.get("label") or "N/A") if isinstance(item, dict) else "N/A"
+    closed = [row for row in (paper.get("recent_trades") or []) if str(row.get("status") or "").lower() in {"closed", "expired"}]
+    winners = [row for row in closed if float(row.get("realized_pnl") or 0.0) > 0][:3]
+    losers = [row for row in closed if float(row.get("realized_pnl") or 0.0) < 0][:3]
+    def compact(rows: list[dict[str, Any]]) -> str:
+        if not rows:
+            return "None"
+        return ", ".join(f"{str(row.get('market_title') or row.get('market_id') or 'market')[:24]} {_money_signed(row.get('realized_pnl'))}" for row in rows)
+    return safe_telegram_text(
+        "\n".join(
+            [
+                "📊 Portfolio Analytics",
+                f"Current equity: {_money_signed(paper.get('current_equity') or paper.get('total_equity'))}",
+                f"ROI: {_pct(paper.get('roi_pct'))}",
+                f"Drawdown: {_money_signed(paper.get('drawdown'))}",
+                f"Exposure: {_money_signed(paper.get('exposure'))}",
+                f"Best strategy: {label(paper.get('top_strategy'))}",
+                f"Best wallet: {label(paper.get('best_wallet'))}",
+                f"Recent winners: {compact(winners)}",
+                f"Recent losers: {compact(losers)}",
+            ]
+        )
+    )
+
+
 def paper_recent_report_text(report: dict[str, Any] | None = None) -> str:
     paper = report or paper_trading_intelligence()
     rows = paper.get("recent_trades") or []
