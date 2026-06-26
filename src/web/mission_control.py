@@ -50,7 +50,7 @@ window.PolylensRecharts = window.PolylensRecharts || {
 </script>
 """
 
-MISSION_CONTROL_NAV_ITEMS = ("Overview", "Paper Portfolio", "Opportunities", "Wallets", "Signals", "Strategies", "System Health")
+MISSION_CONTROL_NAV_ITEMS = ("Overview", "Paper Portfolio", "Outcome Validation", "Opportunities", "Wallets", "Signals", "Strategies", "System Health")
 DEFAULT_MISSION_CONTROL_TAB = MISSION_CONTROL_NAV_ITEMS[0]
 
 
@@ -100,6 +100,7 @@ def create_mission_control_page(
                     tabs.on_value_change(lambda event: set_mission_control_tab(state, event.value))
                     ui.tab("Overview")
                     ui.tab("Paper Portfolio")
+                    ui.tab("Outcome Validation")
                     ui.tab("Opportunities")
                     ui.tab("Wallets")
                     ui.tab("Signals")
@@ -110,6 +111,8 @@ def create_mission_control_page(
                         _render_overview(data)
                     with ui.tab_panel("Paper Portfolio").classes("mc-tab-panel"):
                         _render_paper_portfolio(data)
+                    with ui.tab_panel("Outcome Validation").classes("mc-tab-panel"):
+                        _render_outcome_validation(data)
                     with ui.tab_panel("Opportunities").classes("mc-tab-panel"):
                         _render_opportunities(data)
                     with ui.tab_panel("Wallets").classes("mc-tab-panel"):
@@ -205,6 +208,53 @@ def _render_paper_portfolio(data: dict[str, Any]) -> None:
                 ("Maximum Drawdown", format_pnl(portfolio.get("max_drawdown"))),
             ]
         )
+
+
+def _render_outcome_validation(data: dict[str, Any]) -> None:
+    from nicegui import ui
+
+    validation = data.get("outcome_validation") or {}
+    with ui.element("div").classes("mc-kpi-grid"):
+        for label_text, value, css in [
+            ("Resolved Today", str(int(validation.get("todays_resolved_markets") or 0)), ""),
+            ("Accuracy", format_pct(validation.get("validation_accuracy")), _pnl_class(float(validation.get("validation_accuracy") or 0))),
+            ("Brier Score", f'{float(validation.get("brier_score") or 0):.3f}', ""),
+            ("Confidence Bias", format_pct(validation.get("confidence_bias")), _pnl_class(-abs(float(validation.get("confidence_bias") or 0)))),
+            ("Calibration Drift", format_pct(validation.get("calibration_drift")), _pnl_class(-abs(float(validation.get("calibration_drift") or 0)))),
+        ]:
+            _mini_card(label_text, value, css)
+
+    def ranked_rows(items: list[dict[str, Any]]) -> str:
+        if not items:
+            return "N/A"
+        return ", ".join(
+            f'{item.get("label") or "unknown"} {format_pct(item.get("accuracy"))}'
+            for item in items[:3]
+        )
+
+    with ui.element("div").classes("mc-grid-2"):
+        with ui.element("div").classes("mc-card"):
+            ui.html('<div class="mc-card-title">Outcome Validation</div>', sanitize=False)
+            _metric_rows(
+                [
+                    ("Best Wallets", ranked_rows(validation.get("best_wallets") or [])),
+                    ("Worst Wallets", ranked_rows(validation.get("worst_wallets") or [])),
+                    ("Best Strategies", ranked_rows(validation.get("best_strategies") or [])),
+                    ("Brier Score", f'{float(validation.get("brier_score") or 0):.3f}'),
+                ]
+            )
+        with ui.element("div").classes("mc-card"):
+            ui.html('<div class="mc-card-title">Newly Resolved Markets</div>', sanitize=False)
+            rows = validation.get("newly_resolved_markets") or []
+            if not rows:
+                ui.html('<div class="mc-empty">No resolved markets validated yet</div>', sanitize=False)
+            else:
+                body = "".join(
+                    f'<div class="mc-row"><span>{_html(str(row.get("market_title") or "market")[:72])}</span>'
+                    f'<strong>{_html(str(row.get("status") or "unknown"))}</strong></div>'
+                    for row in rows[:6]
+                )
+                ui.html(body, sanitize=False)
 
 
 def _render_wallet_alpha(data: dict[str, Any]) -> None:

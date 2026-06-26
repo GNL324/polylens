@@ -333,6 +333,10 @@ def settle_open_positions(
                 (run_id or 0, row["paper_position_id"], updated["closed_at"] or _utc_now(), simulated_exit_price, updated["realized_pnl"], _safe_float(updated.get("roi")), reason),
             )
         settled += 1
+    if settled:
+        from src.analysis.outcome_validator import validate_completed_markets
+
+        validate_completed_markets(db_path)
     return settled
 
 

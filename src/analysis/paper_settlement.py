@@ -64,6 +64,9 @@ def run_paper_settlement(
                 details.append(_detail(position, reason, False))
     if settled:
         record_equity_snapshot(db_path, run_id=run_id)
+        from src.analysis.outcome_validator import validate_completed_markets
+
+        validate_completed_markets(db_path)
     return {
         "open_positions_checked": checked,
         "positions_settled": settled,

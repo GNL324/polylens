@@ -70,6 +70,11 @@ from src.analysis.paper_trading_engine import (
 from src.analysis.paper_analytics import build_paper_analytics_report
 from src.analysis.paper_position_audit import build_paper_position_audit
 from src.analysis.paper_settlement import paper_settlement_report, run_paper_settlement
+from src.analysis.outcome_validator import (
+    outcome_validation_report as build_outcome_validation_report,
+    rebuild_validation_metrics as build_outcome_validation_backfill,
+    validate_completed_markets as build_outcome_validation_run,
+)
 from src.analysis.settlement_sources import settlement_source_audit as build_settlement_source_audit
 from src.analysis.paper_trading_service import (
     DEFAULT_PAPER_TRADING_LOG,
@@ -1617,6 +1622,33 @@ def paper_settlement_run_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER
 
 def paper_settlement_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
     result = paper_settlement_report(db_path=db_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def outcome_validation_run_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB, limit: int | None = None) -> dict[str, Any]:
+    result = build_outcome_validation_run(db_path=db_path, limit=limit)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def outcome_validation_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB, window_days: int = 30) -> dict[str, Any]:
+    result = build_outcome_validation_report(db_path=db_path, window_days=window_days)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def outcome_validation_backfill_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB, batch_size: int = 250, reset: bool = False) -> dict[str, Any]:
+    result = build_outcome_validation_backfill(db_path=db_path, batch_size=batch_size, reset=reset)
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -3766,6 +3798,22 @@ def main() -> None:
     paper_settlement_report_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
     paper_settlement_report_parser.add_argument("--json", action="store_true")
 
+    outcome_validation_run_parser = sub.add_parser("outcome-validation-run", help="validate resolved paper predictions against settlement outcomes")
+    outcome_validation_run_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    outcome_validation_run_parser.add_argument("--limit", type=int, default=None)
+    outcome_validation_run_parser.add_argument("--json", action="store_true")
+
+    outcome_validation_report_parser = sub.add_parser("outcome-validation-report", help="report paper outcome validation and calibration metrics")
+    outcome_validation_report_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    outcome_validation_report_parser.add_argument("--window-days", type=int, default=30)
+    outcome_validation_report_parser.add_argument("--json", action="store_true")
+
+    outcome_validation_backfill_parser = sub.add_parser("outcome-validation-backfill", help="resumably rebuild outcome validation metrics from historical paper settlements")
+    outcome_validation_backfill_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    outcome_validation_backfill_parser.add_argument("--batch-size", type=int, default=250)
+    outcome_validation_backfill_parser.add_argument("--reset", action="store_true")
+    outcome_validation_backfill_parser.add_argument("--json", action="store_true")
+
     settlement_source_audit_parser = sub.add_parser("settlement-source-audit", help="audit read-only settlement source coverage")
     settlement_source_audit_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
     settlement_source_audit_parser.add_argument("--json", action="store_true")
@@ -4779,6 +4827,12 @@ def main() -> None:
         paper_settlement_run_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "paper-settlement-report":
         paper_settlement_report_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "outcome-validation-run":
+        outcome_validation_run_cli(as_json=args.json, db_path=args.db_path, limit=args.limit)
+    elif args.command == "outcome-validation-report":
+        outcome_validation_report_cli(as_json=args.json, db_path=args.db_path, window_days=args.window_days)
+    elif args.command == "outcome-validation-backfill":
+        outcome_validation_backfill_cli(as_json=args.json, db_path=args.db_path, batch_size=args.batch_size, reset=args.reset)
     elif args.command == "settlement-source-audit":
         settlement_source_audit_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "opportunity-feed-status":

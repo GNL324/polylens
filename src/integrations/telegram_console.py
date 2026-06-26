@@ -24,6 +24,7 @@ from src.integrations.telegram_notifications import (
     generate_daily_intelligence_report,
     paper_pnl_report_text,
     paper_performance_report_text,
+    outcome_validation_report_text,
     portfolio_analytics_report_text,
     paper_positions_report_text,
     paper_recent_report_text,
@@ -56,6 +57,7 @@ COMMANDS = (
     "/paper_positions",
     "/paper_strategies",
     "/portfolio_analytics",
+    "/outcome_validation",
     "/risk",
     "/kill_switch",
 )
@@ -84,6 +86,7 @@ CALLBACK_COMMANDS = {
     "paper_positions": "/paper_positions",
     "paper_strategies": "/paper_strategies",
     "portfolio_analytics": "/portfolio_analytics",
+    "outcome_validation": "/outcome_validation",
 }
 MENU_CALLBACKS = {
     "menu_intelligence": "intelligence",
@@ -97,6 +100,7 @@ PAGE_NAV_CALLBACKS = {
     "nav_home": "home",
     "nav_performance": "performance",
     "nav_portfolio": "portfolio_analytics",
+    "nav_outcome": "outcome_validation",
     "nav_intelligence": "intelligence",
     "nav_wallets": "wallets",
     "nav_reports": "reports",
@@ -509,6 +513,8 @@ class TelegramConsole:
             return TelegramResponse(paper_strategies_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
         if command == "/portfolio_analytics":
             return TelegramResponse(portfolio_analytics_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
+        if command == "/outcome_validation":
+            return TelegramResponse(outcome_validation_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
         if command in {"/paper_opportunities", "/opportunity_rankings"}:
             return self._opportunity_rankings_response()
         if command == "/risk":
@@ -1304,6 +1310,7 @@ def menu_reply_markup(menu_name: str = "main") -> dict[str, Any]:
                 [{"text": "Paper PnL", "callback_data": "paper_pnl"}],
                 [{"text": "Open Positions", "callback_data": "paper_positions"}],
                 [{"text": "Paper Strategies", "callback_data": "paper_strategies"}],
+                [{"text": "Outcome Validation", "callback_data": "outcome_validation"}],
                 [_back_button()],
             ]
         )
@@ -1825,8 +1832,10 @@ TelegramConsole.handle_text = _v4_handle_text
 
 
 V4_CONTEXT_CALLBACKS["quick_trades_log"] = "trades_log"
+V4_CONTEXT_CALLBACKS["quick_outcome_validation"] = "outcome_validation"
 V4_PAGE_TITLES["trades_log"] = "📜 Trades Log"
 V4_PAGE_TITLES["portfolio_analytics"] = "📊 Portfolio Analytics"
+V4_PAGE_TITLES["outcome_validation"] = "📈 Outcome Validation"
 _v4_render_console_page_with_navigation = render_console_page
 _v4_page_reply_markup_with_navigation = page_reply_markup
 
@@ -1844,6 +1853,10 @@ def _paper_trades_log_details(paper: dict[str, Any]) -> list[str]:
     return rows or ["No canonical paper trades recorded."]
 
 
+def _outcome_validation_details(paper: dict[str, Any]) -> list[str]:
+    return outcome_validation_report_text(paper).split("\n")[1:]
+
+
 def render_console_page(
     page: str,
     *,
@@ -1859,6 +1872,9 @@ def render_console_page(
             portfolio_analytics_report_text(context.paper).split("\n")[1:],
             context.now,
         )
+        return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
+    if page == "outcome_validation":
+        body = _v3_render_detail_page("📈 Outcome Validation", _outcome_validation_details(context.paper), context.now)
         return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
     if page == "performance":
         body = _v3_render_metric_page(
@@ -1901,6 +1917,7 @@ def page_reply_markup(page: str, state: ConsoleNavigationState | None = None) ->
     if page == HOME_PAGE:
         rows = list(markup["inline_keyboard"])
         rows.insert(2, [{"text": "📊 Portfolio Analytics", "callback_data": "nav_portfolio"}])
+        rows.insert(3, [{"text": "📈 Outcome Validation", "callback_data": "nav_outcome"}])
         markup = {"inline_keyboard": rows}
     if page == "performance":
         rows = list(markup["inline_keyboard"])

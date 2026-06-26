@@ -384,6 +384,42 @@ def portfolio_analytics_report_text(report: dict[str, Any] | None = None) -> str
     )
 
 
+def outcome_validation_report_text(report: dict[str, Any] | None = None, *, db_path: str | Path = DEFAULT_PAPER_TRADING_DB) -> str:
+    """Compact read-only outcome validation view for Telegram."""
+    if report is None:
+        from src.analysis.outcome_validator import outcome_validation_report
+
+        report = outcome_validation_report(db_path=db_path)
+    validation = report.get("outcome_validation") if isinstance(report.get("outcome_validation"), dict) else report
+
+    def compact(rows: list[dict[str, Any]], *, key: str = "market_title") -> str:
+        if not rows:
+            return "None"
+        return ", ".join(f"{str(row.get(key) or row.get('label') or 'unknown')[:24]} {str(row.get('status') or _pct(row.get('accuracy')))}" for row in rows[:3])
+
+    calibration = validation.get("confidence_calibration") or []
+    calibration_text = "None"
+    if calibration:
+        last = calibration[-1]
+        calibration_text = f"{_pct(last.get('avg_confidence'))} forecast / {_pct(last.get('observed_accuracy'))} observed"
+
+    return safe_telegram_text(
+        "\n".join(
+            [
+                "📈 Outcome Validation",
+                f"Newly resolved: {len(validation.get('newly_resolved_markets') or [])}",
+                f"Today's accuracy: {_pct(validation.get('todays_accuracy'))}",
+                f"Validation accuracy: {_pct(validation.get('validation_accuracy'))}",
+                f"Confidence calibration: {calibration_text}",
+                f"Brier score: {float(validation.get('brier_score') or 0):.3f}",
+                f"Confidence bias: {_pct(validation.get('confidence_bias'))}",
+                f"Biggest winners: {compact(validation.get('biggest_winners') or [])}",
+                f"Biggest misses: {compact(validation.get('biggest_misses') or [])}",
+            ]
+        )
+    )
+
+
 def paper_recent_report_text(report: dict[str, Any] | None = None) -> str:
     paper = report or paper_trading_intelligence()
     rows = paper.get("recent_trades") or []

@@ -813,6 +813,7 @@ def mission_control_snapshot(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     from src.analysis.opportunity_feed import get_paper_trading_opportunities
+    from src.analysis.outcome_validator import outcome_validation_report
     from src.analysis.paper_trading_engine import performance_report as canonical_paper_performance
     from src.analysis.paper_execution_analytics import execution_quality_report
 
@@ -892,6 +893,7 @@ def mission_control_snapshot(
         "best_wallet": portfolio.get("best_wallet"),
         "worst_wallet": portfolio.get("worst_wallet"),
     }
+    snapshot["outcome_validation"] = outcome_validation_report(portfolio_db_path, now=now)
     return snapshot
 
 

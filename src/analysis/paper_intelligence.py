@@ -365,6 +365,7 @@ def paper_trading_intelligence(
 ) -> dict[str, Any]:
     from src.analysis.paper_portfolio import portfolio_trade_log
     from src.analysis.paper_trading_engine import init_paper_trading_db, performance_report
+    from src.analysis.outcome_validator import outcome_validation_report
 
     now = _as_utc(now or datetime.now(timezone.utc))
     init_paper_trading_db(db_path)
@@ -421,6 +422,7 @@ def paper_trading_intelligence(
             "by_source_wallet": portfolio.get("by_source_wallet", {}),
             "by_market_category": portfolio.get("by_market_category", {}),
             "legacy_anomalous_count": portfolio["legacy_anomalous_count"],
+            "outcome_validation": outcome_validation_report(db_path=db_path, now=now),
         }
     )
     if portfolio["legacy_anomalous_count"]:
