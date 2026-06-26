@@ -6,6 +6,7 @@ from typing import Any
 from src.analysis.paper_copy_trader import DEFAULT_PAPER_COPY_DB, paper_copy_report
 from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB, init_trader_signal_db
 from src.analysis.trader_signal_paper_bridge import init_trader_signal_paper_bridge_db
+from src.analysis.trader_signal_validation import init_trader_signal_validation_db
 from src.intelligence.strategy_classifier import init_strategy_profiles_db
 from src.sqlite_utils import closing_connection
 
@@ -50,6 +51,7 @@ def _wallet_validation_stats(signal_db_path: str | Path) -> dict[str, dict[str, 
     if not path.exists():
         return {}
     init_trader_signal_db(path)
+    init_trader_signal_validation_db(path)
     with closing_connection(path) as conn:
         rows = conn.execute(
             """

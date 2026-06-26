@@ -6,8 +6,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from src.analysis.paper_copy_trader import DEFAULT_PAPER_COPY_DB
 from src.analysis.trader_discovery import DEFAULT_TRADER_DISCOVERY_DB
 from src.analysis.trader_registry import DEFAULT_TRADERS_DB
+from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB
 from src.intelligence.wallet_performance import WalletPerformanceEngine, init_wallet_performance_db
 from src.intelligence.wallet_scoring import WalletScorer
 from src.intelligence.wallet_signal_analytics import wallet_signal_analytics_report
@@ -39,12 +41,29 @@ def wallet_performance_analytics_report(
     *,
     traders_db_path: str | Path = DEFAULT_TRADERS_DB,
     discovery_db_path: str | Path = DEFAULT_TRADER_DISCOVERY_DB,
+    signal_db_path: str | Path = DEFAULT_TRADER_SIGNAL_DB,
+    paper_copy_db_path: str | Path = DEFAULT_PAPER_COPY_DB,
     top_limit: int = 15,
 ) -> dict[str, Any]:
     init_wallet_performance_db(traders_db_path)
-    engine = WalletPerformanceEngine(traders_db_path=traders_db_path, discovery_db_path=discovery_db_path)
-    scorer = WalletScorer(traders_db_path=traders_db_path, discovery_db_path=discovery_db_path)
-    signal_analytics = wallet_signal_analytics_report(wallet_limit=top_limit * 2)
+    engine = WalletPerformanceEngine(
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+        signal_db_path=signal_db_path,
+        paper_copy_db_path=paper_copy_db_path,
+    )
+    scorer = WalletScorer(
+        traders_db_path=traders_db_path,
+        discovery_db_path=discovery_db_path,
+        signal_db_path=signal_db_path,
+        paper_copy_db_path=paper_copy_db_path,
+    )
+    signal_analytics = wallet_signal_analytics_report(
+        traders_db_path=traders_db_path,
+        signal_db_path=signal_db_path,
+        paper_copy_db_path=paper_copy_db_path,
+        wallet_limit=top_limit * 2,
+    )
 
     snapshots = engine.load_snapshots(limit=500)
     latest_by_wallet: dict[str, dict[str, Any]] = {}

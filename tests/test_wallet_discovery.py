@@ -97,7 +97,7 @@ def test_score_and_rank_orders_wallets(tmp_path):
     assert ranked[0].score >= ranked[1].score
 
 
-def test_lifecycle_promotion_and_retirement(tmp_path):
+def test_lifecycle_promotion_and_retirement(tmp_path, signal_db_path):
     traders_db = tmp_path / "traders.db"
     discovery_db = tmp_path / "discovery.db"
     engine = WalletDiscoveryEngine(
@@ -106,7 +106,12 @@ def test_lifecycle_promotion_and_retirement(tmp_path):
         wallet_export_dir=tmp_path / "wallets",
         watchlist_path=tmp_path / "watchlist.json",
     )
-    scorer = WalletScorer(traders_db_path=traders_db, discovery_db_path=discovery_db)
+    scorer = WalletScorer(
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        signal_db_path=signal_db_path,
+        paper_copy_db_path=tmp_path / "paper_copy.db",
+    )
 
     high = scorer.score_wallet(WALLET_A)
     high = type(high)(wallet=high.wallet, score=85.0, confidence=0.8, rank=1, category=high.category, components=high.components, metrics=high.metrics)

@@ -34,11 +34,16 @@ def _report():
     }
 
 
-def test_wallet_score_fields(tmp_path):
+def test_wallet_score_fields(tmp_path, signal_db_path):
     traders_db = tmp_path / "traders.db"
     save_wallet_report(_report(), db_path=str(traders_db))
 
-    scorer = WalletScorer(traders_db_path=traders_db, discovery_db_path=tmp_path / "discovery.db")
+    scorer = WalletScorer(
+        traders_db_path=traders_db,
+        discovery_db_path=tmp_path / "discovery.db",
+        signal_db_path=signal_db_path,
+        paper_copy_db_path=tmp_path / "paper_copy.db",
+    )
     score = scorer.score_wallet(WALLET)
 
     assert score.wallet == WALLET
@@ -50,13 +55,18 @@ def test_wallet_score_fields(tmp_path):
     assert "signal_freshness" in score.components
 
 
-def test_rank_wallets_assigns_ranks(tmp_path):
+def test_rank_wallets_assigns_ranks(tmp_path, signal_db_path):
     traders_db = tmp_path / "traders.db"
     wallet_b = "0x" + "b" * 40
     save_wallet_report(_report(), db_path=str(traders_db))
     save_wallet_report({**_report(), "wallet": wallet_b, "watch_score": 40}, db_path=str(traders_db))
 
-    scorer = WalletScorer(traders_db_path=traders_db, discovery_db_path=tmp_path / "discovery.db")
+    scorer = WalletScorer(
+        traders_db_path=traders_db,
+        discovery_db_path=tmp_path / "discovery.db",
+        signal_db_path=signal_db_path,
+        paper_copy_db_path=tmp_path / "paper_copy.db",
+    )
     ranked = scorer.rank_wallets([WALLET, wallet_b])
 
     assert ranked[0].rank == 1

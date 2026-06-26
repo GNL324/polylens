@@ -38,6 +38,9 @@ def _config(tmp_path, admins=(123,), token="secret-token") -> TelegramConsoleCon
         bot_token=token,
         admin_user_ids=frozenset(admins),
         audit_db_path=str(tmp_path / "telegram.db"),
+        trader_signal_db_path=str(tmp_path / "signals.db"),
+        paper_db_path=str(tmp_path / "paper.db"),
+        short_crypto_paper_db_path=str(tmp_path / "short_crypto_paper.db"),
     )
 
 

@@ -67,8 +67,18 @@ def test_wallet_alpha_baselines_cli_json(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     import src.intelligence.wallet_baseline_analysis as baseline_module
 
-    monkeypatch.setattr(baseline_module, "DEFAULT_TRADERS_DB", str(traders_db))
-    monkeypatch.setattr(baseline_module, "DEFAULT_TRADER_DISCOVERY_DB", str(discovery_db))
+    from src.intelligence.wallet_baseline_analysis import wallet_baseline_analysis_report as real_report
+
+    monkeypatch.setattr(
+        baseline_module,
+        "wallet_baseline_analysis_report",
+        lambda: real_report(
+            traders_db_path=str(traders_db),
+            discovery_db_path=str(discovery_db),
+            paper_copy_db_path=str(tmp_path / "paper_copy.db"),
+            signal_db_path=str(tmp_path / "signals.db"),
+        ),
+    )
 
     from src.cli import wallet_alpha_baselines_cli
 

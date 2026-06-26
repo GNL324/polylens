@@ -69,7 +69,12 @@ def test_wallet_watchlist_cli(tmp_path, monkeypatch):
     )
     from src.intelligence.wallet_scoring import WalletScorer
 
-    scorer = WalletScorer(traders_db_path=traders_db, discovery_db_path=discovery_db)
+    scorer = WalletScorer(
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        signal_db_path=tmp_path / "signals.db",
+        paper_copy_db_path=tmp_path / "paper_copy.db",
+    )
     save_wallet_report(_report(), db_path=str(traders_db))
     row = scorer.score_wallet(WALLET)
     row = type(row)(wallet=row.wallet, score=72.0, confidence=0.7, rank=1, category=row.category, components=row.components, metrics=row.metrics)

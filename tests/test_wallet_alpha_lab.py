@@ -46,7 +46,7 @@ def test_compute_alpha_score_grade(tmp_path):
     assert "performance" in score.factors
 
 
-def test_baseline_analysis_report(tmp_path):
+def test_baseline_analysis_report(tmp_path, signal_db_path):
     traders_db = tmp_path / "traders.db"
     discovery_db = tmp_path / "discovery.db"
     init_wallet_alpha_lab_db(traders_db, discovery_db)
@@ -55,6 +55,7 @@ def test_baseline_analysis_report(tmp_path):
         traders_db_path=str(traders_db),
         discovery_db_path=str(discovery_db),
         paper_copy_db_path=tmp_path / "paper_copy.db",
+        signal_db_path=str(signal_db_path),
     )
     assert result["read_only"] is True
     assert "baselines" in result

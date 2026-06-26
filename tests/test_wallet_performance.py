@@ -38,13 +38,18 @@ def _report(wallet: str, watch_score: int = 85):
     }
 
 
-def test_wallet_performance_score_structure(tmp_path):
+def test_wallet_performance_score_structure(tmp_path, signal_db_path):
     traders_db = tmp_path / "traders.db"
     discovery_db = tmp_path / "discovery.db"
     save_wallet_report(_report(WALLET_A), db_path=str(traders_db))
     init_wallet_performance_db(traders_db)
 
-    engine = WalletPerformanceEngine(traders_db_path=traders_db, discovery_db_path=discovery_db)
+    engine = WalletPerformanceEngine(
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        signal_db_path=signal_db_path,
+        paper_copy_db_path=tmp_path / "paper_copy.db",
+    )
     score = engine.score_wallet(WALLET_A)
 
     assert score.wallet == WALLET_A
@@ -54,13 +59,18 @@ def test_wallet_performance_score_structure(tmp_path):
     assert "realized_roi" in score.components or "win_rate" in score.components
 
 
-def test_persist_snapshot_and_actions(tmp_path):
+def test_persist_snapshot_and_actions(tmp_path, signal_db_path):
     traders_db = tmp_path / "traders.db"
     discovery_db = tmp_path / "discovery.db"
     save_wallet_report(_report(WALLET_A), db_path=str(traders_db))
     init_wallet_performance_db(traders_db)
 
-    engine = WalletPerformanceEngine(traders_db_path=traders_db, discovery_db_path=discovery_db)
+    engine = WalletPerformanceEngine(
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        signal_db_path=signal_db_path,
+        paper_copy_db_path=tmp_path / "paper_copy.db",
+    )
     performance = engine.score_wallet(WALLET_A)
     engine.persist_snapshot(performance)
     engine.log_action(
@@ -106,22 +116,38 @@ def test_feedback_engine_promotion_and_retirement(tmp_path):
         config=config,
         traders_db_path=str(traders_db),
         discovery_db_path=str(discovery_db),
+        performance_engine=WalletPerformanceEngine(
+            traders_db_path=traders_db,
+            discovery_db_path=discovery_db,
+            signal_db_path=tmp_path / "signals.db",
+            paper_copy_db_path=tmp_path / "paper_copy.db",
+        ),
     )
     result = feedback.evaluate_all([WALLET_A, WALLET_B])
     assert result["evaluated"] == 2
     assert result["read_only"] is True
 
 
-def test_performance_analytics_report(tmp_path):
+def test_performance_analytics_report(tmp_path, signal_db_path):
     traders_db = tmp_path / "traders.db"
     discovery_db = tmp_path / "discovery.db"
     init_wallet_performance_db(traders_db)
     save_wallet_report(_report(WALLET_A), db_path=str(traders_db))
 
-    engine = WalletPerformanceEngine(traders_db_path=traders_db, discovery_db_path=discovery_db)
+    engine = WalletPerformanceEngine(
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        signal_db_path=signal_db_path,
+        paper_copy_db_path=tmp_path / "paper_copy.db",
+    )
     engine.persist_snapshot(engine.score_wallet(WALLET_A))
 
-    report = wallet_performance_analytics_report(traders_db_path=traders_db, discovery_db_path=discovery_db)
+    report = wallet_performance_analytics_report(
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        signal_db_path=signal_db_path,
+        paper_copy_db_path=tmp_path / "paper_copy.db",
+    )
     assert report["read_only"] is True
     assert "roi_distribution" in report
     assert "expectancy_distribution" in report
