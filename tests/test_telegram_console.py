@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from urllib.error import HTTPError
 
 import pytest
@@ -13,6 +14,10 @@ from src.integrations.telegram_console import (
     TelegramConsoleConfig,
     TelegramConsoleConfigError,
     TelegramResponse,
+    format_count_metric,
+    format_pct_metric,
+    render_dashboard_text,
+    status_icon,
 )
 from src.integrations.telegram_notifications import (
     TelegramNotificationConfig,
@@ -25,6 +30,7 @@ from src.integrations.telegram_notifications import (
 
 VALID_WALLET = "0x7af3f727e86394ca3986a1f786b888c7904e83fe"
 WALLET_URL = f"https://polymarketanalytics.com/traders/{VALID_WALLET}"
+DASHBOARD_NOW = datetime(2026, 6, 26, 12, 34, 56, tzinfo=timezone.utc)
 
 
 def _config(tmp_path, admins=(123,), token="secret-token") -> TelegramConsoleConfig:
@@ -157,6 +163,64 @@ def _callback_update(callback_data, *, chat_id=456, user_id=123, message_id=789)
     }
 
 
+def _dashboard_health():
+    return {
+        "status": "healthy",
+        "success_rate": 1.0,
+        "stale_cycles": [],
+        "failures": [],
+        "checked_at": "2026-06-26T12:34:40Z",
+        "service_uptime_anchor": "2026-06-26T10:00:00Z",
+        "cycles": [
+            {
+                "cycle": "signals",
+                "last_run_at": "2026-06-26T12:32:56Z",
+                "last_status": "success",
+            }
+        ],
+    }
+
+
+def _dashboard_signals():
+    return {
+        "status": "healthy",
+        "signal_count": 300,
+        "scored_count": 300,
+        "recommendation_count": 12,
+        "performance_count": 20,
+        "validation_accuracy": 0.562,
+        "last_cycle": {
+            "cycle_timestamp": "2026-06-26T12:31:56Z",
+            "signals_generated": 124,
+            "recommendations_generated": 7,
+        },
+    }
+
+
+def _dashboard_paper_health():
+    return {
+        "status": "healthy",
+        "last_run": "2026-06-26T12:30:56Z",
+        "runs_24h": 8,
+        "positions_open": 1,
+        "positions_closed": 47,
+        "equity": 1103.55,
+    }
+
+
+def _dashboard_console(tmp_path, **kwargs):
+    defaults = {
+        "health_provider": _dashboard_health,
+        "signals_provider": _dashboard_signals,
+        "paper_provider": _dashboard_paper_health,
+        "paper_intelligence_provider": _paper_report,
+        "risk_provider": lambda: {"halted": False, "active_halts": []},
+        "now_provider": lambda: DASHBOARD_NOW,
+    }
+    defaults.update(kwargs)
+    return TelegramConsole(_config(tmp_path, admins=(123,)), **defaults)
+
+
 def test_unauthorized_user_rejected(tmp_path):
     console = TelegramConsole(_config(tmp_path, admins=(123,)))
 
@@ -212,21 +276,74 @@ def test_help_returns_main_menu_reply_markup(tmp_path):
 
     assert response.reply_markup is not None
     assert _callback_ids(response.reply_markup) == {
+        "report_paper",
         "menu_intelligence",
         "menu_wallets",
-        "menu_signals",
-        "menu_system",
         "menu_reports",
+        "menu_system",
+        "dashboard_refresh",
     }
 
 
-def test_start_returns_main_menu_reply_markup(tmp_path):
-    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+def test_start_returns_dashboard_reply_markup(tmp_path):
+    console = _dashboard_console(tmp_path)
 
     response = console.handle_text(123, "/start")
 
+    assert "📊 Polylens Mission Control" in response
     assert response.reply_markup is not None
     assert "menu_system" in _callback_ids(response.reply_markup)
+    assert "dashboard_refresh" in _callback_ids(response.reply_markup)
+
+
+def test_dashboard_rendering_includes_statuses_metrics_and_timestamp(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    response = console.handle_text(123, "/console")
+
+    assert "📊 Polylens Mission Control" in response
+    assert "🟢 System Healthy" in response
+    assert "Wallet Autonomy\n🟢 Running" in response
+    assert "Telegram Console\n🟢 Running" in response
+    assert "Mission Control\n🟢 Online" in response
+    assert "Trader Dashboard\n🟢 Online" in response
+    assert "Paper Trading\n🟢 Enabled" in response
+    assert "Live Trading\n🔴 Disabled" in response
+    assert "Signals Today\n124" in response
+    assert "Paper Trades\n48" in response
+    assert "Validated Families\n2" in response
+    assert "Validation Accuracy\n56.2%" in response
+    assert "Paper Win Rate\n58.3%" in response
+    assert "Last Cycle\n2m ago" in response
+    assert "System Uptime\n2h 34m" in response
+    assert "Updated:\n12:34:56 UTC" in response
+
+
+def test_dashboard_status_icon_rendering():
+    assert status_icon("healthy") == "🟢"
+    assert status_icon("degraded") == "🟡"
+    assert status_icon("unhealthy") == "🔴"
+
+
+def test_dashboard_metric_formatting():
+    assert format_count_metric(1240) == "1,240"
+    assert format_count_metric(None) == "0"
+    assert format_pct_metric(0.562) == "56.2%"
+    assert format_pct_metric(56.2) == "56.2%"
+
+
+def test_render_dashboard_text_uses_supplied_utc_timestamp():
+    text = render_dashboard_text(
+        config=TelegramConsoleConfig(bot_token="token", admin_user_ids=frozenset({123})),
+        health=_dashboard_health(),
+        signals=_dashboard_signals(),
+        paper_health=_dashboard_paper_health(),
+        paper=_paper_report(),
+        risk={"halted": False},
+        now=DASHBOARD_NOW,
+    )
+
+    assert text.endswith("Updated:\n12:34:56 UTC")
 
 
 def test_menu_navigation_to_system_menu(tmp_path):
@@ -246,18 +363,20 @@ def test_menu_navigation_to_system_menu(tmp_path):
 
 
 def test_back_navigation_returns_main_menu(tmp_path):
-    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+    console = _dashboard_console(tmp_path)
 
     response = console.handle_callback(123, "menu_main")
 
-    assert response == "Polylens Control Console\nChoose a category."
+    assert "📊 Polylens Mission Control" in response
+    assert "Updated:\n12:34:56 UTC" in response
     assert response.reply_markup is not None
     assert _callback_ids(response.reply_markup) == {
+        "report_paper",
         "menu_intelligence",
         "menu_wallets",
-        "menu_signals",
-        "menu_system",
         "menu_reports",
+        "menu_system",
+        "dashboard_refresh",
     }
 
 
@@ -665,7 +784,7 @@ def test_poll_paper_performance_callback_edits_existing_message(tmp_path):
 
 
 def test_poll_back_callback_edits_same_message(tmp_path):
-    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+    console = _dashboard_console(tmp_path)
     calls = []
 
     def fake_request(method, params):
@@ -682,7 +801,50 @@ def test_poll_back_callback_edits_same_message(tmp_path):
 
     assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText"]
     assert calls[2][1]["message_id"] == 789
-    assert calls[2][1]["text"] == "Polylens Control Console\nChoose a category."
+    assert "📊 Polylens Mission Control" in calls[2][1]["text"]
+    assert "Updated:\n12:34:56 UTC" in calls[2][1]["text"]
+
+
+def test_poll_refresh_callback_edits_existing_message(tmp_path):
+    console = _dashboard_console(tmp_path)
+    calls = []
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        if method == "getUpdates":
+            return {"result": [_callback_update("dashboard_refresh", message_id=789)]}
+        if method == "editMessageText":
+            return {"ok": True, "result": {"message_id": params["message_id"]}}
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+
+    console.poll_once(timeout=1)
+
+    assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText"]
+    assert calls[2][1]["message_id"] == 789
+    assert "📊 Polylens Mission Control" in calls[2][1]["text"]
+    assert "sendMessage" not in [method for method, _params in calls]
+
+
+def test_poll_refresh_callback_never_sends_new_message_if_edit_fails(tmp_path):
+    console = _dashboard_console(tmp_path)
+    calls = []
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        if method == "getUpdates":
+            return {"result": [_callback_update("dashboard_refresh", message_id=789)]}
+        if method == "editMessageText":
+            raise RuntimeError("edit failed")
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+
+    console.poll_once(timeout=1)
+
+    assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText"]
+    assert "sendMessage" not in [method for method, _params in calls]
 
 
 def test_poll_navigation_fallback_sends_only_if_edit_fails(tmp_path):
@@ -710,7 +872,7 @@ def test_poll_navigation_fallback_sends_only_if_edit_fails(tmp_path):
 
 
 def test_console_command_reuses_active_console_message(tmp_path):
-    console = TelegramConsole(_config(tmp_path, admins=(123,)))
+    console = _dashboard_console(tmp_path)
     calls = []
     updates = [
         {
@@ -739,7 +901,7 @@ def test_console_command_reuses_active_console_message(tmp_path):
 
     assert next_offset == 102
     assert [method for method, _params in calls] == ["getUpdates", "sendMessage", "editMessageText"]
-    assert calls[1][1]["text"].startswith("Polylens Telegram console")
+    assert calls[1][1]["text"].startswith("📊 Polylens Mission Control")
     assert calls[2][1]["message_id"] == 777
 
 

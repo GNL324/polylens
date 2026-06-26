@@ -83,15 +83,16 @@ CALLBACK_COMMANDS = {
     "paper_strategies": "/paper_strategies",
 }
 MENU_CALLBACKS = {
-    "menu_main": "main",
     "menu_intelligence": "intelligence",
     "menu_wallets": "wallets",
     "menu_signals": "signals",
     "menu_system": "system",
     "menu_reports": "reports",
 }
+DASHBOARD_CALLBACKS = {"menu_main", "dashboard_refresh"}
 LIVE_CALLBACKS = {"buy", "sell", "order", "trade", "kill_switch", "resume_trading"}
 WALLET_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
+DASHBOARD_DIVIDER = "━━━━━━━━━━━━━━━━━━"
 
 
 class TelegramConsoleConfigError(ValueError):
@@ -163,6 +164,7 @@ class TelegramConsole:
         risk_provider: Provider | None = None,
         top_wallets_provider: Callable[[], list[Any]] | None = None,
         wallet_provider: Callable[[str], dict[str, Any] | None] | None = None,
+        now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self.config = config
         self.health_provider = health_provider or (lambda: wallet_service_health_summary(traders_db_path=DEFAULT_TRADERS_DB))
@@ -177,6 +179,7 @@ class TelegramConsole:
         self.risk_provider = risk_provider or (lambda: KillSwitch(db_path=config.readiness_db_path).status())
         self.top_wallets_provider = top_wallets_provider or (lambda: top_traders(limit=5, db_path=DEFAULT_TRADERS_DB))
         self.wallet_provider = wallet_provider or (lambda wallet: trader_summary(wallet, db_path=DEFAULT_TRADERS_DB))
+        self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self._active_console_messages: dict[tuple[int, int], int] = {}
         init_telegram_audit_db(config.audit_db_path)
 
@@ -203,6 +206,13 @@ class TelegramConsole:
 
     def handle_callback(self, telegram_user_id: int, callback_data: str) -> TelegramResponse:
         callback_id = normalize_callback_id(callback_data)
+        if callback_id in DASHBOARD_CALLBACKS:
+            return self._handle_command(
+                telegram_user_id=telegram_user_id,
+                command="/console",
+                args="",
+                audit_command=f"callback:{callback_id}",
+            )
         if callback_id in MENU_CALLBACKS:
             return self._handle_menu_callback(telegram_user_id, callback_id)
         if callback_id in LIVE_CALLBACKS:
@@ -325,7 +335,13 @@ class TelegramConsole:
                 self._answer_callback_query(callback_query_id)
                 if chat_id is not None and user_id is not None:
                     response = self.handle_callback(int(user_id), callback_data)
-                    self._edit_console_message(int(chat_id), int(user_id), _optional_int(message_id), response)
+                    self._edit_console_message(
+                        int(chat_id),
+                        int(user_id),
+                        _optional_int(message_id),
+                        response,
+                        allow_send_fallback=normalize_callback_id(callback_data) != "dashboard_refresh",
+                    )
                 continue
             message = update.get("message") or {}
             text = str(message.get("text") or "")
@@ -348,7 +364,9 @@ class TelegramConsole:
             time.sleep(max(0.0, sleep_seconds))
 
     def _dispatch(self, command: str, args: str) -> TelegramResponse:
-        if command in {"", "/start", "/console", "/help"}:
+        if command in {"", "/start", "/console"}:
+            return self._dashboard_response()
+        if command == "/help":
             return TelegramResponse(help_text(), reply_markup=menu_reply_markup("main"))
         if command == "/status":
             return self._menu_response(
@@ -390,6 +408,26 @@ class TelegramConsole:
         if command == "/report_paper":
             return TelegramResponse(paper_performance_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
         return self._menu_response("unknown command. Try /help")
+
+    def _dashboard_response(self) -> TelegramResponse:
+        now = _as_utc_datetime(self.now_provider())
+        health = self.health_provider()
+        signals = self.signals_provider()
+        paper_health = self.paper_provider()
+        paper = self.paper_intelligence_provider()
+        risk = self.risk_provider()
+        return TelegramResponse(
+            render_dashboard_text(
+                config=self.config,
+                health=health,
+                signals=signals,
+                paper_health=paper_health,
+                paper=paper,
+                risk=risk,
+                now=now,
+            ),
+            reply_markup=menu_reply_markup("main"),
+        )
 
     def _wallet_response(self, args: str) -> TelegramResponse:
         wallet = args.strip().split()[0] if args.strip() else ""
@@ -458,10 +496,17 @@ class TelegramConsole:
         telegram_user_id: int,
         message_id: int | None,
         response: TelegramResponse,
+        *,
+        allow_send_fallback: bool = True,
     ) -> dict[str, Any]:
         key = self._active_console_key(chat_id, telegram_user_id)
         target_message_id = message_id or self._active_console_messages.get(key)
-        result, active_message_id = self._edit_message_or_send_with_id(chat_id, target_message_id, response)
+        result, active_message_id = self._edit_message_or_send_with_id(
+            chat_id,
+            target_message_id,
+            response,
+            allow_send_fallback=allow_send_fallback,
+        )
         if active_message_id is not None:
             self._active_console_messages[key] = active_message_id
         return result
@@ -471,6 +516,8 @@ class TelegramConsole:
         chat_id: int,
         message_id: int | None,
         response: TelegramResponse,
+        *,
+        allow_send_fallback: bool = True,
     ) -> tuple[dict[str, Any], int | None]:
         if message_id is not None:
             params: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "text": response.text}
@@ -479,6 +526,9 @@ class TelegramConsole:
             try:
                 return self._telegram_request("editMessageText", params), int(message_id)
             except Exception:
+                if not allow_send_fallback:
+                    LOGGER.warning("telegram edit failed; refresh will not send a new message")
+                    return {"ok": False, "description": "editMessageText failed"}, None
                 LOGGER.warning("telegram edit failed; falling back to sendMessage")
         result = self._send_message(chat_id, response)
         return result, _telegram_result_message_id(result)
@@ -604,6 +654,232 @@ def _telegram_result_message_id(result: dict[str, Any]) -> int | None:
     return _optional_int(payload.get("message_id"))
 
 
+def render_dashboard_text(
+    *,
+    config: TelegramConsoleConfig,
+    health: dict[str, Any],
+    signals: dict[str, Any],
+    paper_health: dict[str, Any],
+    paper: dict[str, Any],
+    risk: dict[str, Any],
+    now: datetime,
+) -> str:
+    now = _as_utc_datetime(now)
+    wallet_status = str(health.get("status") or "unknown")
+    paper_enabled = bool(config.paper_only or paper.get("paper_only") or paper_health)
+    live_enabled = bool(config.live_enabled and not config.paper_only and not risk.get("halted"))
+    system_status = "healthy" if wallet_status in {"healthy", "running", "ok"} else wallet_status
+
+    lines = [
+        "📊 Polylens Mission Control",
+        "",
+        DASHBOARD_DIVIDER,
+        "",
+        f"{status_icon(system_status)} {system_status_label(system_status)}",
+        "",
+        "Wallet Autonomy",
+        f"{status_icon(wallet_status)} {service_status_label(wallet_status)}",
+        "",
+        "Telegram Console",
+        "🟢 Running",
+        "",
+        "Mission Control",
+        "🟢 Online",
+        "",
+        "Trader Dashboard",
+        "🟢 Online",
+        "",
+        "Health Timer",
+        f"{status_icon(wallet_status)} {_health_timer_label(health, now)}",
+        "",
+        "Paper Trading",
+        f"{'🟢' if paper_enabled else '🔴'} {'Enabled' if paper_enabled else 'Disabled'}",
+        "",
+        "Live Trading",
+        f"{'🟢' if live_enabled else '🔴'} {'Enabled' if live_enabled else 'Disabled'}",
+        "",
+        "Signals Today",
+        format_count_metric(_signals_today(signals, now)),
+        "",
+        "Paper Trades",
+        format_count_metric(paper.get("trade_count")),
+        "",
+        "Validated Families",
+        format_count_metric(_validated_families(paper, signals)),
+        "",
+        "Validation Accuracy",
+        format_pct_metric(_validation_accuracy(paper, signals)),
+        "",
+        "Paper Win Rate",
+        format_pct_metric(paper.get("win_rate")),
+        "",
+        "Last Cycle",
+        relative_time(_last_cycle_at(health, signals, paper_health), now),
+        "",
+        "System Uptime",
+        relative_duration(_parse_datetime(health.get("service_uptime_anchor")), now),
+        "",
+        DASHBOARD_DIVIDER,
+        "",
+        "Updated:",
+        now.strftime("%H:%M:%S UTC"),
+    ]
+    return "\n".join(lines)
+
+
+def status_icon(status: Any) -> str:
+    text = str(status or "").strip().lower()
+    if text in {"healthy", "running", "ok", "online", "enabled", "success"}:
+        return "🟢"
+    if text in {"degraded", "idle", "warn", "warning", "stale"}:
+        return "🟡"
+    return "🔴"
+
+
+def system_status_label(status: Any) -> str:
+    text = str(status or "").strip().lower()
+    if text in {"healthy", "running", "ok", "online"}:
+        return "System Healthy"
+    if text in {"degraded", "idle", "warn", "warning", "stale"}:
+        return "System Degraded"
+    return "System Unhealthy"
+
+
+def service_status_label(status: Any) -> str:
+    text = str(status or "").strip().lower()
+    if text in {"healthy", "running", "ok", "success"}:
+        return "Running"
+    if text in {"idle", "degraded", "warn", "warning", "stale"}:
+        return "Degraded"
+    return "Offline"
+
+
+def format_count_metric(value: Any) -> str:
+    try:
+        return f"{int(float(value or 0)):,}"
+    except (TypeError, ValueError):
+        return "0"
+
+
+def format_pct_metric(value: Any) -> str:
+    try:
+        number = float(value or 0.0)
+    except (TypeError, ValueError):
+        number = 0.0
+    if abs(number) <= 1.0:
+        number *= 100.0
+    return f"{number:.1f}%"
+
+
+def relative_time(value: Any, now: datetime) -> str:
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        return "N/A"
+    seconds = max(0, int((_as_utc_datetime(now) - parsed).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    return f"{hours // 24}d ago"
+
+
+def relative_duration(value: Any, now: datetime) -> str:
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        return "N/A"
+    seconds = max(0, int((_as_utc_datetime(now) - parsed).total_seconds()))
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    minutes = (seconds % 3600) // 60
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def _health_timer_label(health: dict[str, Any], now: datetime) -> str:
+    checked_at = _parse_datetime(health.get("checked_at")) or _last_cycle_at(health, {}, {})
+    if checked_at is None:
+        return "N/A"
+    return relative_time(checked_at, now)
+
+
+def _signals_today(signals: dict[str, Any], now: datetime) -> int:
+    explicit = signals.get("signals_today")
+    if explicit is not None:
+        return int(float(explicit or 0))
+    last_cycle = signals.get("last_cycle") if isinstance(signals.get("last_cycle"), dict) else {}
+    cycle_at = _parse_datetime(last_cycle.get("cycle_timestamp"))
+    if cycle_at and cycle_at.date() == _as_utc_datetime(now).date():
+        return int(last_cycle.get("signals_generated") or 0)
+    generated = signals.get("signals_generated_today")
+    if generated is not None:
+        return int(float(generated or 0))
+    return int(signals.get("signal_count") or 0)
+
+
+def _validated_families(paper: dict[str, Any], signals: dict[str, Any]) -> int:
+    explicit = signals.get("validated_families") or signals.get("proven_strategy_families")
+    if explicit is not None:
+        return int(float(explicit or 0))
+    breakdown = paper.get("strategy_breakdown") if isinstance(paper.get("strategy_breakdown"), dict) else {}
+    return sum(
+        1
+        for row in breakdown.values()
+        if int(row.get("closed_positions") or 0) > 0 and float(row.get("win_rate") or 0.0) > 0.0
+    )
+
+
+def _validation_accuracy(paper: dict[str, Any], signals: dict[str, Any]) -> Any:
+    for key in ("validation_accuracy", "accuracy", "success_rate"):
+        if signals.get(key) is not None:
+            return signals.get(key)
+    return paper.get("win_rate")
+
+
+def _last_cycle_at(health: dict[str, Any], signals: dict[str, Any], paper_health: dict[str, Any]) -> datetime | None:
+    candidates: list[datetime] = []
+    for cycle in health.get("cycles") or []:
+        parsed = _parse_datetime(cycle.get("last_run_at") if isinstance(cycle, dict) else None)
+        if parsed:
+            candidates.append(parsed)
+    last_cycle = signals.get("last_cycle") if isinstance(signals.get("last_cycle"), dict) else {}
+    for value in (
+        last_cycle.get("cycle_timestamp"),
+        paper_health.get("last_run"),
+    ):
+        parsed = _parse_datetime(value)
+        if parsed:
+            candidates.append(parsed)
+    return max(candidates) if candidates else None
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return _as_utc_datetime(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return _as_utc_datetime(parsed)
+
+
+def _as_utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def help_text() -> str:
     return "Polylens Telegram console\nCommands:\n" + "\n".join(COMMANDS)
 
@@ -685,14 +961,17 @@ def menu_reply_markup(menu_name: str = "main") -> dict[str, Any]:
     return _menu_markup(
         [
             [
-                {"text": "Intelligence", "callback_data": "menu_intelligence"},
-                {"text": "Wallets", "callback_data": "menu_wallets"},
+                {"text": "📈 Performance", "callback_data": "report_paper"},
+                {"text": "🧠 Intelligence", "callback_data": "menu_intelligence"},
             ],
             [
-                {"text": "Signals", "callback_data": "menu_signals"},
-                {"text": "System", "callback_data": "menu_system"},
+                {"text": "💼 Wallets", "callback_data": "menu_wallets"},
+                {"text": "📊 Reports", "callback_data": "menu_reports"},
             ],
-            [{"text": "Reports", "callback_data": "menu_reports"}],
+            [
+                {"text": "⚙ System", "callback_data": "menu_system"},
+                {"text": "🔄 Refresh", "callback_data": "dashboard_refresh"},
+            ],
         ]
     )
 
