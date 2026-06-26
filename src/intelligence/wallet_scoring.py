@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,10 +56,18 @@ def _latest_activity_timestamp(wallet: str, wallet_activity_db_path: str | Path)
     if not path.exists():
         return None
     with closing_connection(path) as conn:
-        row = conn.execute(
-            "SELECT MAX(timestamp) AS latest FROM wallet_events WHERE wallet = ?",
-            (wallet.lower(),),
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='wallet_events'"
         ).fetchone()
+        if table is None:
+            return None
+        try:
+            row = conn.execute(
+                "SELECT MAX(timestamp) AS latest FROM wallet_events WHERE wallet = ?",
+                (wallet.lower(),),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
     if row is None or row["latest"] is None:
         return None
     return float(row["latest"])

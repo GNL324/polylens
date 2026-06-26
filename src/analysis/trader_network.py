@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -300,23 +301,31 @@ def _markets_from_activity_db(
         return {}
     wallet_markets: dict[str, set[str]] = defaultdict(set)
     with closing_connection(path) as conn:
-        if wallets:
-            placeholders = ",".join("?" for _ in wallets)
-            rows = conn.execute(
-                f"""
-                SELECT wallet, condition_id, market_id, market_slug
-                FROM wallet_events
-                WHERE wallet IN ({placeholders})
-                """,
-                tuple(sorted(wallets)),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT wallet, condition_id, market_id, market_slug
-                FROM wallet_events
-                """
-            ).fetchall()
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='wallet_events'"
+        ).fetchone()
+        if table is None:
+            return {}
+        try:
+            if wallets:
+                placeholders = ",".join("?" for _ in wallets)
+                rows = conn.execute(
+                    f"""
+                    SELECT wallet, condition_id, market_id, market_slug
+                    FROM wallet_events
+                    WHERE wallet IN ({placeholders})
+                    """,
+                    tuple(sorted(wallets)),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT wallet, condition_id, market_id, market_slug
+                    FROM wallet_events
+                    """
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
     for row in rows:
         for value in (row["condition_id"], row["market_id"], row["market_slug"]):
             normalized = _normalize_market(value)

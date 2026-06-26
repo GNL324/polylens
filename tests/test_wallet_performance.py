@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 from src.analysis.trader_registry import save_wallet_report
 from src.intelligence.wallet_discovery import WalletDiscoveryEngine, init_wallet_discovery_db
 from src.intelligence.wallet_feedback_engine import FeedbackConfig, WalletFeedbackEngine
 from src.intelligence.wallet_performance import WalletPerformanceEngine, init_wallet_performance_db
 from src.intelligence.wallet_performance_analytics import wallet_performance_analytics_report
+from src.intelligence.wallet_scoring import _latest_activity_timestamp
 
 WALLET_A = "0x" + "a1" * 20
 WALLET_B = "0x" + "b2" * 20
@@ -57,6 +59,24 @@ def test_wallet_performance_score_structure(tmp_path, signal_db_path):
     assert score.status in {"promoted", "active", "probation", "retired"}
     assert score.trend in {"improving", "declining", "stable"}
     assert "realized_roi" in score.components or "win_rate" in score.components
+
+
+def test_latest_activity_timestamp_handles_missing_wallet_events(tmp_path):
+    missing_db = tmp_path / "missing.db"
+    assert _latest_activity_timestamp(WALLET_A, missing_db) is None
+
+    empty_schema_db = tmp_path / "empty_schema.db"
+    sqlite3.connect(empty_schema_db).close()
+    assert _latest_activity_timestamp(WALLET_A, empty_schema_db) is None
+
+    with sqlite3.connect(empty_schema_db) as conn:
+        conn.execute("CREATE TABLE wallet_events (wallet TEXT, timestamp REAL)")
+    assert _latest_activity_timestamp(WALLET_A, empty_schema_db) is None
+
+    with sqlite3.connect(empty_schema_db) as conn:
+        conn.execute("INSERT INTO wallet_events (wallet, timestamp) VALUES (?, ?)", (WALLET_A.lower(), 123.45))
+        conn.execute("INSERT INTO wallet_events (wallet, timestamp) VALUES (?, ?)", (WALLET_A.lower(), 234.56))
+    assert _latest_activity_timestamp(WALLET_A, empty_schema_db) == 234.56
 
 
 def test_persist_snapshot_and_actions(tmp_path, signal_db_path):

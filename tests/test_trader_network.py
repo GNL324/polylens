@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -140,6 +141,57 @@ def test_discovered_wallets_become_nodes_from_relationships(tmp_path):
     assert WALLET_SOURCE in network.nodes
     assert WALLET_A in network.nodes
     assert WALLET_B in network.nodes
+
+
+def test_network_handles_activity_db_without_wallet_events(tmp_path):
+    traders_db, discovery_db, export_dir = _seed_network_fixtures(tmp_path)
+    activity_db = tmp_path / "activity.db"
+    sqlite3.connect(activity_db).close()
+
+    network = build_trader_network(
+        wallet=WALLET_SOURCE,
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        wallet_export_dir=export_dir,
+        wallet_activity_db_path=activity_db,
+    )
+
+    assert WALLET_SOURCE in network.nodes
+    assert len(network.edges) > 0
+
+
+def test_network_uses_wallet_events_when_table_exists(tmp_path):
+    traders_db = tmp_path / "traders.db"
+    discovery_db = tmp_path / "discovery.db"
+    export_dir = tmp_path / "wallets"
+    export_dir.mkdir()
+    activity_db = tmp_path / "activity.db"
+    save_wallet_report(_report(WALLET_A), db_path=str(traders_db))
+    save_wallet_report(_report(WALLET_B), db_path=str(traders_db))
+    with sqlite3.connect(activity_db) as conn:
+        conn.execute(
+            "CREATE TABLE wallet_events (wallet TEXT, condition_id TEXT, market_id TEXT, market_slug TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO wallet_events (wallet, condition_id, market_id, market_slug) VALUES (?, ?, ?, ?)",
+            (WALLET_A, "market-shared", "", ""),
+        )
+        conn.execute(
+            "INSERT INTO wallet_events (wallet, condition_id, market_id, market_slug) VALUES (?, ?, ?, ?)",
+            (WALLET_B, "market-shared", "", ""),
+        )
+
+    network = build_trader_network(
+        traders_db_path=traders_db,
+        discovery_db_path=discovery_db,
+        wallet_export_dir=export_dir,
+        wallet_activity_db_path=activity_db,
+    )
+
+    edge_lookup = {(edge.wallet_a, edge.wallet_b): edge for edge in network.edges}
+    ab_edge = edge_lookup.get((WALLET_A, WALLET_B)) or edge_lookup.get((WALLET_B, WALLET_A))
+    assert ab_edge is not None
+    assert ab_edge.shared_markets == ["market-shared"]
 
 
 def test_shared_market_relationships_become_weighted_edges(tmp_path):

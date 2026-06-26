@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass
 
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from src.analysis.trader_discovery import TraderDiscoveryCandidate, save_discovery_candidate
 from src.analysis.trader_registry import save_wallet_report
 from src.analysis.wallet_activity import WalletActivityEvent, WalletActivityExport
-from src.intelligence.wallet_tracker import WalletTracker, init_wallet_watchlist_db
+from src.intelligence.wallet_tracker import WalletTracker, _latest_event_timestamp, init_wallet_watchlist_db
 
 WALLET_A = "0x" + "a1" * 20
 WALLET_B = "0x" + "b2" * 20
@@ -114,6 +115,24 @@ def test_discover_top_wallets_merges_sources(tmp_path):
     wallets = tracker.discover_top_wallets(limit=10)
     assert WALLET_A in wallets
     assert WALLET_B in wallets
+
+
+def test_latest_event_timestamp_handles_missing_wallet_events(tmp_path):
+    missing_db = tmp_path / "missing.db"
+    assert _latest_event_timestamp(WALLET_A, missing_db) is None
+
+    empty_schema_db = tmp_path / "empty_schema.db"
+    sqlite3.connect(empty_schema_db).close()
+    assert _latest_event_timestamp(WALLET_A, empty_schema_db) is None
+
+    with sqlite3.connect(empty_schema_db) as conn:
+        conn.execute("CREATE TABLE wallet_events (wallet TEXT, timestamp REAL)")
+    assert _latest_event_timestamp(WALLET_A, empty_schema_db) is None
+
+    with sqlite3.connect(empty_schema_db) as conn:
+        conn.execute("INSERT INTO wallet_events (wallet, timestamp) VALUES (?, ?)", (WALLET_A.lower(), 100.0))
+        conn.execute("INSERT INTO wallet_events (wallet, timestamp) VALUES (?, ?)", (WALLET_A.lower(), 200.0))
+    assert _latest_event_timestamp(WALLET_A, empty_schema_db) == 200.0
 
 
 def test_build_ranked_watchlist_orders_by_composite_score(tmp_path):
