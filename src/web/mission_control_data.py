@@ -813,6 +813,7 @@ def mission_control_snapshot(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     from src.analysis.paper_trading_engine import performance_report as canonical_paper_performance
+    from src.analysis.paper_execution_analytics import execution_quality_report
 
     snapshot = _legacy_mission_control_snapshot(
         paper_db_path=paper_db_path,
@@ -843,6 +844,7 @@ def mission_control_snapshot(
             "monthly_return": portfolio.get("monthly_return", 0.0),
             "drawdown": portfolio.get("drawdown", 0.0),
             "max_drawdown": portfolio.get("max_drawdown", 0.0),
+            "execution_quality": execution_quality_report(portfolio_db_path),
         }
     )
     snapshot["header"]["wallet"] = f"${portfolio['open_position_value']:.2f} deployed"

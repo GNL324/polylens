@@ -425,4 +425,7 @@ def paper_trading_intelligence(
     )
     if portfolio["legacy_anomalous_count"]:
         base["warnings"] = [*base.get("warnings", []), f"{portfolio['legacy_anomalous_count']} legacy rows excluded from the $100 portfolio"]
+    from src.analysis.paper_execution_analytics import execution_quality_report
+
+    base["execution_quality"] = execution_quality_report(db_path)
     return base

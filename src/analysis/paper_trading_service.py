@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from src.analysis.paper_execution_simulator import PaperExecutionConfig
 from src.analysis.paper_trading_engine import (
     DEFAULT_PAPER_TRADING_DB,
     DEFAULT_STARTING_BANKROLL,
@@ -32,6 +33,7 @@ def run_paper_trading_service(
     try:
         config = PaperTradingConfig.from_env()
         config.opportunity_limit = limit
+        config.execution = PaperExecutionConfig.from_env()
         result = run_paper_trading_engine(db_path=db_path, config=config)
         health = paper_trading_health(db_path=db_path)
         payload = {

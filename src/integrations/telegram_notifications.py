@@ -337,6 +337,7 @@ def paper_performance_report_text(report: dict[str, Any] | None = None, db_path:
         db_path = report
         report = None
     paper = report or paper_trading_intelligence(db_path=db_path)
+    execution = paper.get("execution_quality") or {}
     return safe_telegram_text("\n".join(
         [
             "Paper Performance",
@@ -347,6 +348,9 @@ def paper_performance_report_text(report: dict[str, Any] | None = None, db_path:
             f"Closed positions: {int(paper.get('closed_positions_count') or 0)}",
             f"Win rate: {_pct(paper.get('win_rate'))}",
             f"Trades: {int(paper.get('trade_count') or 0)}",
+            f"Fill rate: {_pct(execution.get('fill_rate'))}",
+            f"Avg slippage: {float(execution.get('average_slippage') or 0):.4f}",
+            f"Rejections: {int(execution.get('blocked_orders') or 0)}",
         ]
     ))
 

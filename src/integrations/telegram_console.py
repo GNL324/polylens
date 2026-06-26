@@ -1854,6 +1854,9 @@ def render_console_page(
                 ("Closed Trades", format_count_metric(context.paper.get("closed_positions_count"))),
                 ("Win Rate", format_pct_metric(context.paper.get("win_rate"))),
                 ("Top Strategy", _strategy_label(context.paper.get("top_strategy"))),
+                ("Fill Rate", format_pct_metric((context.paper.get("execution_quality") or {}).get("fill_rate"))),
+                ("Avg Slippage", _format_money((context.paper.get("execution_quality") or {}).get("average_slippage"))),
+                ("Rejection Rate", format_pct_metric((context.paper.get("execution_quality") or {}).get("rejection_rate"))),
             ],
             context.now,
         )

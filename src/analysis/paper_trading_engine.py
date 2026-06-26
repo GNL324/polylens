@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.analysis.opportunity_feed import get_paper_trading_opportunities
+from src.analysis.paper_execution_simulator import (
+    ExecutionResult,
+    PaperExecutionConfig,
+    simulate_entry,
+    simulate_exit,
+)
 from src.sqlite_utils import closing_connection
 
 
@@ -42,6 +48,10 @@ class PaperTradingConfig:
     daily_loss_limit: float | None = None
     daily_trade_limit: int | None = None
     opportunity_limit: int = 25
+    execution: PaperExecutionConfig | None = None
+
+    def resolved_execution(self) -> PaperExecutionConfig:
+        return self.execution or PaperExecutionConfig.zero_friction()
 
     @classmethod
     def from_env(cls) -> "PaperTradingConfig":
@@ -167,21 +177,55 @@ def run_paper_trading_engine(
 ) -> dict[str, Any]:
     init_paper_trading_db(db_path)
     config = config or PaperTradingConfig.from_env()
+    execution = config.resolved_execution()
     raw = _collect_all(collectors, config.opportunity_limit)
     opportunities = sorted((_normalize_opportunity(item) for item in raw), key=lambda item: (-item.ranking_score, item.opportunity_id))
     run_id = _create_run(db_path, opportunities_seen=len(opportunities), equity=_current_equity(db_path, config.starting_bankroll))
-    settled = settle_open_positions(db_path=db_path, run_id=run_id)
+    settled = settle_open_positions(db_path=db_path, run_id=run_id, execution=execution)
     orders_created = positions_opened = 0
     for opportunity in opportunities:
         if _has_position(db_path, opportunity.opportunity_id):
             continue
-        stake = calculate_position_size(db_path=db_path, strategy=opportunity.strategy, config=config, opportunity=opportunity)
-        reason = _entry_block_reason(db_path, opportunity, stake, config)
+        requested_stake = calculate_position_size(db_path=db_path, strategy=opportunity.strategy, config=config, opportunity=opportunity)
+        reason = _entry_block_reason(db_path, opportunity, requested_stake, config)
         if reason:
             _save_blocked_order(db_path, run_id, opportunity, reason)
             continue
-        order_id = _save_order(db_path, run_id, opportunity, stake)
-        if _open_position(db_path, order_id, opportunity, stake):
+        fill = simulate_entry(
+            row=opportunity.raw,
+            side=opportunity.side,
+            requested_stake=requested_stake,
+            config=execution,
+        )
+        if fill.status == "rejected":
+            _save_blocked_order(db_path, run_id, opportunity, fill.reason or "execution_rejected")
+            continue
+        stake = fill.filled_stake
+        if stake <= 0:
+            _save_blocked_order(db_path, run_id, opportunity, fill.reason or "zero_fill")
+            continue
+        filled_opportunity = PaperOpportunity(
+            opportunity_id=opportunity.opportunity_id,
+            strategy=opportunity.strategy,
+            market_id=opportunity.market_id,
+            title=opportunity.title,
+            asset=opportunity.asset,
+            side=opportunity.side,
+            entry_price=float(fill.fill_price or opportunity.entry_price),
+            target_price=opportunity.target_price,
+            estimated_roi=opportunity.estimated_roi,
+            ranking_score=opportunity.ranking_score,
+            signal_family=opportunity.signal_family,
+            source_wallet=opportunity.source_wallet,
+            confidence=opportunity.confidence,
+            validation_score=opportunity.validation_score,
+            market_category=opportunity.market_category,
+            market_liquidity=opportunity.market_liquidity,
+            time_to_expiry_seconds=opportunity.time_to_expiry_seconds,
+            raw=_with_execution_metadata(opportunity.raw, fill),
+        )
+        order_id = _save_order(db_path, run_id, filled_opportunity, stake, execution=fill)
+        if _open_position(db_path, order_id, filled_opportunity, stake):
             orders_created += 1
             positions_opened += 1
         else:
@@ -233,20 +277,22 @@ def settle_open_positions(
     db_path: str | Path = DEFAULT_PAPER_TRADING_DB,
     run_id: int | None = None,
     prices: dict[str, float] | None = None,
+    execution: PaperExecutionConfig | None = None,
 ) -> int:
     from src.analysis.paper_portfolio import transition_position
 
     init_paper_trading_db(db_path)
     prices = prices or {}
+    execution = execution or PaperExecutionConfig.zero_friction()
     settled = 0
     with closing_connection(db_path) as conn:
         rows = conn.execute("SELECT * FROM paper_positions WHERE status IN ('pending','open','partially_exited') ORDER BY paper_position_id").fetchall()
     for row in rows:
+        with closing_connection(db_path) as conn:
+            order = conn.execute("SELECT raw_json FROM paper_orders WHERE id=?", (row["order_id"],)).fetchone()
+        raw = _json(order["raw_json"] if order else "{}")
         exit_price = _safe_float(prices.get(str(row["opportunity_id"])))
         if exit_price <= 0:
-            with closing_connection(db_path) as conn:
-                order = conn.execute("SELECT raw_json FROM paper_orders WHERE id=?", (row["order_id"],)).fetchone()
-            raw = _json(order["raw_json"] if order else "{}")
             exit_price = _safe_float(raw.get("settlement_price") or raw.get("exit_price") or raw.get("target_price"))
         if exit_price <= 0:
             mark = _safe_float(prices.get(str(row["opportunity_id"]))) or _safe_float(row["current_price"])
@@ -256,14 +302,35 @@ def settle_open_positions(
                     (mark, round((mark - _safe_float(row["entry_price"])) * _safe_float(row["shares"]), 6), _utc_now(), row["paper_position_id"]),
                 )
             continue
+
+        quote_row = {
+            **raw,
+            "exit_price": exit_price,
+            "best_bid": exit_price,
+            "yes_bid": exit_price,
+            "entry_price": float(row["entry_price"]),
+        }
+        exit_result = simulate_exit(
+            row=quote_row,
+            side=str(row["side"] or "yes"),
+            shares=float(row["shares"] or 0.0),
+            config=execution,
+        )
+        if exit_result.status == "rejected":
+            continue
+
+        simulated_exit_price = exit_result.fill_price if exit_result.fill_price is not None else exit_price
+        reason = "simulated_exit"
+        if exit_result.reason:
+            reason = f"simulated_exit:{exit_result.reason}"
         updated = transition_position(
-            db_path, paper_position_id=int(row["paper_position_id"]), status="closed", price=exit_price,
-            quantity=_safe_float(row["shares"]), reason="simulated_exit",
+            db_path, paper_position_id=int(row["paper_position_id"]), status="closed", price=simulated_exit_price,
+            quantity=_safe_float(row["shares"]), reason=reason,
         )
         with closing_connection(db_path) as conn:
             conn.execute(
                 "INSERT INTO paper_settlements (run_id, paper_position_id, exit_timestamp, exit_price, pnl, roi, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (run_id or 0, row["paper_position_id"], updated["closed_at"] or _utc_now(), exit_price, updated["realized_pnl"], _safe_float(updated.get("roi")), "simulated_exit"),
+                (run_id or 0, row["paper_position_id"], updated["closed_at"] or _utc_now(), simulated_exit_price, updated["realized_pnl"], _safe_float(updated.get("roi")), reason),
             )
         settled += 1
     return settled
@@ -361,17 +428,31 @@ def _open_position(db_path: str | Path, order_id: int, opportunity: PaperOpportu
     return True
 
 
-def _save_order(db_path: str | Path, run_id: int, opportunity: PaperOpportunity, stake: float) -> int:
+def _save_order(
+    db_path: str | Path,
+    run_id: int,
+    opportunity: PaperOpportunity,
+    stake: float,
+    *,
+    execution: ExecutionResult | None = None,
+) -> int:
     timestamp = _utc_now()
+    raw_payload = _with_execution_metadata(opportunity.raw or {}, execution) if execution else dict(opportunity.raw or {})
     with closing_connection(db_path) as conn:
         cur = conn.execute(
             """INSERT INTO paper_orders
             (run_id, opportunity_id, strategy, side, market_id, title, asset, simulated_price, stake, status, raw_json, created_timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'filled', ?, ?)""",
             (run_id, opportunity.opportunity_id, opportunity.strategy, opportunity.side, opportunity.market_id, opportunity.title, opportunity.asset,
-             opportunity.entry_price, stake, json.dumps(opportunity.raw, sort_keys=True), timestamp),
+             opportunity.entry_price, stake, json.dumps(raw_payload, sort_keys=True), timestamp),
         )
         return int(cur.lastrowid)
+
+
+def _with_execution_metadata(raw: dict[str, Any], execution: ExecutionResult) -> dict[str, Any]:
+    payload = dict(raw)
+    payload["execution"] = execution.to_dict()
+    return payload
 
 
 def _save_blocked_order(db_path: str | Path, run_id: int, opportunity: PaperOpportunity, reason: str) -> None:
