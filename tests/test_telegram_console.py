@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from urllib.error import HTTPError
 
 import pytest
 
@@ -660,6 +661,59 @@ def test_message_edit_falls_back_to_send(tmp_path):
 
     assert [method for method, _params in calls] == ["editMessageText", "sendMessage"]
     assert calls[1][1] == {"chat_id": 456, "text": "Updated"}
+
+
+def test_answer_callback_http_error_does_not_stop_later_updates(tmp_path, caplog):
+    token = "123456:super-secret"
+    console = TelegramConsole(_config(tmp_path, admins=(123,), token=token))
+    updates = {
+        "result": [
+            {
+                "update_id": 1,
+                "callback_query": {
+                    "id": "expired-callback",
+                    "data": "menu_system",
+                    "from": {"id": 123},
+                    "message": {"message_id": 10, "chat": {"id": 456}},
+                },
+            },
+            {
+                "update_id": 2,
+                "callback_query": {
+                    "id": "fresh-callback",
+                    "data": "health",
+                    "from": {"id": 123},
+                    "message": {"message_id": 11, "chat": {"id": 456}},
+                },
+            },
+        ]
+    }
+    calls = []
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        if method == "getUpdates":
+            return updates
+        if method == "answerCallbackQuery" and params["callback_query_id"] == "expired-callback":
+            raise HTTPError(
+                url="https://api.telegram.org/bot123456:super-secret/answerCallbackQuery",
+                code=400,
+                msg="Bad Request: query is too old",
+                hdrs=None,
+                fp=None,
+            )
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+
+    with caplog.at_level("WARNING"):
+        next_offset = console.poll_once()
+
+    assert next_offset == 3
+    assert [method for method, _params in calls].count("answerCallbackQuery") == 2
+    assert [method for method, _params in calls].count("editMessageText") == 2
+    assert "answerCallbackQuery failed" in caplog.text
+    assert token not in caplog.text
 
 
 def test_audit_row_written(tmp_path):
