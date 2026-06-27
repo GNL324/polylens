@@ -542,7 +542,7 @@ class TelegramConsole:
         return self._page_response(HOME_PAGE)
 
     def _page_response(self, page: str) -> TelegramResponse:
-        context = self._page_context(include_wallets=page in {"wallets", "wallet_stats"})
+        context = self._page_context(include_wallets=page in {HOME_PAGE, "wallets", "wallet_stats"})
         return TelegramResponse(
             render_console_page(page, config=self.config, context=context),
             reply_markup=page_reply_markup(page),
@@ -861,6 +861,715 @@ def render_page_timestamp(now: datetime) -> str:
     return f"Updated:\n{format_local_time(now)}"
 
 
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _lookup_comparison_value(payload: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if payload.get(key) is not None:
+            return payload.get(key)
+    return None
+
+
+def format_trend_suffix(
+    current: Any,
+    previous: Any,
+    *,
+    pct_points: bool = False,
+    integer: bool = False,
+) -> str:
+    prior = _optional_float(previous)
+    if prior is None:
+        return ""
+    if pct_points:
+        current_rate = _optional_float(current) or 0.0
+        current_pct = current_rate * 100.0 if abs(current_rate) <= 1.0 else current_rate
+        prior_pct = prior * 100.0 if abs(prior) <= 1.0 else prior
+        delta = current_pct - prior_pct
+        if abs(delta) < 0.05:
+            return " ➡"
+        arrow = "▲" if delta > 0 else "▼"
+        sign = "+" if delta > 0 else ""
+        return f" {arrow} {sign}{delta:.1f}%"
+    if integer:
+        delta = int(round(float(current or 0))) - int(round(prior))
+        if delta == 0:
+            return " ➡"
+        arrow = "▲" if delta > 0 else "▼"
+        sign = "+" if delta > 0 else ""
+        return f" {arrow} {sign}{delta}"
+    delta = float(current or 0) - prior
+    if abs(delta) < 0.0001:
+        return " ➡"
+    arrow = "▲" if delta > 0 else "▼"
+    sign = "+" if delta > 0 else ""
+    return f" {arrow} {sign}{delta:.1f}"
+
+
+def visual_status_label(status: Any) -> str:
+    text = str(status or "").strip().lower()
+    if text in {"healthy", "running", "ok", "online", "enabled", "success"}:
+        return "🟢 Healthy"
+    if text in {"degraded", "idle", "warn", "warning", "stale"}:
+        return "🟡 Warning"
+    if text in {"empty", "offline", "stopped", "disabled", "inactive", "unknown"}:
+        return "⚪ Offline"
+    if text in {"info", "information", "informational"}:
+        return "🔵 Information"
+    return "🔴 Critical"
+
+
+def visual_trend_label(trend: Any) -> str:
+    text = str(trend or "").strip().lower()
+    if text in {"improving", "up", "rising", "promoted"}:
+        return "📈 Improving"
+    if text in {"declining", "down", "falling", "retired", "demoted"}:
+        return "📉 Declining"
+    if text in {"stable", "unchanged", "flat"}:
+        return "➡ Stable"
+    return ""
+
+
+def render_lines_section(header: str, lines: list[str]) -> str:
+    if not lines:
+        return telegram_pre_block(header)
+    return telegram_pre_block("\n".join([header, *lines]))
+
+
+def render_mixed_sections(
+    sections: list[tuple[str, list[tuple[str, str]] | list[str]]],
+) -> str:
+    blocks: list[str] = []
+    for header, content in sections:
+        if not content:
+            continue
+        if isinstance(content[0], str):
+            blocks.append(render_lines_section(header, content))
+        else:
+            blocks.append(render_table_section(header, content))
+    return "\n\n".join(blocks)
+
+
+def _format_strategy_display(strategy: Any) -> str:
+    if isinstance(strategy, str):
+        label = strategy
+    elif isinstance(strategy, dict):
+        label = _strategy_label(strategy)
+    else:
+        label = "N/A"
+    if label == "N/A":
+        return label
+    return label.replace("_", " ").title()
+
+
+def _best_wallet_address(paper: dict[str, Any], wallets: list[Any] | None) -> str:
+    wallet = paper.get("best_wallet")
+    if isinstance(wallet, dict):
+        wallet = wallet.get("wallet") or wallet.get("address")
+    if wallet:
+        return str(wallet)
+    for item in wallets or []:
+        row = item.to_dict() if hasattr(item, "to_dict") else item
+        if isinstance(row, dict) and (row.get("wallet") or row.get("address")):
+            return str(row.get("wallet") or row.get("address"))
+    return ""
+
+
+def _winning_losing_counts(paper: dict[str, Any]) -> tuple[int, int]:
+    closed_rows = paper.get("closed_positions") or paper.get("recent_trades") or []
+    if closed_rows:
+        wins = 0
+        losses = 0
+        for trade in closed_rows:
+            if not isinstance(trade, dict):
+                continue
+            status = str(trade.get("status") or "").upper()
+            if status in {"WIN", "WON"}:
+                wins += 1
+            elif status in {"LOSS", "LOST"}:
+                losses += 1
+        if wins or losses:
+            return wins, losses
+    closed_count = int(paper.get("closed_positions_count") or 0)
+    win_rate = _optional_float(paper.get("win_rate"))
+    if closed_count > 0 and win_rate is not None:
+        wins = int(round(closed_count * (win_rate if win_rate <= 1.0 else win_rate / 100.0)))
+        return wins, max(0, closed_count - wins)
+    return 0, 0
+
+
+def _validation_status_label(paper: dict[str, Any], signals: dict[str, Any]) -> str:
+    outcome = paper.get("outcome_validation") if isinstance(paper.get("outcome_validation"), dict) else {}
+    status = outcome.get("status") or outcome.get("validation_status")
+    if status:
+        return str(status).replace("_", " ").title()
+    accuracy = _optional_float(_validation_accuracy(paper, signals))
+    if accuracy is None:
+        return "Unknown"
+    if accuracy >= 0.9:
+        return "Proven"
+    if accuracy >= 0.5:
+        return "Validating"
+    return "Weak"
+
+
+def _service_status_lines(
+    *,
+    health: dict[str, Any],
+    paper_health: dict[str, Any],
+    now: datetime,
+) -> list[str]:
+    timer = _health_timer_label(health, now)
+    return [
+        f"🟢 Mission Control",
+        f"🟢 Trader Dashboard",
+        f"{status_icon(health.get('status'))} Wallet Autonomy",
+        f"🟢 Telegram Console",
+        f"{status_icon(health.get('status'))} Health Timer  {timer}",
+        f"{status_icon(paper_health.get('status'))} Paper Trading",
+        "🔴 Live Trading",
+    ]
+
+
+def _resource_metric_rows(health: dict[str, Any]) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    cpu = health.get("cpu_usage_pct")
+    if cpu is not None:
+        rows.append(("CPU", format_pct_metric(cpu)))
+    memory_free = health.get("memory_free_gb")
+    if memory_free is None and health.get("memory_free_bytes") is not None:
+        memory_free = float(health.get("memory_free_bytes") or 0) / (1024**3)
+    if memory_free is not None:
+        rows.append(("Memory", f"{float(memory_free):.1f} GB Free"))
+    elif health.get("memory_usage_pct") is not None or health.get("memory_used_pct") is not None:
+        rows.append(("Memory", format_pct_metric(health.get("memory_usage_pct") or health.get("memory_used_pct"))))
+    disk = health.get("disk_usage_pct")
+    if disk is None:
+        disk = health.get("disk_free_pct")
+    if disk is not None:
+        rows.append(("Disk", format_pct_metric(disk)))
+    return rows
+
+
+def _wallet_health_lines(wallets: list[Any]) -> list[str]:
+    counts = _wallet_lifecycle_counts(wallets)
+    active = _wallet_active_count(wallets)
+    lines = [f"🟢 Active        {format_count_metric(active)}"]
+    if counts["promoted"]:
+        lines.append(f"⭐ Promoted      {format_count_metric(counts['promoted'])}")
+    if counts["probation"]:
+        lines.append(f"🟡 Probation     {format_count_metric(counts['probation'])}")
+    if counts["retired"]:
+        lines.append(f"⚪ Retired      {format_count_metric(counts['retired'])}")
+    top_wallet = ""
+    for item in wallets[:1]:
+        row = item.to_dict() if hasattr(item, "to_dict") else item
+        if isinstance(row, dict):
+            top_wallet = short_wallet(row.get("wallet") or row.get("address"))
+    if top_wallet:
+        lines.extend(["", "Top Wallet", f"👛 {top_wallet}"])
+    return lines
+
+
+def _performance_metric_rows(
+    *,
+    paper: dict[str, Any],
+    signals: dict[str, Any],
+    now: datetime,
+) -> list[tuple[str, str]]:
+    signals_today = _signals_today(signals, now)
+    signals_prev = _lookup_comparison_value(
+        signals,
+        "previous_signals_today",
+        "signals_yesterday",
+        "prior_signals_today",
+    )
+    trade_count = int(paper.get("trade_count") or 0)
+    trades_prev = _lookup_comparison_value(paper, "previous_trade_count", "prior_trade_count")
+    wins, losses = _winning_losing_counts(paper)
+    win_rate = paper.get("win_rate")
+    win_rate_prev = _lookup_comparison_value(paper, "previous_win_rate", "prior_win_rate", "win_rate_previous")
+    validation = _validation_status_label(paper, signals)
+    validation_prev = _lookup_comparison_value(
+        signals,
+        "previous_validation_status",
+        "prior_validation_status",
+    )
+    validation_value = f"🟢 {validation}"
+    if validation_prev is not None and str(validation_prev).strip().lower() == str(validation).strip().lower():
+        validation_value += " ➡"
+    rows = [
+        (
+            "📈 Signals Today",
+            f"🟢 {format_count_metric(signals_today)}{format_trend_suffix(signals_today, signals_prev, integer=True)}",
+        ),
+        (
+            "📊 Paper Trades",
+            f"🔵 {format_count_metric(trade_count)}{format_trend_suffix(trade_count, trades_prev, integer=True)}",
+        ),
+        ("🏆 Winning Trades", format_count_metric(wins)),
+        ("📉 Losing Trades", format_count_metric(losses)),
+        (
+            "Win Rate",
+            f"🟢 {format_pct_metric(win_rate)}{format_trend_suffix(win_rate, win_rate_prev, pct_points=True)}",
+        ),
+        ("Validation", validation_value),
+    ]
+    return rows
+
+
+def _best_pick_rows(paper: dict[str, Any], wallets: list[Any] | None) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    strategy = _format_strategy_display(paper.get("top_strategy"))
+    if strategy != "N/A":
+        rows.append(("Best Strategy", f"🥇 {strategy}"))
+    wallet = _best_wallet_address(paper, wallets)
+    if wallet:
+        rows.append(("Best Wallet", f"👛 {short_wallet(wallet)}"))
+    return rows
+
+
+def _trading_mode_label(*, config: TelegramConsoleConfig, paper: dict[str, Any], risk: dict[str, Any]) -> str:
+    paper_enabled = bool(config.paper_only or paper.get("paper_only"))
+    live_enabled = bool(config.live_enabled and not config.paper_only and not risk.get("halted"))
+    if paper_enabled and not live_enabled:
+        return "🟢 Paper Only"
+    if live_enabled:
+        return "🔴 Live Enabled"
+    return "⚪ Disabled"
+
+
+def _home_action_alerts(
+    *,
+    health: dict[str, Any],
+    signals: dict[str, Any],
+    paper_health: dict[str, Any],
+    paper: dict[str, Any],
+    risk: dict[str, Any],
+    wallets: list[Any] | None,
+    now: datetime,
+) -> list[str]:
+    alerts: list[str] = []
+    last_at = _last_cycle_at(health, signals, paper_health)
+    if last_at is not None:
+        minutes = int(max(0, (_as_utc_datetime(now) - last_at).total_seconds()) // 60)
+        if minutes >= 10:
+            alerts.append(f"🟡 Wallet Autonomy has not completed a cycle in {minutes} minutes.")
+    for cycle in health.get("stale_cycles") or []:
+        message = f"🟡 Wallet Autonomy cycle '{cycle}' is stale."
+        if message not in alerts:
+            alerts.append(message)
+    for failure in health.get("failures") or []:
+        if isinstance(failure, dict):
+            cycle = failure.get("cycle") or failure.get("cycle_name") or "cycle"
+            error = str(failure.get("error") or failure.get("message") or "failure detected")
+            alerts.append(f"🔴 {cycle} failure: {error[:72]}")
+        else:
+            alerts.append("🔴 Wallet Autonomy failure detected.")
+    disk = _optional_float(health.get("disk_usage_pct"))
+    if disk is not None and disk >= 0.9:
+        alerts.append(f"🔴 Disk usage above {format_pct_metric(disk)}.")
+    prev_acc = _lookup_comparison_value(
+        signals,
+        "previous_validation_accuracy",
+        "prior_validation_accuracy",
+        "validation_accuracy_previous",
+    )
+    curr_acc = _optional_float(_validation_accuracy(paper, signals))
+    if prev_acc is not None and curr_acc is not None:
+        prev_pct = prev_acc * 100.0 if abs(prev_acc) <= 1.0 else prev_acc
+        curr_pct = curr_acc * 100.0 if abs(curr_acc) <= 1.0 else curr_acc
+        delta = curr_pct - prev_pct
+        if delta <= -5.0:
+            alerts.append(f"🟡 Validation accuracy decreased by {abs(delta):.1f}%.")
+    if paper.get("new_promotions") or paper.get("promoted_today") or paper.get("new_promoted_wallet"):
+        alerts.append("🔵 New promoted wallet detected.")
+    else:
+        for item in wallets or []:
+            row = item.to_dict() if hasattr(item, "to_dict") else item
+            if isinstance(row, dict) and (row.get("newly_promoted") or row.get("promoted_today")):
+                alerts.append("🔵 New promoted wallet detected.")
+                break
+    if risk.get("halted"):
+        alerts.append("🔴 Trading halted by risk controls.")
+    if str(paper_health.get("status") or "").lower() in {"degraded", "unhealthy", "error"}:
+        alerts.append(f"🟡 Paper trading service is {paper_health.get('status')}.")
+    if str(signals.get("status") or "").lower() in {"error", "unhealthy", "degraded"}:
+        alerts.append(f"🟡 Signal engine is {signals.get('status')}.")
+    for warning in paper.get("warnings") or []:
+        text = str(warning).strip()
+        if text:
+            alerts.append(f"🟡 {text}")
+    return alerts
+
+
+def _executive_summary_rows(
+    *,
+    config: TelegramConsoleConfig,
+    health: dict[str, Any],
+    signals: dict[str, Any],
+    paper: dict[str, Any],
+    paper_health: dict[str, Any],
+    risk: dict[str, Any],
+    now: datetime,
+    alert_count: int,
+) -> list[tuple[str, str]]:
+    wallet_status = str(health.get("status") or "unknown")
+    system_status = "healthy" if wallet_status in {"healthy", "running", "ok"} else wallet_status
+    return [
+        ("System Status", visual_status_label(system_status)),
+        ("Trading Mode", _trading_mode_label(config=config, paper=paper, risk=risk)),
+        ("Last Cycle", relative_time(_last_cycle_at(health, signals, paper_health), now)),
+        ("Signals Today", format_count_metric(_signals_today(signals, now))),
+        ("Paper Win Rate", f"🟢 {format_pct_metric(paper.get('win_rate'))}"),
+        ("Alerts", "🟢 None" if alert_count == 0 else f"🟡 {alert_count}"),
+    ]
+
+
+def _action_center_lines(alerts: list[str]) -> list[str]:
+    if alerts:
+        return alerts
+    return ["No action required."]
+
+
+def _strategy_change_lines(paper: dict[str, Any]) -> tuple[str | None, str | None]:
+    improvement = paper.get("biggest_improvement") or paper.get("top_improver")
+    decline = paper.get("largest_decline") or paper.get("top_decliner")
+    improvement_line: str | None = None
+    decline_line: str | None = None
+    if isinstance(improvement, dict):
+        name = _format_strategy_display(improvement.get("strategy") or improvement.get("name"))
+        delta = _lookup_comparison_value(improvement, "delta", "change", "return_delta", "win_rate_delta")
+        delta_value = _optional_float(delta)
+        if name != "N/A" and delta_value is not None:
+            pct = delta_value * 100.0 if abs(delta_value) <= 1.0 else delta_value
+            improvement_line = f"{name} +{pct:.1f}%"
+    if isinstance(decline, dict):
+        name = _format_strategy_display(decline.get("strategy") or decline.get("name"))
+        delta = _lookup_comparison_value(decline, "delta", "change", "return_delta", "win_rate_delta")
+        delta_value = _optional_float(delta)
+        if name != "N/A" and delta_value is not None:
+            pct = abs(delta_value) * 100.0 if abs(delta_value) <= 1.0 else abs(delta_value)
+            decline_line = f"{name} -{pct:.1f}%"
+    breakdown = paper.get("strategy_breakdown") if isinstance(paper.get("strategy_breakdown"), dict) else {}
+    ranked_improvements: list[tuple[str, float]] = []
+    ranked_declines: list[tuple[str, float]] = []
+    for name, row in breakdown.items():
+        if not isinstance(row, dict):
+            continue
+        delta = _lookup_comparison_value(row, "win_rate_delta", "return_delta", "roi_delta", "delta_pct")
+        delta_value = _optional_float(delta)
+        if delta_value is None:
+            continue
+        if delta_value > 0:
+            ranked_improvements.append((name, delta_value))
+        elif delta_value < 0:
+            ranked_declines.append((name, delta_value))
+    if improvement_line is None and ranked_improvements:
+        name, delta_value = max(ranked_improvements, key=lambda item: item[1])
+        pct = delta_value * 100.0 if abs(delta_value) <= 1.0 else delta_value
+        improvement_line = f"{_format_strategy_display(name)} +{pct:.1f}%"
+    if decline_line is None and ranked_declines:
+        name, delta_value = min(ranked_declines, key=lambda item: item[1])
+        pct = abs(delta_value) * 100.0 if abs(delta_value) <= 1.0 else abs(delta_value)
+        decline_line = f"{_format_strategy_display(name)} -{pct:.1f}%"
+    return improvement_line, decline_line
+
+
+def _top_movers_lines(paper: dict[str, Any], wallets: list[Any] | None) -> list[str]:
+    lines: list[str] = []
+    strategy = _format_strategy_display(paper.get("top_strategy"))
+    if strategy != "N/A":
+        lines.extend(["🏆 Top Strategy", f"🥇 {strategy}", ""])
+    wallet = _best_wallet_address(paper, wallets)
+    if wallet:
+        lines.extend(["👛 Top Wallet", short_wallet(wallet), ""])
+    improvement_line, decline_line = _strategy_change_lines(paper)
+    if improvement_line:
+        lines.extend(["📈 Biggest Improvement", improvement_line, ""])
+    if decline_line:
+        lines.extend(["📉 Largest Decline", decline_line, ""])
+    while lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def _best_session_label(paper: dict[str, Any]) -> str | None:
+    explicit = paper.get("best_session") or paper.get("top_session")
+    if explicit:
+        return str(explicit).replace("_", " ").title()
+    breakdown = paper.get("session_breakdown") or paper.get("by_session")
+    if isinstance(breakdown, dict) and breakdown:
+        def _session_score(item: tuple[str, Any]) -> float:
+            value = item[1]
+            if isinstance(value, dict):
+                for key in ("pnl", "realized_pnl", "win_rate", "trade_count"):
+                    score = _optional_float(value.get(key))
+                    if score is not None:
+                        return score
+                return 0.0
+            return _optional_float(value) or 0.0
+
+        best_name, _score = max(breakdown.items(), key=_session_score)
+        return str(best_name).replace("_", " ").title()
+    return None
+
+
+def _todays_snapshot_rows(*, paper: dict[str, Any], signals: dict[str, Any], now: datetime) -> list[tuple[str, str]]:
+    wins, losses = _winning_losing_counts(paper)
+    rows = [
+        ("Signals", format_count_metric(_signals_today(signals, now))),
+        ("Paper Trades", format_count_metric(paper.get("trade_count"))),
+        ("Winning Trades", format_count_metric(wins)),
+        ("Losing Trades", format_count_metric(losses)),
+        ("Win Rate", format_pct_metric(paper.get("win_rate"))),
+    ]
+    session = _best_session_label(paper)
+    if session:
+        rows.append(("Best Session", session))
+    rows.append(("Last Update", format_local_time(now)))
+    return rows
+
+
+def _overall_health_lines(health: dict[str, Any]) -> list[str] | None:
+    score_value = _lookup_comparison_value(health, "health_score", "overall_health_score", "overall_score", "score")
+    if score_value is None:
+        success_rate = _optional_float(health.get("success_rate"))
+        if success_rate is None:
+            return None
+        score_value = int(round(success_rate * 100 if success_rate <= 1.0 else success_rate))
+    score = int(round(float(score_value)))
+    if score > 100:
+        score = min(score, 100)
+    if score >= 90:
+        label = "🟢 Excellent"
+    elif score >= 75:
+        label = "🟢 Good"
+    elif score >= 50:
+        label = "🟡 Fair"
+    else:
+        label = "🔴 Poor"
+    return [f"{score}/100", "", label]
+
+
+def _v6_home_sections(
+    *,
+    config: TelegramConsoleConfig,
+    health: dict[str, Any],
+    signals: dict[str, Any],
+    paper_health: dict[str, Any],
+    paper: dict[str, Any],
+    risk: dict[str, Any],
+    now: datetime,
+    top_wallets: list[Any] | None = None,
+) -> list[tuple[str, list[tuple[str, str]] | list[str]]]:
+    alerts = _home_action_alerts(
+        health=health,
+        signals=signals,
+        paper_health=paper_health,
+        paper=paper,
+        risk=risk,
+        wallets=top_wallets,
+        now=now,
+    )
+    sections: list[tuple[str, list[tuple[str, str]] | list[str]]] = [
+        ("📊 Executive Summary", _executive_summary_rows(
+            config=config,
+            health=health,
+            signals=signals,
+            paper=paper,
+            paper_health=paper_health,
+            risk=risk,
+            now=now,
+            alert_count=len(alerts),
+        )),
+        (
+            "⚠ Action Center" if alerts else "🟢 Action Center",
+            _action_center_lines(alerts),
+        ),
+    ]
+    top_movers = _top_movers_lines(paper, top_wallets)
+    if top_movers:
+        sections.append(("Top Movers", top_movers))
+    sections.append(("Today's Snapshot", _todays_snapshot_rows(paper=paper, signals=signals, now=now)))
+    health_lines = _overall_health_lines(health)
+    if health_lines:
+        sections.append(("Overall Health", health_lines))
+    return sections
+
+
+def _v5_home_sections(
+    *,
+    config: TelegramConsoleConfig,
+    health: dict[str, Any],
+    signals: dict[str, Any],
+    paper_health: dict[str, Any],
+    paper: dict[str, Any],
+    risk: dict[str, Any],
+    now: datetime,
+) -> list[tuple[str, list[tuple[str, str]] | list[str]]]:
+    paper_enabled = bool(config.paper_only or paper.get("paper_only") or paper_health)
+    live_enabled = bool(config.live_enabled and not config.paper_only and not risk.get("halted"))
+    performance_rows = _performance_metric_rows(paper=paper, signals=signals, now=now)
+    performance_rows.extend(
+        [
+            ("Last Cycle", relative_time(_last_cycle_at(health, signals, paper_health), now)),
+            ("System Uptime", relative_duration(_parse_datetime(health.get("service_uptime_anchor")), now)),
+        ]
+    )
+    return [
+        ("Services", _service_status_lines(health=health, paper_health=paper_health, now=now)),
+        (
+            "Trading Mode",
+            [
+                ("Paper Trading", f"{'🟢' if paper_enabled else '🔴'} {'Enabled' if paper_enabled else 'Disabled'}"),
+                ("Live Trading", f"{'🟢' if live_enabled else '🔴'} {'Enabled' if live_enabled else 'Disabled'}"),
+            ],
+        ),
+        ("Performance", performance_rows),
+    ]
+
+
+def _v5_performance_sections(
+    context: ConsolePageContext,
+    *,
+    extended: bool = False,
+) -> list[tuple[str, list[tuple[str, str]] | list[str]]]:
+    sections: list[tuple[str, list[tuple[str, str]] | list[str]]] = [
+        ("Performance", _performance_metric_rows(paper=context.paper, signals=context.signals, now=context.now)),
+    ]
+    best_rows = _best_pick_rows(context.paper, context.top_wallets)
+    if best_rows:
+        sections.append(("Top Performers", best_rows))
+    if not extended:
+        sections.append(
+            (
+                "PnL",
+                [
+                    ("Daily PnL", _format_money(context.paper.get("daily_pnl"))),
+                    ("7D PnL", _format_money(context.paper.get("pnl_7d"))),
+                    ("Total PnL", _format_money(context.paper.get("total_pnl"))),
+                ],
+            )
+        )
+        return sections
+    sections.extend(
+        [
+            (
+                "Portfolio",
+                [
+                    ("Starting Bankroll", _format_money(context.paper.get("starting_bankroll"))),
+                    ("Current Equity", _format_money(context.paper.get("current_equity") or context.paper.get("total_equity"))),
+                    ("Cash", _format_money(context.paper.get("cash_balance"))),
+                    ("Open Position Value", _format_money(context.paper.get("open_position_value"))),
+                ],
+            ),
+            (
+                "PnL",
+                [
+                    ("Realized PnL", _format_money(context.paper.get("realized_pnl"))),
+                    ("Unrealized PnL", _format_money(context.paper.get("unrealized_pnl"))),
+                    ("Total PnL", _format_money(context.paper.get("total_pnl"))),
+                    ("ROI", format_pct_metric(context.paper.get("roi_pct"))),
+                ],
+            ),
+            (
+                "Execution Quality",
+                [
+                    ("Fill Rate", format_pct_metric((context.paper.get("execution_quality") or {}).get("fill_rate"))),
+                    ("Avg Slippage", _format_money((context.paper.get("execution_quality") or {}).get("average_slippage"))),
+                    ("Rejection Rate", format_pct_metric((context.paper.get("execution_quality") or {}).get("rejection_rate"))),
+                ],
+            ),
+        ]
+    )
+    return sections
+
+
+def _v5_wallets_sections(context: ConsolePageContext) -> list[tuple[str, list[tuple[str, str]] | list[str]]]:
+    wallets = context.top_wallets or []
+    sections: list[tuple[str, list[tuple[str, str]] | list[str]]] = [
+        ("Wallet Health", _wallet_health_lines(wallets)),
+        (
+            "Service",
+            [
+                ("Wallet Service", visual_status_label(context.health.get("status"))),
+                ("Service Uptime", relative_duration(_parse_datetime(context.health.get("service_uptime_anchor")), context.now)),
+            ],
+        ),
+    ]
+    ranked_rows: list[tuple[str, str]] = []
+    for index, item in enumerate(wallets[:5], start=1):
+        row = item.to_dict() if hasattr(item, "to_dict") else item
+        if not isinstance(row, dict):
+            continue
+        wallet = short_wallet(row.get("wallet") or row.get("address"))
+        score = row.get("watch_score", 0)
+        state = str(row.get("lifecycle_state") or row.get("state") or "active").lower()
+        icon = "⭐" if state == "promoted" else "🟡" if state == "probation" else "⚪" if state == "retired" else "🟢"
+        ranked_rows.append((f"#{index}", f"{icon} {wallet} score={score}"))
+    if ranked_rows:
+        sections.append(("Ranked Wallets", ranked_rows))
+    return sections
+
+
+def _v5_reports_sections(context: ConsolePageContext) -> list[tuple[str, list[tuple[str, str]] | list[str]]]:
+    daily_rows = [
+        ("Signals Generated", format_count_metric(_signals_today(context.signals, context.now))),
+        ("Paper Trades", format_count_metric(context.paper.get("trade_count"))),
+        ("Win Rate", format_pct_metric(context.paper.get("win_rate"))),
+        ("Daily PnL", _format_money(context.paper.get("daily_pnl"))),
+    ]
+    daily_rows.extend(_best_pick_rows(context.paper, context.top_wallets))
+    return [
+        ("Daily Summary", daily_rows),
+        (
+            "Weekly Summary",
+            [
+                ("7D PnL", _format_money(context.paper.get("pnl_7d"))),
+                ("Win Rate", format_pct_metric(context.paper.get("win_rate"))),
+                ("Validated Families", format_count_metric(_validated_families(context.paper, context.signals))),
+            ],
+        ),
+        (
+            "Monthly Summary",
+            [
+                ("Total PnL", _format_money(context.paper.get("total_pnl"))),
+                ("Closed Trades", format_count_metric(context.paper.get("closed_positions_count"))),
+                ("Validation Accuracy", format_pct_metric(_validation_accuracy(context.paper, context.signals))),
+            ],
+        ),
+    ]
+
+
+def _v5_system_sections(context: ConsolePageContext) -> list[tuple[str, list[tuple[str, str]] | list[str]]]:
+    sections: list[tuple[str, list[tuple[str, str]] | list[str]]] = [
+        (
+            "Services",
+            _service_status_lines(health=context.health, paper_health=context.paper_health, now=context.now),
+        ),
+    ]
+    resources = _resource_metric_rows(context.health)
+    if resources:
+        sections.append(("Resources", resources))
+    sections.append(
+        (
+            "Health",
+            [
+                ("Last Cycle", relative_time(_last_cycle_at(context.health, context.signals, context.paper_health), context.now)),
+                ("System Uptime", relative_duration(_parse_datetime(context.health.get("service_uptime_anchor")), context.now)),
+            ],
+        )
+    )
+    return sections
+
+
 def render_dashboard_text(
     *,
     config: TelegramConsoleConfig,
@@ -870,49 +1579,29 @@ def render_dashboard_text(
     paper: dict[str, Any],
     risk: dict[str, Any],
     now: datetime,
+    top_wallets: list[Any] | None = None,
 ) -> str:
     now = _as_utc_datetime(now)
     wallet_status = str(health.get("status") or "unknown")
-    paper_enabled = bool(config.paper_only or paper.get("paper_only") or paper_health)
-    live_enabled = bool(config.live_enabled and not config.paper_only and not risk.get("halted"))
     system_status = "healthy" if wallet_status in {"healthy", "running", "ok"} else wallet_status
 
-    sections = [
-        (
-            "System Health",
-            [
-                ("Wallet Autonomy", f"{status_icon(wallet_status)} {service_status_label(wallet_status)}"),
-                ("Telegram Console", "🟢 Running"),
-                ("Mission Control", "🟢 Online"),
-                ("Trader Dashboard", "🟢 Online"),
-                ("Health Timer", f"{status_icon(wallet_status)} {_health_timer_label(health, now)}"),
-            ],
-        ),
-        (
-            "Trading Mode",
-            [
-                ("Paper Trading", f"{'🟢' if paper_enabled else '🔴'} {'Enabled' if paper_enabled else 'Disabled'}"),
-                ("Live Trading", f"{'🟢' if live_enabled else '🔴'} {'Enabled' if live_enabled else 'Disabled'}"),
-            ],
-        ),
-        (
-            "Performance",
-            [
-                ("Signals Today", format_count_metric(_signals_today(signals, now))),
-                ("Paper Trades", format_count_metric(paper.get("trade_count"))),
-                ("Validated Families", format_count_metric(_validated_families(paper, signals))),
-                ("Validation Accuracy", format_pct_metric(_validation_accuracy(paper, signals))),
-                ("Paper Win Rate", format_pct_metric(paper.get("win_rate"))),
-                ("Last Cycle", relative_time(_last_cycle_at(health, signals, paper_health), now)),
-                ("System Uptime", relative_duration(_parse_datetime(health.get("service_uptime_anchor")), now)),
-            ],
-        ),
-    ]
     header = (
         f"<b>📊 Polylens Mission Control</b>\n"
-        f"{status_icon(system_status)} {system_status_label(system_status)}"
+        f"{visual_status_label(system_status)}"
     )
-    return "\n\n".join([header, render_grouped_sections(sections), render_page_timestamp(now)])
+    body = render_mixed_sections(
+        _v6_home_sections(
+            config=config,
+            health=health,
+            signals=signals,
+            paper_health=paper_health,
+            paper=paper,
+            risk=risk,
+            now=now,
+            top_wallets=top_wallets,
+        )
+    )
+    return "\n\n".join([header, body, render_page_timestamp(now)])
 
 
 def render_console_page(
@@ -930,39 +1619,14 @@ def render_console_page(
             paper=context.paper,
             risk=context.risk,
             now=context.now,
+            top_wallets=context.top_wallets,
         )
     if page == "performance":
         return _render_metric_page(
             "📈 Performance",
             [],
             context.now,
-            sections=[
-                (
-                    "Paper Trading",
-                    [
-                        ("Paper Trades", format_count_metric(context.paper.get("trade_count"))),
-                        ("Open Positions", format_count_metric(context.paper.get("open_positions_count"))),
-                        ("Closed Trades", format_count_metric(context.paper.get("closed_positions_count"))),
-                        ("Win Rate", format_pct_metric(context.paper.get("win_rate"))),
-                        ("Top Strategy", _strategy_label(context.paper.get("top_strategy"))),
-                    ],
-                ),
-                (
-                    "PnL",
-                    [
-                        ("Daily PnL", _format_money(context.paper.get("daily_pnl"))),
-                        ("7D PnL", _format_money(context.paper.get("pnl_7d"))),
-                        ("Total PnL", _format_money(context.paper.get("total_pnl"))),
-                    ],
-                ),
-                (
-                    "Validation",
-                    [
-                        ("Validation Accuracy", format_pct_metric(_validation_accuracy(context.paper, context.signals))),
-                        ("Validated Families", format_count_metric(_validated_families(context.paper, context.signals))),
-                    ],
-                ),
-            ],
+            sections=_v5_performance_sections(context),
         )
     if page == "intelligence":
         return _render_metric_page(
@@ -973,78 +1637,46 @@ def render_console_page(
                 (
                     "Signals",
                     [
-                        ("Signals Today", format_count_metric(_signals_today(context.signals, context.now))),
-                        ("Signals Scored", format_count_metric(context.signals.get("scored_count"))),
-                        ("Recommendations", format_count_metric(context.signals.get("recommendation_count"))),
+                        (
+                            "📈 Signals Today",
+                            f"🟢 {format_count_metric(_signals_today(context.signals, context.now))}"
+                            f"{format_trend_suffix(_signals_today(context.signals, context.now), _lookup_comparison_value(context.signals, 'previous_signals_today', 'signals_yesterday'), integer=True)}",
+                        ),
+                        ("Signals Scored", f"🔵 {format_count_metric(context.signals.get('scored_count'))}"),
+                        ("Recommendations", f"🔵 {format_count_metric(context.signals.get('recommendation_count'))}"),
                         ("Last Signal Cycle", relative_time(_last_cycle_at(context.health, context.signals, context.paper_health), context.now)),
                     ],
                 ),
                 (
                     "Validation",
                     [
-                        ("Validation Accuracy", format_pct_metric(_validation_accuracy(context.paper, context.signals))),
+                        (
+                            "Validation",
+                            f"🟢 {_validation_status_label(context.paper, context.signals)}",
+                        ),
+                        (
+                            "Validation Accuracy",
+                            f"🟢 {format_pct_metric(_validation_accuracy(context.paper, context.signals))}",
+                        ),
                     ],
                 ),
             ],
         )
     if page == "wallets":
-        wallets = context.top_wallets or []
-        sections: list[tuple[str, list[tuple[str, str]]]] = [
-            (
-                "Wallet Overview",
-                [
-                    ("Tracked Wallets", format_count_metric(len(wallets))),
-                    ("Active Wallets", format_count_metric(_wallet_active_count(wallets))),
-                    ("Wallet Service", f"{status_icon(context.health.get('status'))} {service_status_label(context.health.get('status'))}"),
-                    ("Service Uptime", relative_duration(_parse_datetime(context.health.get("service_uptime_anchor")), context.now)),
-                ],
-            ),
-        ]
-        lifecycle_rows = _wallet_lifecycle_rows(wallets)
-        if lifecycle_rows:
-            sections.append(("Lifecycle", lifecycle_rows))
-        top_rows = _wallet_metric_rows(wallets)
-        if top_rows and top_rows != [("Top Wallets", "None")]:
-            sections.append(("Top Wallets", top_rows))
-        return _render_metric_page("👛 Wallets", [], context.now, sections=sections)
+        return _render_metric_page("👛 Wallets", [], context.now, sections=_v5_wallets_sections(context))
     if page == "reports":
         return _render_metric_page(
             "📊 Reports",
             [],
             context.now,
-            sections=[
-                (
-                    "Daily Summary",
-                    [
-                        ("Daily PnL", _format_money(context.paper.get("daily_pnl"))),
-                        ("Signals Today", format_count_metric(_signals_today(context.signals, context.now))),
-                        ("Paper Trades", format_count_metric(context.paper.get("trade_count"))),
-                    ],
-                ),
-                (
-                    "Weekly Summary",
-                    [
-                        ("7D PnL", _format_money(context.paper.get("pnl_7d"))),
-                        ("Win Rate", format_pct_metric(context.paper.get("win_rate"))),
-                        ("Validated Families", format_count_metric(_validated_families(context.paper, context.signals))),
-                    ],
-                ),
-                (
-                    "Monthly Summary",
-                    [
-                        ("Total PnL", _format_money(context.paper.get("total_pnl"))),
-                        ("Closed Trades", format_count_metric(context.paper.get("closed_positions_count"))),
-                        ("Validation Accuracy", format_pct_metric(_validation_accuracy(context.paper, context.signals))),
-                    ],
-                ),
-            ],
+            sections=_v5_reports_sections(context),
         )
     if page == "system":
         return _render_metric_page(
             "⚙️ System",
             [],
             context.now,
-            sections=_system_page_sections(context),
+            sections=_v5_system_sections(context),
         )
     if page == "paper_trades":
         return _render_detail_page(
@@ -1066,9 +1698,9 @@ def render_console_page(
     if page == "wallet_stats":
         return _render_detail_page(
             "👛 Wallet Stats",
-            _wallet_detail_rows(context.top_wallets or []),
+            _v5_wallet_stats_lines(context.top_wallets or []),
             context.now,
-            section_header="Top Wallets",
+            section_header="Ranked Wallets",
         )
     if page == "validation_accuracy":
         return _render_detail_page(
@@ -1134,10 +1766,10 @@ def _render_metric_page(
     rows: list[tuple[str, str]],
     now: datetime,
     *,
-    sections: list[tuple[str, list[tuple[str, str]]]] | None = None,
+    sections: list[tuple[str, list[tuple[str, str]] | list[str]]] | None = None,
 ) -> str:
     grouped = sections if sections is not None else [(title.split(" ", 1)[-1], rows)]
-    body = render_grouped_sections(grouped)
+    body = render_mixed_sections(grouped)
     return "\n\n".join([f"<b>{escape_telegram_html(title)}</b>", body, render_page_timestamp(now)])
 
 
@@ -1216,17 +1848,29 @@ def _wallet_lifecycle_rows(wallets: list[Any]) -> list[tuple[str, str]]:
 
 
 def _wallet_detail_rows(wallets: list[Any]) -> list[str]:
+    return _v5_wallet_stats_lines(wallets)
+
+
+def _v5_wallet_stats_lines(wallets: list[Any]) -> list[str]:
     if not wallets:
         return ["No wallet metrics available."]
-    lines = [f"{'#':<3} {'Wallet':<18} {'Score':<6} Class"]
+    lines = [f"{'#':<3} {'Wallet':<18} {'Score':<6} Status"]
     for index, item in enumerate(wallets[:5], start=1):
         row = item.to_dict() if hasattr(item, "to_dict") else item
         if not isinstance(row, dict):
             continue
         wallet = short_wallet(row.get("wallet") or row.get("address"))
         score = row.get("watch_score", 0)
-        classification = row.get("classification", "unknown")
-        lines.append(f"{index:<3} {wallet:<18} {score:<6} {classification}")
+        state = str(row.get("lifecycle_state") or row.get("state") or row.get("classification") or "active").lower()
+        if state == "promoted":
+            status = "⭐ Promoted"
+        elif state == "probation":
+            status = "🟡 Probation"
+        elif state in {"retired", "inactive"}:
+            status = "⚪ Retired"
+        else:
+            status = "🟢 Active"
+        lines.append(f"{index:<3} {wallet:<18} {score:<6} {status}")
     return lines or ["No wallet metrics available."]
 
 
@@ -1852,6 +2496,7 @@ def render_console_page(
             paper=context.paper,
             risk=context.risk,
             now=context.now,
+            top_wallets=context.top_wallets,
         )
     elif page in {"win_rate", "top_wallet", "new_wallets", "daily_report", "weekly_report", "monthly_report", "disk", "memory", "services"}:
         body = _v3_render_detail_page(V4_PAGE_TITLES[page], _v4_detail_rows(page, context), context.now)
@@ -1937,7 +2582,7 @@ def _v4_page_context(self: TelegramConsole, *, include_wallets: bool) -> Console
 
 def _v4_page_response(self: TelegramConsole, page: str, state: ConsoleNavigationState | None = None) -> TelegramResponse:
     state = state or ConsoleNavigationState(current_page=page)
-    context = self._page_context(include_wallets=page in V4_WALLET_PAGES)
+    context = self._page_context(include_wallets=page in V4_WALLET_PAGES or page == HOME_PAGE)
     return TelegramResponse(
         render_console_page(
             page,
@@ -2089,43 +2734,7 @@ def render_console_page(
             "📈 Performance",
             [],
             context.now,
-            sections=[
-                (
-                    "Portfolio",
-                    [
-                        ("Starting Bankroll", _format_money(context.paper.get("starting_bankroll"))),
-                        ("Current Equity", _format_money(context.paper.get("current_equity") or context.paper.get("total_equity"))),
-                        ("Cash", _format_money(context.paper.get("cash_balance"))),
-                        ("Open Position Value", _format_money(context.paper.get("open_position_value"))),
-                    ],
-                ),
-                (
-                    "PnL",
-                    [
-                        ("Realized PnL", _format_money(context.paper.get("realized_pnl"))),
-                        ("Unrealized PnL", _format_money(context.paper.get("unrealized_pnl"))),
-                        ("Total PnL", _format_money(context.paper.get("total_pnl"))),
-                        ("ROI", format_pct_metric(context.paper.get("roi_pct"))),
-                    ],
-                ),
-                (
-                    "Trading",
-                    [
-                        ("Open Positions", format_count_metric(context.paper.get("open_positions_count"))),
-                        ("Closed Trades", format_count_metric(context.paper.get("closed_positions_count"))),
-                        ("Win Rate", format_pct_metric(context.paper.get("win_rate"))),
-                        ("Top Strategy", _strategy_label(context.paper.get("top_strategy"))),
-                    ],
-                ),
-                (
-                    "Execution Quality",
-                    [
-                        ("Fill Rate", format_pct_metric((context.paper.get("execution_quality") or {}).get("fill_rate"))),
-                        ("Avg Slippage", _format_money((context.paper.get("execution_quality") or {}).get("average_slippage"))),
-                        ("Rejection Rate", format_pct_metric((context.paper.get("execution_quality") or {}).get("rejection_rate"))),
-                    ],
-                ),
-            ],
+            sections=_v5_performance_sections(context, extended=True),
         )
         return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
     if page == "trades_log":

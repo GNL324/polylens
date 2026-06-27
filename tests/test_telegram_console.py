@@ -20,11 +20,14 @@ from src.integrations.telegram_console import (
     format_count_metric,
     format_local_time,
     format_pct_metric,
+    format_trend_suffix,
     render_dashboard_text,
     render_page_timestamp,
     render_table_section,
     select_telegram_parse_mode,
     status_icon,
+    visual_status_label,
+    visual_trend_label,
 )
 from src.integrations.telegram_notifications import (
     TelegramNotificationConfig,
@@ -306,30 +309,21 @@ def test_dashboard_rendering_includes_statuses_metrics_and_timestamp(tmp_path):
     response = console.handle_text(123, "/console")
 
     assert "📊 Polylens Mission Control" in response
-    assert "🟢 System Healthy" in response
-    assert "Wallet Autonomy" in response
-    assert "🟢 Running" in response
-    assert "Telegram Console" in response
-    assert "Mission Control" in response
-    assert "Trader Dashboard" in response
-    assert "Paper Trading" in response
-    assert "🟢 Enabled" in response
-    assert "Live Trading" in response
-    assert "🔴 Disabled" in response
+    assert "🟢 Healthy" in response
+    assert "📊 Executive Summary" in response
+    assert "Trading Mode" in response
+    assert "🟢 Paper Only" in response
     assert "Signals Today" in response
     assert "124" in response
-    assert "Paper Trades" in response
-    assert "48" in response
-    assert "Validated Families" in response
-    assert "2" in response
-    assert "Validation Accuracy" in response
-    assert "56.2%" in response
     assert "Paper Win Rate" in response
     assert "58.3%" in response
+    assert "🟢 Action Center" in response
+    assert "No action required." in response
+    assert "Today's Snapshot" in response
     assert "Last Cycle" in response
     assert "2m ago" in response
-    assert "System Uptime" in response
-    assert "2h 34m" in response
+    assert "Overall Health" in response
+    assert "100/100" in response
     assert "Updated:\n8:34:56 AM EDT" in response
     assert "<pre>" in response.text
     assert response.parse_mode == TELEGRAM_HTML_PARSE_MODE
@@ -1413,11 +1407,12 @@ def test_home_dashboard_uses_grouped_pre_tables():
         now=DASHBOARD_NOW,
     )
 
-    assert "<pre>System Health" in text
-    assert "<pre>Trading Mode" in text
-    assert "<pre>Performance" in text
-    assert "Paper Trading  🟢 Enabled" in text
-    assert "Signals Today        124" in text
+    assert "<pre>📊 Executive Summary" in text
+    assert "<pre>🟢 Action Center" in text
+    assert "<pre>Today's Snapshot" in text
+    assert "🟢 Paper Only" in text
+    assert "Signals Today" in text
+    assert "124" in text
 
 
 def test_performance_page_uses_grouped_sections(tmp_path):
@@ -1425,11 +1420,13 @@ def test_performance_page_uses_grouped_sections(tmp_path):
 
     response = console.handle_console_callback(456, 123, "nav_performance")
 
+    assert "<pre>Performance" in response.text
+    assert "<pre>Top Performers" in response.text
     assert "<pre>Portfolio" in response.text
     assert "<pre>PnL" in response.text
-    assert "<pre>Trading" in response.text
     assert "<pre>Execution Quality" in response.text
     assert "Win Rate" in response.text
+    assert "🏆 Winning Trades" in response.text
     assert response.parse_mode == TELEGRAM_HTML_PARSE_MODE
 
 
@@ -1444,10 +1441,9 @@ def test_wallets_page_shows_overview_and_top_wallets(tmp_path):
 
     response = console.handle_console_callback(456, 123, "nav_wallets")
 
-    assert "<pre>Wallet Overview" in response.text
-    assert "Tracked Wallets" in response.text
-    assert "Active Wallets" in response.text
-    assert "<pre>Top Wallets" in response.text
+    assert "<pre>Wallet Health" in response.text
+    assert "🟢 Active" in response.text
+    assert "<pre>Ranked Wallets" in response.text
     assert "0x7af3...83fe" in response.text
 
 
@@ -1460,9 +1456,9 @@ def test_wallet_stats_page_uses_table_layout(tmp_path):
     console.handle_console_callback(456, 123, "nav_wallets")
     response = console.handle_console_callback(456, 123, "quick_wallet_stats")
 
-    assert "Top Wallets" in response.text
+    assert "Ranked Wallets" in response.text
     assert "0x7af3...83fe" in response.text
-    assert "arbitrage" in response.text
+    assert "🟢 Active" in response.text
 
 
 def test_system_page_shows_services_and_resources(tmp_path):
@@ -1476,9 +1472,9 @@ def test_system_page_shows_services_and_resources(tmp_path):
     assert "<pre>Services" in response.text
     assert "<pre>Health" in response.text
     assert "<pre>Resources" in response.text
-    assert "Disk Usage" in response.text
-    assert "Memory Usage" in response.text
-    assert "Health Timer" in response.text
+    assert "Disk" in response.text
+    assert "Memory" in response.text
+    assert "Last Cycle" in response.text
 
 
 def test_reports_page_shows_daily_weekly_monthly_sections(tmp_path):
@@ -1567,5 +1563,223 @@ def test_relative_times_remain_unchanged_with_local_footer(tmp_path):
 
     response = console.handle_text(123, "/console")
 
-    assert "Last Cycle           2m ago" in response.text
+    assert "Last Cycle" in response.text
+    assert "2m ago" in response.text
+    assert "Today's Snapshot" in response.text
     assert response.text.endswith(DASHBOARD_UPDATED)
+
+
+def test_v5_visual_status_labels():
+    assert visual_status_label("healthy") == "🟢 Healthy"
+    assert visual_status_label("degraded") == "🟡 Warning"
+    assert visual_status_label("offline") == "⚪ Offline"
+    assert visual_status_label("critical") == "🔴 Critical"
+    assert visual_status_label("info") == "🔵 Information"
+
+
+def test_v5_visual_trend_labels():
+    assert visual_trend_label("improving") == "📈 Improving"
+    assert visual_trend_label("declining") == "📉 Declining"
+    assert visual_trend_label("stable") == "➡ Stable"
+
+
+def test_v5_trend_suffix_renders_deltas():
+    assert format_trend_suffix(142, 124, integer=True) == " ▲ +18"
+    assert format_trend_suffix(0.618, 0.595, pct_points=True) == " ▲ +2.3%"
+    assert format_trend_suffix(10, 10, integer=True) == " ➡"
+
+
+def test_v5_trend_suffix_omits_missing_comparison():
+    assert format_trend_suffix(142, None, integer=True) == ""
+
+
+def test_v5_wallet_health_card(tmp_path):
+    console = _dashboard_console(
+        tmp_path,
+        top_wallets_provider=lambda: [
+            {"wallet": VALID_WALLET, "watch_score": 91, "state": "promoted"},
+            {"wallet": "0xabc123456789012345678901234567890123456", "watch_score": 72, "state": "probation"},
+            {"wallet": "0xdef123456789012345678901234567890123456", "watch_score": 55, "state": "retired"},
+        ],
+    )
+
+    response = console.handle_console_callback(456, 123, "nav_wallets")
+
+    assert "⭐ Promoted" in response.text
+    assert "🟡 Probation" in response.text
+    assert "⚪ Retired" in response.text
+    assert "Top Wallet" in response.text
+
+
+def test_v5_performance_dashboard_formatting(tmp_path):
+    payload = _paper_report()
+    payload["previous_trade_count"] = 36
+    payload["closed_positions"] = [{"status": "WIN"} for _ in range(10)] + [{"status": "LOSS"} for _ in range(5)]
+    console = _dashboard_console(
+        tmp_path,
+        paper_intelligence_provider=lambda: payload,
+        signals_provider=lambda: {
+            **_dashboard_signals(),
+            "previous_signals_today": 106,
+            "previous_win_rate": 0.55,
+        },
+    )
+
+    response = console.handle_console_callback(456, 123, "nav_performance")
+
+    assert "📈 Signals Today" in response.text
+    assert "▲ +18" in response.text
+    assert "🏆 Winning Trades" in response.text
+    assert "📉 Losing Trades" in response.text
+    assert "🥇 Early Entry" in response.text
+
+
+def test_v5_reports_dashboard_formatting(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    response = console.handle_console_callback(456, 123, "nav_reports")
+
+    assert "Signals Generated" in response.text
+    assert "Best Strategy" in response.text
+    assert "🥇 Early Entry" in response.text
+
+
+def test_v5_service_status_formatting(tmp_path):
+    health = _dashboard_health()
+    health["cpu_usage_pct"] = 0.12
+    health["memory_free_gb"] = 6.8
+    health["disk_usage_pct"] = 0.61
+    console = _dashboard_console(tmp_path, health_provider=lambda: health)
+
+    response = console.handle_console_callback(456, 123, "nav_system")
+
+    assert "🟢 Mission Control" in response.text
+    assert "CPU" in response.text
+    assert "6.8 GB Free" in response.text
+
+
+def test_v5_refresh_still_edits_existing_message_only(tmp_path):
+    console = _dashboard_console(tmp_path)
+    calls = []
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        if method == "getUpdates":
+            return {"result": [_callback_update("refresh_page", message_id=789)]}
+        if method == "editMessageText":
+            return {"ok": True, "result": {"message_id": params["message_id"]}}
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+    console.poll_once(timeout=1)
+
+    assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText"]
+    assert "sendMessage" not in [method for method, _params in calls]
+    assert "📊 Executive Summary" in calls[-1][1]["text"]
+
+
+def test_v6_executive_summary_renders_on_home(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    response = console.handle_text(123, "/console")
+
+    assert "📊 Executive Summary" in response.text
+    assert "System Status" in response.text
+    assert "Trading Mode" in response.text
+    assert "Alerts" in response.text
+
+
+def test_v6_action_center_shows_no_action_required(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    response = console.handle_text(123, "/console")
+
+    assert "🟢 Action Center" in response.text
+    assert "No action required." in response.text
+
+
+def test_v6_action_center_shows_alerts_from_health_data(tmp_path):
+    health = _dashboard_health()
+    health["disk_usage_pct"] = 0.92
+    health["stale_cycles"] = ["signals"]
+    console = _dashboard_console(
+        tmp_path,
+        health_provider=lambda: health,
+        signals_provider=lambda: {
+            **_dashboard_signals(),
+            "previous_validation_accuracy": 0.62,
+            "validation_accuracy": 0.562,
+        },
+    )
+
+    response = console.handle_text(123, "/console")
+
+    assert "⚠ Action Center" in response.text
+    assert "Disk usage above" in response.text
+    assert "Validation accuracy decreased" in response.text
+
+
+def test_v6_top_movers_and_snapshot_formatting(tmp_path):
+    payload = _paper_report()
+    payload["best_session"] = "morning"
+    payload["biggest_improvement"] = {"strategy": "momentum", "delta": 0.061}
+    payload["largest_decline"] = {"strategy": "contrarian", "delta": -0.028}
+    console = _dashboard_console(
+        tmp_path,
+        paper_intelligence_provider=lambda: payload,
+        top_wallets_provider=lambda: [{"wallet": VALID_WALLET, "watch_score": 91, "classification": "arbitrage"}],
+    )
+
+    response = console.handle_text(123, "/console")
+
+    assert "Top Movers" in response.text
+    assert "🥇 Early Entry" in response.text
+    assert "👛 Top Wallet" in response.text
+    assert "0x7af3...83fe" in response.text
+    assert "📈 Biggest Improvement" in response.text
+    assert "Momentum +6.1%" in response.text
+    assert "📉 Largest Decline" in response.text
+    assert "Contrarian -2.8%" in response.text
+    assert "Today's Snapshot" in response.text
+    assert "Best Session" in response.text
+    assert "Morning" in response.text
+
+
+def test_v6_omits_unavailable_top_mover_fields(tmp_path):
+    console = _dashboard_console(tmp_path, paper_intelligence_provider=_empty_paper_report)
+
+    response = console.handle_text(123, "/console")
+
+    assert "Top Movers" not in response.text
+    assert "Best Session" not in response.text
+
+
+def test_v6_health_score_renders_from_success_rate(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    response = console.handle_text(123, "/console")
+
+    assert "Overall Health" in response.text
+    assert "100/100" in response.text
+    assert "🟢 Excellent" in response.text
+
+
+def test_v6_refresh_still_edits_same_message_only(tmp_path):
+    console = _dashboard_console(tmp_path)
+    calls = []
+
+    def fake_request(method, params):
+        calls.append((method, params))
+        if method == "getUpdates":
+            return {"result": [_callback_update("refresh_page", message_id=789)]}
+        if method == "editMessageText":
+            return {"ok": True, "result": {"message_id": params["message_id"]}}
+        return {"ok": True}
+
+    console._telegram_request = fake_request
+    console.poll_once(timeout=1)
+
+    assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText"]
+    assert calls[-1][1]["message_id"] == 789
+    assert "sendMessage" not in [method for method, _params in calls]
+    assert "📊 Executive Summary" in calls[-1][1]["text"]
