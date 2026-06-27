@@ -14,8 +14,11 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-
 REPO_ROOT = Path("/home/noel/polylens")
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.deployment.drift_check import DEPLOYMENT_DRIFT_ALERT_CODE, deployment_drift_report
 CANONICAL_TRADERS_DB = REPO_ROOT / "data" / "traders.db"
 ROOT_TRADERS_DB = REPO_ROOT / "traders.db"
 CANONICAL_SIGNAL_DB = REPO_ROOT / "data" / "trader_signals.db"
@@ -288,6 +291,16 @@ def system_uptime_seconds() -> float | None:
 
 def run_check(*, recent_window_minutes: int = 30, remove_root_artifact: bool = True) -> dict[str, Any]:
     findings: list[Finding] = []
+    drift_report = deployment_drift_report(REPO_ROOT, fetch=False)
+    for drift_finding in drift_report["findings"]:
+        findings.append(
+            Finding(
+                drift_finding["level"] if drift_finding["level"] != "info" else "info",
+                drift_finding["code"],
+                drift_finding["message"],
+                drift_finding.get("details"),
+            )
+        )
     findings.extend(root_db_hygiene(remove_zero_byte=remove_root_artifact))
     findings.extend(check_sqlite_db(CANONICAL_TRADERS_DB, code_prefix="canonical_traders_db"))
     findings.extend(check_sqlite_db(CANONICAL_SIGNAL_DB, code_prefix="canonical_trader_signals_db"))
