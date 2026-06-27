@@ -125,12 +125,31 @@ def test_telegram_performance_and_trades_log_use_canonical_fields(tmp_path):
     performance = console.handle_console_callback(1, 1, "nav_performance")
     trade_log = console.handle_console_callback(1, 1, "quick_trades_log")
 
-    assert "Starting Bankroll\n+$100.00" in performance.text
-    assert "Current Equity" in performance.text
-    assert "Cash" in performance.text
-    assert "ROI" in performance.text
-    assert "📜 Trades Log" in trade_log.text
-    assert "paper_copy_trader" in trade_log.text
+    perf_text = performance.text
+    trades_text = trade_log.text
+
+    for label in (
+        "Starting Bankroll",
+        "Current Equity",
+        "Cash",
+        "Open Position Value",
+        "Open Positions",
+        "Realized PnL",
+        "Unrealized PnL",
+        "Total PnL",
+        "ROI",
+        "Win Rate",
+        "Closed Trades",
+    ):
+        assert label in perf_text, f"missing canonical performance field: {label}"
+
+    assert "+$100.00" in perf_text
+    assert "+$98.00" in perf_text
+    assert "🏠 Home › 📈 Performance" in perf_text
+
+    assert "📜 Trades Log" in trades_text
+    assert "paper_copy_trader" in trades_text
+    assert "Market telegram" in trades_text
 
 
 def test_mission_control_uses_canonical_portfolio_metrics(tmp_path, monkeypatch):

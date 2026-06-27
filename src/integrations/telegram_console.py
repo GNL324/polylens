@@ -1481,6 +1481,8 @@ def _v5_performance_sections(
                     ("Current Equity", _format_money(context.paper.get("current_equity") or context.paper.get("total_equity"))),
                     ("Cash", _format_money(context.paper.get("cash_balance"))),
                     ("Open Position Value", _format_money(context.paper.get("open_position_value"))),
+                    ("Open Positions", format_count_metric(context.paper.get("open_positions_count"))),
+                    ("Closed Trades", format_count_metric(context.paper.get("closed_positions_count"))),
                 ],
             ),
             (
