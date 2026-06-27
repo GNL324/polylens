@@ -42,6 +42,7 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_TELEGRAM_AUDIT_DB = DEFAULT_TRADERS_DB
 TELEGRAM_API_BASE = "https://api.telegram.org"
 MAX_TELEGRAM_TEXT = 3500
+TELEGRAM_HTML_PARSE_MODE = "HTML"
 COMMANDS = (
     "/start",
     "/console",
@@ -169,6 +170,7 @@ Provider = Callable[[], dict[str, Any]]
 class TelegramResponse:
     text: str
     reply_markup: dict[str, Any] | None = None
+    parse_mode: str | None = None
 
     def __str__(self) -> str:
         return self.text
@@ -376,6 +378,7 @@ class TelegramConsole:
         result_status = "ok"
         error_message = ""
         reply_markup: dict[str, Any] | None = None
+        parse_mode: str | None = None
         try:
             if not allowed:
                 result_status = "rejected"
@@ -387,6 +390,7 @@ class TelegramConsole:
                 dispatched = self._dispatch(command, args)
                 response = dispatched.text
                 reply_markup = dispatched.reply_markup
+                parse_mode = dispatched.parse_mode
         except Exception as exc:
             LOGGER.exception("telegram console command failed command=%s user_id=%s", audit_command, telegram_user_id)
             result_status = "error"
@@ -402,7 +406,7 @@ class TelegramConsole:
             result_status=result_status,
             error_message=error_message,
         )
-        return TelegramResponse(response, reply_markup=reply_markup)
+        return TelegramResponse(response, reply_markup=reply_markup, parse_mode=parse_mode)
 
     def _handle_unknown_callback(self, telegram_user_id: int, callback_id: str) -> TelegramResponse:
         allowed = self._is_allowed(telegram_user_id)
@@ -540,6 +544,7 @@ class TelegramConsole:
         return TelegramResponse(
             render_console_page(page, config=self.config, context=context),
             reply_markup=page_reply_markup(page),
+            parse_mode=TELEGRAM_HTML_PARSE_MODE,
         )
 
     def _page_context(self, *, include_wallets: bool) -> ConsolePageContext:
@@ -589,6 +594,8 @@ class TelegramConsole:
 
     def _send_message(self, chat_id: int, response: TelegramResponse) -> dict[str, Any]:
         params: dict[str, Any] = {"chat_id": chat_id, "text": response.text}
+        if response.parse_mode:
+            params["parse_mode"] = response.parse_mode
         if response.reply_markup:
             params["reply_markup"] = json.dumps(response.reply_markup)
         return self._telegram_request("sendMessage", params)
@@ -655,6 +662,8 @@ class TelegramConsole:
     ) -> tuple[dict[str, Any], int | None]:
         if message_id is not None:
             params: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "text": response.text}
+            if response.parse_mode:
+                params["parse_mode"] = response.parse_mode
             if response.reply_markup:
                 params["reply_markup"] = json.dumps(response.reply_markup)
             try:
@@ -788,6 +797,61 @@ def _telegram_result_message_id(result: dict[str, Any]) -> int | None:
     return _optional_int(payload.get("message_id"))
 
 
+def select_telegram_parse_mode(*, use_html: bool = True) -> str | None:
+    """Return the safest parse mode for dynamic console content."""
+    return TELEGRAM_HTML_PARSE_MODE if use_html else None
+
+
+def escape_telegram_html(text: Any) -> str:
+    return (
+        str(text or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def telegram_pre_block(content: str) -> str:
+    return f"<pre>{escape_telegram_html(content)}</pre>"
+
+
+def _table_label_width(rows: list[tuple[str, str]], *, columns: tuple[str, str] | None = None) -> int:
+    widths = [len(label) for label, _ in rows]
+    if columns:
+        widths.append(len(columns[0]))
+    return max(widths or [0])
+
+
+def render_table_section(
+    header: str,
+    rows: list[tuple[str, str]],
+    *,
+    columns: tuple[str, str] | None = None,
+) -> str:
+    if not rows:
+        return telegram_pre_block(header)
+    label_width = _table_label_width(rows, columns=columns)
+    lines = [header]
+    if columns:
+        lines.append(f"{columns[0].ljust(label_width)}  {columns[1]}")
+    for label, value in rows:
+        lines.append(f"{label.ljust(label_width)}  {value}")
+    return telegram_pre_block("\n".join(lines))
+
+
+def render_grouped_sections(sections: list[tuple[str, list[tuple[str, str]]]]) -> str:
+    blocks = [
+        render_table_section(header, rows)
+        for header, rows in sections
+        if rows
+    ]
+    return "\n\n".join(blocks)
+
+
+def render_page_timestamp(now: datetime) -> str:
+    return f"Updated:\n{_as_utc_datetime(now).strftime('%H:%M:%S UTC')}"
+
+
 def render_dashboard_text(
     *,
     config: TelegramConsoleConfig,
@@ -804,61 +868,42 @@ def render_dashboard_text(
     live_enabled = bool(config.live_enabled and not config.paper_only and not risk.get("halted"))
     system_status = "healthy" if wallet_status in {"healthy", "running", "ok"} else wallet_status
 
-    lines = [
-        "📊 Polylens Mission Control",
-        "",
-        DASHBOARD_DIVIDER,
-        "",
-        f"{status_icon(system_status)} {system_status_label(system_status)}",
-        "",
-        "Wallet Autonomy",
-        f"{status_icon(wallet_status)} {service_status_label(wallet_status)}",
-        "",
-        "Telegram Console",
-        "🟢 Running",
-        "",
-        "Mission Control",
-        "🟢 Online",
-        "",
-        "Trader Dashboard",
-        "🟢 Online",
-        "",
-        "Health Timer",
-        f"{status_icon(wallet_status)} {_health_timer_label(health, now)}",
-        "",
-        "Paper Trading",
-        f"{'🟢' if paper_enabled else '🔴'} {'Enabled' if paper_enabled else 'Disabled'}",
-        "",
-        "Live Trading",
-        f"{'🟢' if live_enabled else '🔴'} {'Enabled' if live_enabled else 'Disabled'}",
-        "",
-        "Signals Today",
-        format_count_metric(_signals_today(signals, now)),
-        "",
-        "Paper Trades",
-        format_count_metric(paper.get("trade_count")),
-        "",
-        "Validated Families",
-        format_count_metric(_validated_families(paper, signals)),
-        "",
-        "Validation Accuracy",
-        format_pct_metric(_validation_accuracy(paper, signals)),
-        "",
-        "Paper Win Rate",
-        format_pct_metric(paper.get("win_rate")),
-        "",
-        "Last Cycle",
-        relative_time(_last_cycle_at(health, signals, paper_health), now),
-        "",
-        "System Uptime",
-        relative_duration(_parse_datetime(health.get("service_uptime_anchor")), now),
-        "",
-        DASHBOARD_DIVIDER,
-        "",
-        "Updated:",
-        now.strftime("%H:%M:%S UTC"),
+    sections = [
+        (
+            "System Health",
+            [
+                ("Wallet Autonomy", f"{status_icon(wallet_status)} {service_status_label(wallet_status)}"),
+                ("Telegram Console", "🟢 Running"),
+                ("Mission Control", "🟢 Online"),
+                ("Trader Dashboard", "🟢 Online"),
+                ("Health Timer", f"{status_icon(wallet_status)} {_health_timer_label(health, now)}"),
+            ],
+        ),
+        (
+            "Trading Mode",
+            [
+                ("Paper Trading", f"{'🟢' if paper_enabled else '🔴'} {'Enabled' if paper_enabled else 'Disabled'}"),
+                ("Live Trading", f"{'🟢' if live_enabled else '🔴'} {'Enabled' if live_enabled else 'Disabled'}"),
+            ],
+        ),
+        (
+            "Performance",
+            [
+                ("Signals Today", format_count_metric(_signals_today(signals, now))),
+                ("Paper Trades", format_count_metric(paper.get("trade_count"))),
+                ("Validated Families", format_count_metric(_validated_families(paper, signals))),
+                ("Validation Accuracy", format_pct_metric(_validation_accuracy(paper, signals))),
+                ("Paper Win Rate", format_pct_metric(paper.get("win_rate"))),
+                ("Last Cycle", relative_time(_last_cycle_at(health, signals, paper_health), now)),
+                ("System Uptime", relative_duration(_parse_datetime(health.get("service_uptime_anchor")), now)),
+            ],
+        ),
     ]
-    return "\n".join(lines)
+    header = (
+        f"<b>📊 Polylens Mission Control</b>\n"
+        f"{status_icon(system_status)} {system_status_label(system_status)}"
+    )
+    return "\n\n".join([header, render_grouped_sections(sections), render_page_timestamp(now)])
 
 
 def render_console_page(
@@ -880,59 +925,117 @@ def render_console_page(
     if page == "performance":
         return _render_metric_page(
             "📈 Performance",
-            [
-                ("Paper Trades", format_count_metric(context.paper.get("trade_count"))),
-                ("Open Positions", format_count_metric(context.paper.get("open_positions_count"))),
-                ("7D PnL", _format_money(context.paper.get("pnl_7d"))),
-                ("Total PnL", _format_money(context.paper.get("total_pnl"))),
-                ("Paper Win Rate", format_pct_metric(context.paper.get("win_rate"))),
-                ("Top Strategy", _strategy_label(context.paper.get("top_strategy"))),
-            ],
+            [],
             context.now,
+            sections=[
+                (
+                    "Paper Trading",
+                    [
+                        ("Paper Trades", format_count_metric(context.paper.get("trade_count"))),
+                        ("Open Positions", format_count_metric(context.paper.get("open_positions_count"))),
+                        ("Closed Trades", format_count_metric(context.paper.get("closed_positions_count"))),
+                        ("Win Rate", format_pct_metric(context.paper.get("win_rate"))),
+                        ("Top Strategy", _strategy_label(context.paper.get("top_strategy"))),
+                    ],
+                ),
+                (
+                    "PnL",
+                    [
+                        ("Daily PnL", _format_money(context.paper.get("daily_pnl"))),
+                        ("7D PnL", _format_money(context.paper.get("pnl_7d"))),
+                        ("Total PnL", _format_money(context.paper.get("total_pnl"))),
+                    ],
+                ),
+                (
+                    "Validation",
+                    [
+                        ("Validation Accuracy", format_pct_metric(_validation_accuracy(context.paper, context.signals))),
+                        ("Validated Families", format_count_metric(_validated_families(context.paper, context.signals))),
+                    ],
+                ),
+            ],
         )
     if page == "intelligence":
         return _render_metric_page(
             "🧠 Intelligence",
-            [
-                ("Signals Today", format_count_metric(_signals_today(context.signals, context.now))),
-                ("Signals Scored", format_count_metric(context.signals.get("scored_count"))),
-                ("Recommendations", format_count_metric(context.signals.get("recommendation_count"))),
-                ("Validation Accuracy", format_pct_metric(_validation_accuracy(context.paper, context.signals))),
-                ("Last Signal Cycle", relative_time(_last_cycle_at(context.health, context.signals, context.paper_health), context.now)),
-            ],
+            [],
             context.now,
+            sections=[
+                (
+                    "Signals",
+                    [
+                        ("Signals Today", format_count_metric(_signals_today(context.signals, context.now))),
+                        ("Signals Scored", format_count_metric(context.signals.get("scored_count"))),
+                        ("Recommendations", format_count_metric(context.signals.get("recommendation_count"))),
+                        ("Last Signal Cycle", relative_time(_last_cycle_at(context.health, context.signals, context.paper_health), context.now)),
+                    ],
+                ),
+                (
+                    "Validation",
+                    [
+                        ("Validation Accuracy", format_pct_metric(_validation_accuracy(context.paper, context.signals))),
+                    ],
+                ),
+            ],
         )
     if page == "wallets":
-        rows = [
-            ("Tracked Wallets", format_count_metric(len(context.top_wallets or []))),
-            ("Wallet Service", f"{status_icon(context.health.get('status'))} {service_status_label(context.health.get('status'))}"),
-            ("Service Uptime", relative_duration(_parse_datetime(context.health.get("service_uptime_anchor")), context.now)),
+        wallets = context.top_wallets or []
+        sections: list[tuple[str, list[tuple[str, str]]]] = [
+            (
+                "Wallet Overview",
+                [
+                    ("Tracked Wallets", format_count_metric(len(wallets))),
+                    ("Active Wallets", format_count_metric(_wallet_active_count(wallets))),
+                    ("Wallet Service", f"{status_icon(context.health.get('status'))} {service_status_label(context.health.get('status'))}"),
+                    ("Service Uptime", relative_duration(_parse_datetime(context.health.get("service_uptime_anchor")), context.now)),
+                ],
+            ),
         ]
-        rows.extend(_wallet_metric_rows(context.top_wallets or []))
-        return _render_metric_page("👛 Wallets", rows, context.now)
+        lifecycle_rows = _wallet_lifecycle_rows(wallets)
+        if lifecycle_rows:
+            sections.append(("Lifecycle", lifecycle_rows))
+        top_rows = _wallet_metric_rows(wallets)
+        if top_rows and top_rows != [("Top Wallets", "None")]:
+            sections.append(("Top Wallets", top_rows))
+        return _render_metric_page("👛 Wallets", [], context.now, sections=sections)
     if page == "reports":
         return _render_metric_page(
             "📊 Reports",
-            [
-                ("Daily PnL", _format_money(context.paper.get("daily_pnl"))),
-                ("7D PnL", _format_money(context.paper.get("pnl_7d"))),
-                ("Total PnL", _format_money(context.paper.get("total_pnl"))),
-                ("Signals Today", format_count_metric(_signals_today(context.signals, context.now))),
-                ("Validated Families", format_count_metric(_validated_families(context.paper, context.signals))),
-            ],
+            [],
             context.now,
+            sections=[
+                (
+                    "Daily Summary",
+                    [
+                        ("Daily PnL", _format_money(context.paper.get("daily_pnl"))),
+                        ("Signals Today", format_count_metric(_signals_today(context.signals, context.now))),
+                        ("Paper Trades", format_count_metric(context.paper.get("trade_count"))),
+                    ],
+                ),
+                (
+                    "Weekly Summary",
+                    [
+                        ("7D PnL", _format_money(context.paper.get("pnl_7d"))),
+                        ("Win Rate", format_pct_metric(context.paper.get("win_rate"))),
+                        ("Validated Families", format_count_metric(_validated_families(context.paper, context.signals))),
+                    ],
+                ),
+                (
+                    "Monthly Summary",
+                    [
+                        ("Total PnL", _format_money(context.paper.get("total_pnl"))),
+                        ("Closed Trades", format_count_metric(context.paper.get("closed_positions_count"))),
+                        ("Validation Accuracy", format_pct_metric(_validation_accuracy(context.paper, context.signals))),
+                    ],
+                ),
+            ],
         )
     if page == "system":
         return _render_metric_page(
             "⚙️ System",
-            [
-                ("Wallet Autonomy", f"{status_icon(context.health.get('status'))} {service_status_label(context.health.get('status'))}"),
-                ("Health Timer", f"{status_icon(context.health.get('status'))} {_health_timer_label(context.health, context.now)}"),
-                ("Paper Trading", f"{status_icon(context.paper_health.get('status'))} {service_status_label(context.paper_health.get('status'))}"),
-                ("Live Trading", "🔴 Disabled"),
-                ("Last Cycle", relative_time(_last_cycle_at(context.health, context.signals, context.paper_health), context.now)),
-            ],
+            [],
             context.now,
+            sections=_system_page_sections(context),
         )
     if page == "paper_trades":
         return _render_detail_page(
@@ -956,6 +1059,7 @@ def render_console_page(
             "👛 Wallet Stats",
             _wallet_detail_rows(context.top_wallets or []),
             context.now,
+            section_header="Top Wallets",
         )
     if page == "validation_accuracy":
         return _render_detail_page(
@@ -1016,17 +1120,28 @@ def page_reply_markup(page: str) -> dict[str, Any]:
     )
 
 
-def _render_metric_page(title: str, rows: list[tuple[str, str]], now: datetime) -> str:
-    lines = [title, "", DASHBOARD_DIVIDER, ""]
-    for label, value in rows:
-        lines.extend([label, value, ""])
-    lines.extend([DASHBOARD_DIVIDER, "", "Updated:", _as_utc_datetime(now).strftime("%H:%M:%S UTC")])
-    return "\n".join(lines)
+def _render_metric_page(
+    title: str,
+    rows: list[tuple[str, str]],
+    now: datetime,
+    *,
+    sections: list[tuple[str, list[tuple[str, str]]]] | None = None,
+) -> str:
+    grouped = sections if sections is not None else [(title.split(" ", 1)[-1], rows)]
+    body = render_grouped_sections(grouped)
+    return "\n\n".join([f"<b>{escape_telegram_html(title)}</b>", body, render_page_timestamp(now)])
 
 
-def _render_detail_page(title: str, details: list[str], now: datetime) -> str:
-    lines = [title, "", DASHBOARD_DIVIDER, "", *details, "", DASHBOARD_DIVIDER, "", "Updated:", _as_utc_datetime(now).strftime("%H:%M:%S UTC")]
-    return "\n".join(lines)
+def _render_detail_page(
+    title: str,
+    details: list[str],
+    now: datetime,
+    *,
+    section_header: str | None = None,
+) -> str:
+    header = section_header or "Details"
+    body = telegram_pre_block("\n".join([header, *details]))
+    return "\n\n".join([f"<b>{escape_telegram_html(title)}</b>", body, render_page_timestamp(now)])
 
 
 def _format_money(value: Any) -> str:
@@ -1049,21 +1164,104 @@ def _wallet_metric_rows(wallets: list[Any]) -> list[tuple[str, str]]:
         row = item.to_dict() if hasattr(item, "to_dict") else item
         if not isinstance(row, dict):
             continue
-        rows.append((f"Wallet {index}", f"{short_wallet(row.get('wallet') or row.get('address'))} score={row.get('watch_score', 0)}"))
+        wallet = short_wallet(row.get("wallet") or row.get("address"))
+        score = row.get("watch_score", 0)
+        rows.append((f"#{index}", f"{wallet} score={score}"))
     return rows or [("Top Wallets", "None")]
 
 
+def _wallet_active_count(wallets: list[Any]) -> int:
+    active = 0
+    for item in wallets:
+        row = item.to_dict() if hasattr(item, "to_dict") else item
+        if not isinstance(row, dict):
+            continue
+        state = str(row.get("lifecycle_state") or row.get("state") or "active").lower()
+        if state not in {"retired", "inactive"}:
+            active += 1
+    return active or len(wallets)
+
+
+def _wallet_lifecycle_counts(wallets: list[Any]) -> dict[str, int]:
+    counts = {"promoted": 0, "probation": 0, "retired": 0}
+    for item in wallets:
+        row = item.to_dict() if hasattr(item, "to_dict") else item
+        if not isinstance(row, dict):
+            continue
+        state = str(row.get("lifecycle_state") or row.get("state") or "").lower()
+        if state in counts:
+            counts[state] += 1
+    return counts
+
+
+def _wallet_lifecycle_rows(wallets: list[Any]) -> list[tuple[str, str]]:
+    counts = _wallet_lifecycle_counts(wallets)
+    rows: list[tuple[str, str]] = []
+    if counts["promoted"]:
+        rows.append(("Promoted", format_count_metric(counts["promoted"])))
+    if counts["probation"]:
+        rows.append(("Probation", format_count_metric(counts["probation"])))
+    if counts["retired"]:
+        rows.append(("Retired", format_count_metric(counts["retired"])))
+    return rows
+
+
 def _wallet_detail_rows(wallets: list[Any]) -> list[str]:
-    rows: list[str] = []
+    if not wallets:
+        return ["No wallet metrics available."]
+    lines = [f"{'#':<3} {'Wallet':<18} {'Score':<6} Class"]
     for index, item in enumerate(wallets[:5], start=1):
         row = item.to_dict() if hasattr(item, "to_dict") else item
         if not isinstance(row, dict):
             continue
-        rows.append(
-            f"{index}. {short_wallet(row.get('wallet') or row.get('address'))} "
-            f"score={row.get('watch_score', 0)} class={row.get('classification', 'unknown')}"
-        )
-    return rows or ["No wallet metrics available."]
+        wallet = short_wallet(row.get("wallet") or row.get("address"))
+        score = row.get("watch_score", 0)
+        classification = row.get("classification", "unknown")
+        lines.append(f"{index:<3} {wallet:<18} {score:<6} {classification}")
+    return lines or ["No wallet metrics available."]
+
+
+def _system_resource_rows(health: dict[str, Any], now: datetime) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    disk = health.get("disk_usage_pct")
+    if disk is None:
+        disk = health.get("disk_free_pct")
+    if disk is not None:
+        rows.append(("Disk Usage", format_pct_metric(disk)))
+    memory = health.get("memory_usage_pct")
+    if memory is None:
+        memory = health.get("memory_used_pct")
+    if memory is not None:
+        rows.append(("Memory Usage", format_pct_metric(memory)))
+    uptime_anchor = health.get("service_uptime_anchor")
+    if uptime_anchor:
+        rows.append(("System Uptime", relative_duration(_parse_datetime(uptime_anchor), now)))
+    return rows
+
+
+def _system_page_sections(context: ConsolePageContext) -> list[tuple[str, list[tuple[str, str]]]]:
+    sections: list[tuple[str, list[tuple[str, str]]]] = [
+        (
+            "Services",
+            [
+                ("Wallet Autonomy", f"{status_icon(context.health.get('status'))} {service_status_label(context.health.get('status'))}"),
+                ("Telegram Console", "🟢 Running"),
+                ("Paper Trading", f"{status_icon(context.paper_health.get('status'))} {service_status_label(context.paper_health.get('status'))}"),
+                ("Live Trading", "🔴 Disabled"),
+            ],
+        ),
+        (
+            "Health",
+            [
+                ("Health Timer", f"{status_icon(context.health.get('status'))} {_health_timer_label(context.health, context.now)}"),
+                ("Last Cycle", relative_time(_last_cycle_at(context.health, context.signals, context.paper_health), context.now)),
+            ],
+        ),
+    ]
+    resources = _system_resource_rows(context.health, context.now)
+    if resources:
+        sections.append(("Resources", resources))
+    return sections
 
 
 def _paper_trade_details(paper: dict[str, Any]) -> list[str]:
@@ -1741,6 +1939,7 @@ def _v4_page_response(self: TelegramConsole, page: str, state: ConsoleNavigation
             recent_pages=state.recent_pages,
         ),
         reply_markup=page_reply_markup(page, state),
+        parse_mode=TELEGRAM_HTML_PARSE_MODE,
     )
 
 
@@ -1879,24 +2078,45 @@ def render_console_page(
     if page == "performance":
         body = _v3_render_metric_page(
             "📈 Performance",
-            [
-                ("Starting Bankroll", _format_money(context.paper.get("starting_bankroll"))),
-                ("Current Equity", _format_money(context.paper.get("current_equity") or context.paper.get("total_equity"))),
-                ("Cash", _format_money(context.paper.get("cash_balance"))),
-                ("Open Position Value", _format_money(context.paper.get("open_position_value"))),
-                ("Realized PnL", _format_money(context.paper.get("realized_pnl"))),
-                ("Unrealized PnL", _format_money(context.paper.get("unrealized_pnl"))),
-                ("Total PnL", _format_money(context.paper.get("total_pnl"))),
-                ("ROI", format_pct_metric(context.paper.get("roi_pct"))),
-                ("Open Positions", format_count_metric(context.paper.get("open_positions_count"))),
-                ("Closed Trades", format_count_metric(context.paper.get("closed_positions_count"))),
-                ("Win Rate", format_pct_metric(context.paper.get("win_rate"))),
-                ("Top Strategy", _strategy_label(context.paper.get("top_strategy"))),
-                ("Fill Rate", format_pct_metric((context.paper.get("execution_quality") or {}).get("fill_rate"))),
-                ("Avg Slippage", _format_money((context.paper.get("execution_quality") or {}).get("average_slippage"))),
-                ("Rejection Rate", format_pct_metric((context.paper.get("execution_quality") or {}).get("rejection_rate"))),
-            ],
+            [],
             context.now,
+            sections=[
+                (
+                    "Portfolio",
+                    [
+                        ("Starting Bankroll", _format_money(context.paper.get("starting_bankroll"))),
+                        ("Current Equity", _format_money(context.paper.get("current_equity") or context.paper.get("total_equity"))),
+                        ("Cash", _format_money(context.paper.get("cash_balance"))),
+                        ("Open Position Value", _format_money(context.paper.get("open_position_value"))),
+                    ],
+                ),
+                (
+                    "PnL",
+                    [
+                        ("Realized PnL", _format_money(context.paper.get("realized_pnl"))),
+                        ("Unrealized PnL", _format_money(context.paper.get("unrealized_pnl"))),
+                        ("Total PnL", _format_money(context.paper.get("total_pnl"))),
+                        ("ROI", format_pct_metric(context.paper.get("roi_pct"))),
+                    ],
+                ),
+                (
+                    "Trading",
+                    [
+                        ("Open Positions", format_count_metric(context.paper.get("open_positions_count"))),
+                        ("Closed Trades", format_count_metric(context.paper.get("closed_positions_count"))),
+                        ("Win Rate", format_pct_metric(context.paper.get("win_rate"))),
+                        ("Top Strategy", _strategy_label(context.paper.get("top_strategy"))),
+                    ],
+                ),
+                (
+                    "Execution Quality",
+                    [
+                        ("Fill Rate", format_pct_metric((context.paper.get("execution_quality") or {}).get("fill_rate"))),
+                        ("Avg Slippage", _format_money((context.paper.get("execution_quality") or {}).get("average_slippage"))),
+                        ("Rejection Rate", format_pct_metric((context.paper.get("execution_quality") or {}).get("rejection_rate"))),
+                    ],
+                ),
+            ],
         )
         return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
     if page == "trades_log":
