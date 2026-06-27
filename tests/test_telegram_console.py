@@ -11,14 +11,17 @@ from src.analysis.paper_trading_engine import init_paper_trading_db
 from src.integrations.telegram_console import (
     MAX_TELEGRAM_TEXT,
     TELEGRAM_HTML_PARSE_MODE,
+    TIMEZONE,
     TelegramConsole,
     TelegramConsoleConfig,
     TelegramConsoleConfigError,
     TelegramResponse,
     escape_telegram_html,
     format_count_metric,
+    format_local_time,
     format_pct_metric,
     render_dashboard_text,
+    render_page_timestamp,
     render_table_section,
     select_telegram_parse_mode,
     status_icon,
@@ -35,6 +38,7 @@ from src.integrations.telegram_notifications import (
 VALID_WALLET = "0x7af3f727e86394ca3986a1f786b888c7904e83fe"
 WALLET_URL = f"https://polymarketanalytics.com/traders/{VALID_WALLET}"
 DASHBOARD_NOW = datetime(2026, 6, 26, 12, 34, 56, tzinfo=timezone.utc)
+DASHBOARD_UPDATED = "Updated:\n8:34:56 AM EDT"
 
 
 def _config(tmp_path, admins=(123,), token="secret-token") -> TelegramConsoleConfig:
@@ -326,7 +330,7 @@ def test_dashboard_rendering_includes_statuses_metrics_and_timestamp(tmp_path):
     assert "2m ago" in response
     assert "System Uptime" in response
     assert "2h 34m" in response
-    assert "Updated:\n12:34:56 UTC" in response
+    assert "Updated:\n8:34:56 AM EDT" in response
     assert "<pre>" in response.text
     assert response.parse_mode == TELEGRAM_HTML_PARSE_MODE
 
@@ -355,7 +359,7 @@ def test_render_dashboard_text_uses_supplied_utc_timestamp():
         now=DASHBOARD_NOW,
     )
 
-    assert text.endswith("Updated:\n12:34:56 UTC")
+    assert text.endswith(DASHBOARD_UPDATED)
 
 
 def test_menu_navigation_to_system_menu(tmp_path):
@@ -364,7 +368,7 @@ def test_menu_navigation_to_system_menu(tmp_path):
     response = console.handle_callback(123, "menu_system")
 
     assert response.text.splitlines()[0] == "🏠 Home › ⚙️ System"
-    assert "Updated:\n12:34:56 UTC" in response
+    assert "Updated:\n8:34:56 AM EDT" in response
     assert response.reply_markup is not None
     assert {"quick_disk", "quick_memory", "quick_services", "nav_home", "nav_back", "refresh_page"}.issubset(_callback_ids(response.reply_markup))
 
@@ -375,7 +379,7 @@ def test_back_navigation_returns_main_menu(tmp_path):
     response = console.handle_callback(123, "menu_main")
 
     assert "📊 Polylens Mission Control" in response
-    assert "Updated:\n12:34:56 UTC" in response
+    assert "Updated:\n8:34:56 AM EDT" in response
     assert response.reply_markup is not None
     assert {"nav_performance", "nav_intelligence", "nav_wallets", "nav_reports", "nav_system", "refresh_page"}.issubset(_callback_ids(response.reply_markup))
 
@@ -414,9 +418,9 @@ def test_v3_every_page_has_timestamp_and_refresh_preserves_page(tmp_path, callba
     refreshed = console.handle_console_callback(456, 123, "refresh_page")
 
     assert heading in page.text
-    assert page.text.endswith("Updated:\n12:34:56 UTC")
+    assert page.text.endswith(DASHBOARD_UPDATED)
     assert heading in refreshed.text
-    assert refreshed.text.endswith("Updated:\n12:34:56 UTC")
+    assert refreshed.text.endswith(DASHBOARD_UPDATED)
 
 
 @pytest.mark.parametrize(
@@ -876,7 +880,7 @@ def test_poll_back_callback_edits_same_message(tmp_path):
     assert [method for method, _params in calls] == ["getUpdates", "answerCallbackQuery", "editMessageText"]
     assert calls[2][1]["message_id"] == 789
     assert "📊 Polylens Mission Control" in calls[2][1]["text"]
-    assert "Updated:\n12:34:56 UTC" in calls[2][1]["text"]
+    assert "Updated:\n8:34:56 AM EDT" in calls[2][1]["text"]
 
 
 def test_poll_refresh_callback_edits_existing_message(tmp_path):
@@ -1305,7 +1309,7 @@ def test_v4_context_actions_navigate_to_read_only_pages(tmp_path, parent_callbac
     response = console.handle_console_callback(456, 123, quick_callback)
 
     assert heading in response.text
-    assert "Updated:\n12:34:56 UTC" in response.text
+    assert "Updated:\n8:34:56 AM EDT" in response.text
     assert {"nav_home", "nav_back", "refresh_page"}.issubset(_callback_ids(response.reply_markup))
 
 
@@ -1507,3 +1511,61 @@ def test_console_navigation_includes_html_parse_mode_in_edit(tmp_path):
     edit_params = calls[-1][1]
     assert edit_params["parse_mode"] == TELEGRAM_HTML_PARSE_MODE
     assert "sendMessage" not in [method for method, _params in calls]
+
+
+def test_format_local_time_uses_edt_during_daylight_saving():
+    dt = datetime(2026, 6, 26, 0, 13, 1, tzinfo=timezone.utc)
+
+    assert format_local_time(dt) == "8:13:01 PM EDT"
+
+
+def test_format_local_time_uses_est_during_standard_time():
+    dt = datetime(2026, 1, 15, 17, 13, 1, tzinfo=timezone.utc)
+
+    assert format_local_time(dt) == "12:13:01 PM EST"
+
+
+def test_format_local_time_respects_dst_spring_forward_boundary():
+    before = datetime(2026, 3, 8, 6, 59, 0, tzinfo=timezone.utc)
+    after = datetime(2026, 3, 8, 7, 30, 0, tzinfo=timezone.utc)
+
+    assert format_local_time(before) == "1:59:00 AM EST"
+    assert format_local_time(after) == "3:30:00 AM EDT"
+
+
+def test_format_local_time_respects_dst_fall_back_boundary():
+    before = datetime(2026, 11, 1, 5, 59, 0, tzinfo=timezone.utc)
+    after = datetime(2026, 11, 1, 6, 30, 0, tzinfo=timezone.utc)
+
+    assert format_local_time(before) == "1:59:00 AM EDT"
+    assert format_local_time(after) == "1:30:00 AM EST"
+
+
+def test_render_page_timestamp_uses_new_york_timezone():
+    assert render_page_timestamp(DASHBOARD_NOW) == DASHBOARD_UPDATED
+
+
+def test_home_dashboard_footer_uses_local_timezone(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    response = console.handle_text(123, "/console")
+
+    assert response.text.endswith(DASHBOARD_UPDATED)
+    assert str(TIMEZONE) == "America/New_York"
+
+
+def test_reports_page_footer_uses_local_timezone(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    response = console.handle_console_callback(456, 123, "nav_reports")
+
+    assert response.text.endswith(DASHBOARD_UPDATED)
+
+
+def test_relative_times_remain_unchanged_with_local_footer(tmp_path):
+    console = _dashboard_console(tmp_path)
+
+    response = console.handle_text(123, "/console")
+
+    assert "Last Cycle           2m ago" in response.text
+    assert response.text.endswith(DASHBOARD_UPDATED)

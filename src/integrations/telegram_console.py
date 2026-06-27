@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Any, Callable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -43,6 +44,7 @@ DEFAULT_TELEGRAM_AUDIT_DB = DEFAULT_TRADERS_DB
 TELEGRAM_API_BASE = "https://api.telegram.org"
 MAX_TELEGRAM_TEXT = 3500
 TELEGRAM_HTML_PARSE_MODE = "HTML"
+TIMEZONE = ZoneInfo("America/New_York")
 COMMANDS = (
     "/start",
     "/console",
@@ -848,8 +850,15 @@ def render_grouped_sections(sections: list[tuple[str, list[tuple[str, str]]]]) -
     return "\n\n".join(blocks)
 
 
+def format_local_time(dt: datetime) -> str:
+    """Convert a UTC datetime to America/New_York and format with DST-aware zone."""
+    local = _as_utc_datetime(dt).astimezone(TIMEZONE)
+    hour = local.strftime("%I").lstrip("0") or "12"
+    return f"{hour}:{local.strftime('%M:%S %p %Z')}"
+
+
 def render_page_timestamp(now: datetime) -> str:
-    return f"Updated:\n{_as_utc_datetime(now).strftime('%H:%M:%S UTC')}"
+    return f"Updated:\n{format_local_time(now)}"
 
 
 def render_dashboard_text(
