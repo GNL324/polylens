@@ -21,13 +21,30 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _bootstrap_is_intentionally_dormant(
+def _bootstrap_stale_exempt(
     *,
     row: dict[str, Any],
     traders_db_path: str,
     service: WalletAutonomyService,
 ) -> bool:
-    if str(row.get("last_status") or "") != "success":
+    try:
+        health = bootstrap_health_report(
+            traders_db_path=traders_db_path,
+            discovery_db_path=service.discovery_db_path,
+        )
+    except Exception:
+        return False
+
+    if health.get("ecosystem_empty") is not False:
+        return False
+
+    last_status = str(row.get("last_status") or "never")
+    last_run_at = row.get("last_run_at")
+    # run_due_cycles skips bootstrap entirely once the ecosystem is populated.
+    if last_run_at is None and last_status in {"never", ""}:
+        return True
+
+    if last_status != "success":
         return False
 
     try:
@@ -44,18 +61,7 @@ def _bootstrap_is_intentionally_dormant(
     except json.JSONDecodeError:
         return False
 
-    if result.get("skipped") is not True or result.get("reason") != "ecosystem not empty":
-        return False
-
-    try:
-        health = bootstrap_health_report(
-            traders_db_path=traders_db_path,
-            discovery_db_path=service.discovery_db_path,
-        )
-    except Exception:
-        return False
-
-    return health.get("ecosystem_empty") is False
+    return result.get("skipped") is True and result.get("reason") == "ecosystem not empty"
 
 
 def wallet_service_health_summary(
@@ -88,7 +94,7 @@ def wallet_service_health_summary(
         else:
             age_seconds = (now - last_run_at).total_seconds()
             stale = age_seconds > interval * 2
-        if stale and cycle_name == "bootstrap" and _bootstrap_is_intentionally_dormant(
+        if stale and cycle_name == "bootstrap" and _bootstrap_stale_exempt(
             row=row,
             traders_db_path=traders_db_path,
             service=svc,
