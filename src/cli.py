@@ -75,6 +75,11 @@ from src.analysis.outcome_validator import (
     rebuild_validation_metrics as build_outcome_validation_backfill,
     validate_completed_markets as build_outcome_validation_run,
 )
+from src.analysis.signal_weight_report import (
+    build_signal_weight_report,
+    export_signal_weight_recommendation,
+    format_weight_optimization_cli,
+)
 from src.analysis.settlement_sources import settlement_source_audit as build_settlement_source_audit
 from src.analysis.paper_trading_service import (
     DEFAULT_PAPER_TRADING_LOG,
@@ -1653,6 +1658,41 @@ def outcome_validation_backfill_cli(as_json: bool = False, db_path: str = DEFAUL
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
         print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def signal_weight_report_cli(
+    as_json: bool = False,
+    db_path: str = DEFAULT_PAPER_TRADING_DB,
+    window_days: int = 90,
+    export_path: str = "reports/signal_weight_recommendation.json",
+) -> dict[str, Any]:
+    result = build_signal_weight_report(db_path=db_path, window_days=window_days)
+    export_signal_weight_recommendation(result, export_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(format_weight_optimization_cli(result))
+        print(f"\nExported: {export_path}")
+    return result
+
+
+def signal_weight_optimize_cli(
+    as_json: bool = False,
+    db_path: str = DEFAULT_PAPER_TRADING_DB,
+    window_days: int = 90,
+    export_path: str = "reports/signal_weight_recommendation.json",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    result = build_signal_weight_report(db_path=db_path, window_days=window_days)
+    result["dry_run"] = bool(dry_run)
+    result["auto_apply"] = False
+    export_signal_weight_recommendation(result, export_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(format_weight_optimization_cli(result))
+        print(f"\nDry-run only — recommendations exported to {export_path}")
     return result
 
 
@@ -3814,6 +3854,19 @@ def main() -> None:
     outcome_validation_backfill_parser.add_argument("--reset", action="store_true")
     outcome_validation_backfill_parser.add_argument("--json", action="store_true")
 
+    signal_weight_report_parser = sub.add_parser("signal-weight-report", help="recommend Signal Scoring V3 weights from outcome validation history (read-only)")
+    signal_weight_report_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    signal_weight_report_parser.add_argument("--window-days", type=int, default=90)
+    signal_weight_report_parser.add_argument("--export-path", default="reports/signal_weight_recommendation.json")
+    signal_weight_report_parser.add_argument("--json", action="store_true")
+
+    signal_weight_optimize_parser = sub.add_parser("signal-weight-optimize", help="dry-run Signal Scoring V3 weight optimization (never auto-applies)")
+    signal_weight_optimize_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    signal_weight_optimize_parser.add_argument("--window-days", type=int, default=90)
+    signal_weight_optimize_parser.add_argument("--export-path", default="reports/signal_weight_recommendation.json")
+    signal_weight_optimize_parser.add_argument("--dry-run", action="store_true", default=True)
+    signal_weight_optimize_parser.add_argument("--json", action="store_true")
+
     settlement_source_audit_parser = sub.add_parser("settlement-source-audit", help="audit read-only settlement source coverage")
     settlement_source_audit_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
     settlement_source_audit_parser.add_argument("--json", action="store_true")
@@ -4833,6 +4886,21 @@ def main() -> None:
         outcome_validation_report_cli(as_json=args.json, db_path=args.db_path, window_days=args.window_days)
     elif args.command == "outcome-validation-backfill":
         outcome_validation_backfill_cli(as_json=args.json, db_path=args.db_path, batch_size=args.batch_size, reset=args.reset)
+    elif args.command == "signal-weight-report":
+        signal_weight_report_cli(
+            as_json=args.json,
+            db_path=args.db_path,
+            window_days=args.window_days,
+            export_path=args.export_path,
+        )
+    elif args.command == "signal-weight-optimize":
+        signal_weight_optimize_cli(
+            as_json=args.json,
+            db_path=args.db_path,
+            window_days=args.window_days,
+            export_path=args.export_path,
+            dry_run=args.dry_run,
+        )
     elif args.command == "settlement-source-audit":
         settlement_source_audit_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "opportunity-feed-status":

@@ -22,5 +22,7 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pytest
-      - name: Run tests
-        run: pytest
+      - name: Run tests with runtime DB guard
+        env:
+          PYTHONPATH: .
+        run: python scripts/validate_runtime_db_isolation.py -- python -m pytest -q

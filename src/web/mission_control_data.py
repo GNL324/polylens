@@ -814,6 +814,7 @@ def mission_control_snapshot(
 ) -> dict[str, Any]:
     from src.analysis.opportunity_feed import get_paper_trading_opportunities
     from src.analysis.outcome_validator import outcome_validation_report
+    from src.analysis.signal_weight_report import build_signal_weight_report, mission_control_section
     from src.analysis.paper_trading_engine import performance_report as canonical_paper_performance
     from src.analysis.paper_execution_analytics import execution_quality_report
 
@@ -894,6 +895,8 @@ def mission_control_snapshot(
         "worst_wallet": portfolio.get("worst_wallet"),
     }
     snapshot["outcome_validation"] = outcome_validation_report(portfolio_db_path, now=now)
+    weight_report = build_signal_weight_report(portfolio_db_path, now=now)
+    snapshot["signal_weight_optimization"] = mission_control_section(weight_report)
     return snapshot
 
 

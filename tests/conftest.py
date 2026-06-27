@@ -65,6 +65,8 @@ def signal_db_path(tmp_path) -> Path:
 @pytest.fixture(autouse=True)
 def _isolate_runtime_sqlite_dbs(tmp_path, monkeypatch):
     """Redirect accidental opens of runtime data/*.db files to per-test temp files."""
+    import importlib
+
     from src import sqlite_utils
 
     isolated_paths = _runtime_isolated_paths(tmp_path)
@@ -87,6 +89,15 @@ def _isolate_runtime_sqlite_dbs(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sqlite_utils, "closing_connection", isolated_closing_connection)
     monkeypatch.setattr(sqlite3, "connect", isolated_sqlite3_connect)
+    for module_name in (
+        "src.analysis.paper_trading_engine",
+        "src.analysis.trader_registry",
+        "src.analysis.wallet_activity",
+        "src.analysis.paper_portfolio",
+    ):
+        module = importlib.import_module(module_name)
+        if hasattr(module, "closing_connection"):
+            monkeypatch.setattr(module, "closing_connection", isolated_closing_connection)
 
     yield isolated_paths
 

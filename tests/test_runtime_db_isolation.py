@@ -15,6 +15,15 @@ from src.cli import outcome_validation_backfill_cli, outcome_validation_report_c
 from src.intelligence.wallet_baseline_analysis import wallet_baseline_analysis_report
 from src.intelligence.wallet_scoring import WalletScorer
 from src.intelligence.wallet_signal_analytics import _wallet_validation_stats
+from src.testing.runtime_db_guard import (
+    MISSING,
+    RUNTIME_DB_FILES,
+    compare_snapshots,
+    format_validation_report,
+    validate_runtime_db_isolation,
+)
+
+pytestmark = pytest.mark.runtime_db_safe
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_RUNTIME_DBS = {
@@ -182,3 +191,84 @@ def test_outcome_validation_cli_commands_use_explicit_temp_db(tmp_path):
     assert backfill["paper_only"] is True
     assert db_path.exists()
     assert _runtime_hashes() == before
+
+
+def _snapshot_with(**overrides: str) -> dict[str, str]:
+    base = {name: MISSING for name in RUNTIME_DB_FILES}
+    base.update(overrides)
+    return base
+
+
+def test_validator_passes_when_snapshots_match():
+    snapshot = _snapshot_with(
+        **{
+            "trader_signals.db": "abc123",
+            "traders.db": "def456",
+            "wallet_activity.db": "ghi789",
+            "paper_trading.db": "jkl012",
+        }
+    )
+    failures = compare_snapshots(snapshot, snapshot)
+    report = format_validation_report(snapshot, snapshot, failures)
+
+    assert not failures
+    assert "PASS" in report
+    assert "trader_signals.db unchanged" in report
+
+
+def test_validate_runtime_db_isolation_returns_workload_exit_code_when_clean():
+    snapshot = _snapshot_with(
+        **{
+            "trader_signals.db": "abc123",
+            "traders.db": "def456",
+            "wallet_activity.db": "ghi789",
+            "paper_trading.db": "jkl012",
+        }
+    )
+    exit_code, report = validate_runtime_db_isolation(lambda: 0, before=snapshot, after=snapshot)
+
+    assert exit_code == 0
+    assert "PASS" in report
+
+
+def test_validator_detects_modified_db_hash():
+    before = _snapshot_with(**{"paper_trading.db": "abc123"})
+    after = _snapshot_with(**{"paper_trading.db": "def456"})
+    failures = compare_snapshots(before, after)
+
+    assert len(failures) == 1
+    assert failures[0].db_name == "paper_trading.db"
+    assert "hash changed" in failures[0].message()
+    report = format_validation_report(before, after, failures)
+    assert "FAIL" in report
+    assert "Expected:" in report
+    assert "abc123" in report
+    assert "def456" in report
+
+
+def test_validator_detects_newly_created_runtime_db():
+    before = _snapshot_with()
+    after = _snapshot_with(**{"traders.db": "newfilehash"})
+    failures = compare_snapshots(before, after)
+
+    assert len(failures) == 1
+    assert failures[0].kind == "created"
+    assert failures[0].db_name == "traders.db"
+
+
+def test_validator_detects_deleted_runtime_db():
+    before = _snapshot_with(**{"wallet_activity.db": "stablehash"})
+    after = _snapshot_with()
+    failures = compare_snapshots(before, after)
+
+    assert len(failures) == 1
+    assert failures[0].kind == "deleted"
+    assert failures[0].db_name == "wallet_activity.db"
+
+
+def test_validate_runtime_db_isolation_propagates_workload_failure():
+    snapshot = _snapshot_with(**{"traders.db": "stable"})
+    exit_code, report = validate_runtime_db_isolation(lambda: 3, before=snapshot, after=snapshot)
+
+    assert exit_code == 3
+    assert "PASS" in report

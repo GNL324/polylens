@@ -90,6 +90,7 @@ CALLBACK_COMMANDS = {
     "paper_strategies": "/paper_strategies",
     "portfolio_analytics": "/portfolio_analytics",
     "outcome_validation": "/outcome_validation",
+    "weight_optimization": "/weight_optimization",
 }
 MENU_CALLBACKS = {
     "menu_intelligence": "intelligence",
@@ -104,6 +105,7 @@ PAGE_NAV_CALLBACKS = {
     "nav_performance": "performance",
     "nav_portfolio": "portfolio_analytics",
     "nav_outcome": "outcome_validation",
+    "nav_weight": "weight_optimization",
     "nav_intelligence": "intelligence",
     "nav_wallets": "wallets",
     "nav_reports": "reports",
@@ -523,6 +525,8 @@ class TelegramConsole:
             return TelegramResponse(outcome_validation_report_text(self.paper_intelligence_provider()), reply_markup=menu_reply_markup("reports"))
         if command in {"/paper_opportunities", "/opportunity_rankings"}:
             return self._opportunity_rankings_response()
+        if command in {"/weight_optimization", "/signal_weight"}:
+            return self._weight_optimization_response()
         if command == "/risk":
             return self._menu_response(format_risk(self.risk_provider()))
         if command == "/report_daily":
@@ -583,6 +587,15 @@ class TelegramConsole:
         rows = get_paper_trading_opportunities(limit=10, portfolio_db_path=self.config.paper_db_path)
         return TelegramResponse(
             format_opportunity_ranking_text(rows, limit=10),
+            reply_markup=menu_reply_markup("reports"),
+        )
+
+    def _weight_optimization_response(self) -> TelegramResponse:
+        from src.analysis.signal_weight_report import build_signal_weight_report, format_weight_optimization_telegram
+
+        report = build_signal_weight_report(self.config.paper_db_path)
+        return TelegramResponse(
+            format_weight_optimization_telegram(report),
             reply_markup=menu_reply_markup("reports"),
         )
 
@@ -2162,6 +2175,7 @@ def menu_reply_markup(menu_name: str = "main") -> dict[str, Any]:
                 [{"text": "Open Positions", "callback_data": "paper_positions"}],
                 [{"text": "Paper Strategies", "callback_data": "paper_strategies"}],
                 [{"text": "Outcome Validation", "callback_data": "outcome_validation"}],
+                [{"text": "Weight Optimization", "callback_data": "weight_optimization"}],
                 [_back_button()],
             ]
         )
@@ -2323,6 +2337,7 @@ V4_CONTEXT_CALLBACKS = {
     "quick_memory": "memory",
     "quick_services": "services",
     "quick_opportunity_rankings": "opportunity_rankings",
+    "quick_weight_optimization": "weight_optimization",
 }
 V4_PAGE_TITLES = {
     "home": "🏠 Home",
@@ -2345,6 +2360,7 @@ V4_PAGE_TITLES = {
     "memory": "🧠 Memory",
     "services": "⚙️ Services",
     "opportunity_rankings": "🏆 Opportunity Rankings",
+    "weight_optimization": "⚖️ Weight Optimization",
     "trades_log": "📜 Trades Log",
 }
 V4_WALLET_PAGES = {"wallets", "wallet_stats", "top_wallet", "new_wallets"}
@@ -2472,6 +2488,12 @@ def _v4_detail_rows(page: str, context: ConsolePageContext) -> list[str]:
 
         rows = get_paper_trading_opportunities(limit=10, portfolio_db_path=DEFAULT_PAPER_TRADING_DB)
         return format_opportunity_ranking_text(rows, limit=10).splitlines()
+    if page == "weight_optimization":
+        from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB
+        from src.analysis.signal_weight_report import build_signal_weight_report, format_weight_optimization_telegram
+
+        report = build_signal_weight_report(DEFAULT_PAPER_TRADING_DB)
+        return format_weight_optimization_telegram(report).splitlines()
     return ["Read-only detail unavailable."]
 
 
@@ -2686,6 +2708,8 @@ TelegramConsole.handle_text = _v4_handle_text
 
 V4_CONTEXT_CALLBACKS["quick_trades_log"] = "trades_log"
 V4_CONTEXT_CALLBACKS["quick_outcome_validation"] = "outcome_validation"
+V4_CONTEXT_CALLBACKS["weight_optimization"] = "weight_optimization"
+V4_CONTEXT_CALLBACKS["quick_weight_optimization"] = "weight_optimization"
 V4_PAGE_TITLES["trades_log"] = "📜 Trades Log"
 V4_PAGE_TITLES["portfolio_analytics"] = "📊 Portfolio Analytics"
 V4_PAGE_TITLES["outcome_validation"] = "📈 Outcome Validation"
@@ -2728,6 +2752,17 @@ def render_console_page(
         return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
     if page == "outcome_validation":
         body = _v3_render_detail_page("📈 Outcome Validation", _outcome_validation_details(context.paper), context.now)
+        return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
+    if page == "weight_optimization":
+        from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB
+        from src.analysis.signal_weight_report import build_signal_weight_report, format_weight_optimization_telegram
+
+        report = build_signal_weight_report(context.paper.get("db_path") or DEFAULT_PAPER_TRADING_DB)
+        body = _v3_render_detail_page(
+            "⚖️ Weight Optimization",
+            format_weight_optimization_telegram(report).split("\n")[1:],
+            context.now,
+        )
         return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
     if page == "performance":
         body = _v3_render_metric_page(
