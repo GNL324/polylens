@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from src.analysis.paper_intelligence import paper_trading_intelligence
+from src.integrations.telegram_time import format_iso_timestamp_local
 from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB
 from src.analysis.short_crypto_paper import DEFAULT_DB_PATH as DEFAULT_SHORT_CRYPTO_PAPER_DB
 from src.analysis.trader_registry import DEFAULT_TRADERS_DB
@@ -784,10 +785,10 @@ def _short_text(value: Any, limit: int) -> str:
 def _short_timestamp(value: Any) -> str:
     text = str(value or "")
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+        datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return _short_text(text, 32)
-    return parsed.strftime("%Y-%m-%d %H:%M UTC")
+    return format_iso_timestamp_local(value)
 
 
 def utc_now() -> str:

@@ -19,6 +19,7 @@ from src.integrations.telegram_console import (
     escape_telegram_html,
     format_count_metric,
     format_local_time,
+    format_local_timestamp,
     format_pct_metric,
     format_trend_suffix,
     render_dashboard_text,
@@ -1509,6 +1510,11 @@ def test_console_navigation_includes_html_parse_mode_in_edit(tmp_path):
     assert "sendMessage" not in [method for method, _params in calls]
 
 
+def test_format_local_timestamp_delegates_to_shared_helper():
+    assert format_local_timestamp(DASHBOARD_NOW) == "8:34:56 AM EDT"
+    assert format_local_time(DASHBOARD_NOW) == format_local_timestamp(DASHBOARD_NOW)
+
+
 def test_format_local_time_uses_edt_during_daylight_saving():
     dt = datetime(2026, 6, 26, 0, 13, 1, tzinfo=timezone.utc)
 
@@ -1783,3 +1789,29 @@ def test_v6_refresh_still_edits_same_message_only(tmp_path):
     assert calls[-1][1]["message_id"] == 789
     assert "sendMessage" not in [method for method, _params in calls]
     assert "📊 Executive Summary" in calls[-1][1]["text"]
+
+
+@pytest.mark.parametrize(
+    "callback_id",
+    [
+        "nav_home",
+        "nav_performance",
+        "quick_trades_log",
+        "nav_portfolio",
+        "nav_outcome",
+        "quick_opportunity_rankings",
+    ],
+)
+def test_key_console_pages_use_eastern_updated_footer(tmp_path, callback_id, monkeypatch):
+    monkeypatch.setattr(
+        "src.analysis.opportunity_feed.get_paper_trading_opportunities",
+        lambda **_kwargs: [],
+    )
+    console = _dashboard_console(tmp_path)
+
+    response = console.handle_console_callback(456, 123, callback_id)
+
+    assert DASHBOARD_UPDATED in response.text
+    footer = response.text.split("Updated:", 1)[-1]
+    assert " UTC" not in footer
+    assert (" EDT" in footer) or (" EST" in footer)
