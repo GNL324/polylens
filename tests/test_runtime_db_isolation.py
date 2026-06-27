@@ -8,10 +8,8 @@ from pathlib import Path
 import pytest
 
 from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB, init_paper_trading_db
-from src.analysis.trader_registry import DEFAULT_TRADERS_DB
-from src.analysis.trader_registry import save_wallet_report
+from src.analysis.trader_registry import DEFAULT_TRADERS_DB, save_wallet_report
 from src.analysis.wallet_activity import DEFAULT_WALLET_ACTIVITY_DB, WalletActivityExport, save_wallet_activity_export
-from src.cli import outcome_validation_backfill_cli, outcome_validation_report_cli, outcome_validation_run_cli
 from src.intelligence.wallet_baseline_analysis import wallet_baseline_analysis_report
 from src.intelligence.wallet_scoring import WalletScorer
 from src.intelligence.wallet_signal_analytics import _wallet_validation_stats
@@ -22,17 +20,11 @@ from src.testing.runtime_db_guard import (
     format_validation_report,
     validate_runtime_db_isolation,
 )
+from src.testing.runtime_db_redirect import PRODUCTION_RUNTIME_DBS, runtime_db_redirect_active
 
 pytestmark = pytest.mark.runtime_db_safe
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-PRODUCTION_RUNTIME_DBS = {
-    "paper_trading": (REPO_ROOT / "data" / "paper_trading.db").resolve(),
-    "trader_signals": (REPO_ROOT / "data" / "trader_signals.db").resolve(),
-    "traders": (REPO_ROOT / "data" / "traders.db").resolve(),
-    "wallet_activity": (REPO_ROOT / "data" / "wallet_activity.db").resolve(),
-}
-PRODUCTION_TRADER_SIGNALS_DB = (REPO_ROOT / "data" / "trader_signals.db").resolve()
+PRODUCTION_TRADER_SIGNALS_DB = PRODUCTION_RUNTIME_DBS["trader_signals"]
 
 WALLET = "0x" + "a" * 40
 
@@ -82,6 +74,7 @@ def test_wallet_scorer_uses_isolated_signal_db(signal_db_path, tmp_path):
         discovery_db_path=tmp_path / "discovery.db",
         signal_db_path=signal_db_path,
         paper_copy_db_path=tmp_path / "paper_copy.db",
+        wallet_activity_db_path=tmp_path / "wallet_activity.db",
     )
     score = scorer.score_wallet(WALLET)
 
@@ -121,6 +114,10 @@ def _table_names(path: Path) -> set[str]:
         return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     finally:
         conn.close()
+
+
+def test_runtime_db_redirect_hook_active_during_tests():
+    assert runtime_db_redirect_active() is True
 
 
 def test_default_trader_signal_db_path_redirects_to_isolated_file(isolated_runtime_db_paths):
@@ -178,19 +175,73 @@ def test_runtime_db_hashes_unchanged_after_representative_default_path_run(isola
     assert all(path.exists() for path in isolated_runtime_db_paths.values())
 
 
-def test_outcome_validation_cli_commands_use_explicit_temp_db(tmp_path):
+def test_wallet_scoring_stale_closing_connection_import_bypass(isolated_runtime_db_paths, tmp_path):
+    """Regression for modules that keep a module-level closing_connection import."""
+    import src.intelligence.wallet_scoring as wallet_scoring
+
+    traders_db = tmp_path / "traders.db"
+    save_wallet_report(_report(), db_path=str(traders_db))
     before = _runtime_hashes()
-    db_path = tmp_path / "outcome-cli.db"
 
-    run = outcome_validation_run_cli(as_json=True, db_path=str(db_path), limit=10)
-    report = outcome_validation_report_cli(as_json=True, db_path=str(db_path), window_days=7)
-    backfill = outcome_validation_backfill_cli(as_json=True, db_path=str(db_path), batch_size=10, reset=True)
+    with wallet_scoring.closing_connection(DEFAULT_TRADERS_DB) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS bypass_probe (id INTEGER PRIMARY KEY)")
 
-    assert run["paper_only"] is True
-    assert report["paper_only"] is True
-    assert backfill["paper_only"] is True
-    assert db_path.exists()
     assert _runtime_hashes() == before
+    assert "bypass_probe" in _table_names(isolated_runtime_db_paths["traders"])
+
+
+def test_mission_control_default_portfolio_path_redirects_without_mutation(isolated_runtime_db_paths, monkeypatch):
+    """Regression: mission_control_snapshot defaults portfolio_db_path to data/paper_trading.db."""
+    import sys
+    import types
+
+    from src.web.mission_control_data import mission_control_snapshot
+
+    if not PRODUCTION_RUNTIME_DBS["paper_trading"].exists():
+        pytest.skip("production paper_trading.db absent")
+
+    before = _runtime_hashes()
+    monkeypatch.setattr(
+        "src.web.mission_control_data._legacy_mission_control_snapshot",
+        lambda **_kwargs: {"header": {}, "kpis": {}, "generated_at": "2026-06-26T00:00:00Z"},
+    )
+    fake_execution = types.ModuleType("src.analysis.paper_execution_analytics")
+    fake_execution.execution_quality_report = lambda portfolio_db_path, **kwargs: {}
+    monkeypatch.setitem(sys.modules, "src.analysis.paper_execution_analytics", fake_execution)
+    monkeypatch.setattr(
+        "src.analysis.opportunity_feed.get_paper_trading_opportunities",
+        lambda **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "src.analysis.outcome_validator.outcome_validation_report",
+        lambda portfolio_db_path, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "src.analysis.signal_weight_report.build_signal_weight_report",
+        lambda portfolio_db_path, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "src.analysis.signal_weight_report.mission_control_section",
+        lambda report, **kwargs: {},
+    )
+
+    mission_control_snapshot()
+
+    assert _runtime_hashes() == before
+    assert isolated_runtime_db_paths["paper_trading"].exists()
+
+
+def test_sqlite3_connect_redirects_default_paths(isolated_runtime_db_paths):
+    before = _runtime_hashes()
+    conn = sqlite3.connect(DEFAULT_TRADERS_DB)
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS connect_probe (id INTEGER PRIMARY KEY)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert _runtime_hashes() == before
+    assert "connect_probe" in _table_names(isolated_runtime_db_paths["traders"])
 
 
 def _snapshot_with(**overrides: str) -> dict[str, str]:

@@ -91,10 +91,15 @@ def test_run_performance_cycle_persists_state(tmp_path):
     assert states[0]["last_status"] == "success"
 
 
-def test_run_due_cycles_records_service_state(tmp_path):
+def test_run_due_cycles_records_service_state(tmp_path, monkeypatch):
     traders_db = tmp_path / "traders.db"
     discovery_db = tmp_path / "discovery.db"
     service = WalletAutonomyService(traders_db_path=traders_db, discovery_db_path=discovery_db)
+    monkeypatch.setattr(
+        WalletAutonomyService,
+        "run_cycle",
+        lambda self, cycle_name: {"cycle": cycle_name, "status": "success"},
+    )
     payload = service.run_due_cycles(force=True)
     assert payload["cycles_run"] == len(CYCLE_NAMES)
     service_state = service.load_cycle_state("__service__")

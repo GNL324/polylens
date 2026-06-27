@@ -288,7 +288,9 @@ class FalconCandidateStore:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path)
+        from src.testing.runtime_db_redirect import resolve_runtime_db_target
+
+        conn = sqlite3.connect(resolve_runtime_db_target(self.db_path))
         conn.row_factory = sqlite3.Row
         try:
             yield conn

@@ -5,14 +5,12 @@ from typing import Any
 
 from src.analysis.paper_copy_trader import DEFAULT_PAPER_COPY_DB, paper_copy_report
 from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB, init_trader_signal_db
-from src.analysis.trader_signal_paper_bridge import init_trader_signal_paper_bridge_db
 from src.analysis.trader_signal_validation import init_trader_signal_validation_db
+from src.analysis.trader_signal_paper_bridge import init_trader_signal_paper_bridge_db
 from src.intelligence.strategy_classifier import init_strategy_profiles_db
-from src import sqlite_utils
+from src.sqlite_utils import closing_connection
 
 DEFAULT_TRADERS_DB = "data/traders.db"
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_PRODUCTION_TRADER_SIGNAL_DB = (_REPO_ROOT / DEFAULT_TRADER_SIGNAL_DB).resolve()
 
 
 def _with_flags(payload: dict[str, Any]) -> dict[str, Any]:
@@ -33,7 +31,7 @@ def _load_strategy_profiles(traders_db_path: str | Path) -> dict[str, dict[str, 
     if not path.exists():
         return {}
     init_strategy_profiles_db(path)
-    with sqlite_utils.closing_connection(path) as conn:
+    with closing_connection(path) as conn:
         rows = conn.execute(
             "SELECT wallet, archetype, confidence, alpha_score, watch_score FROM strategy_profiles"
         ).fetchall()
@@ -50,11 +48,11 @@ def _load_strategy_profiles(traders_db_path: str | Path) -> dict[str, dict[str, 
 
 def _wallet_validation_stats(signal_db_path: str | Path) -> dict[str, dict[str, Any]]:
     path = Path(signal_db_path)
-    if not path.exists() and not _is_default_trader_signal_db(path):
+    if not path.exists():
         return {}
     init_trader_signal_db(path)
     init_trader_signal_validation_db(path)
-    with sqlite_utils.closing_connection(path) as conn:
+    with closing_connection(path) as conn:
         rows = conn.execute(
             """
             SELECT
@@ -76,13 +74,6 @@ def _wallet_validation_stats(signal_db_path: str | Path) -> dict[str, dict[str, 
     }
 
 
-def _is_default_trader_signal_db(path: Path) -> bool:
-    try:
-        return path.resolve() == _PRODUCTION_TRADER_SIGNAL_DB
-    except OSError:
-        return False
-
-
 def wallet_performance_rows(
     *,
     paper_copy_db_path: str | Path = DEFAULT_PAPER_COPY_DB,
@@ -101,7 +92,7 @@ def wallet_performance_rows(
         if closed > 0:
             path = Path(paper_copy_db_path)
             if path.exists():
-                with sqlite_utils.closing_connection(path) as conn:
+                with closing_connection(path) as conn:
                     wins = int(
                         conn.execute(
                             """
@@ -248,7 +239,7 @@ def wallet_signal_analytics_report(
     if signal_path.exists():
         init_trader_signal_db(signal_path)
         init_trader_signal_paper_bridge_db(signal_path)
-        with sqlite_utils.closing_connection(signal_path) as conn:
+        with closing_connection(signal_path) as conn:
             overview = conn.execute(
                 """
                 SELECT

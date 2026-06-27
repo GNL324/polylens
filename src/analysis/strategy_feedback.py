@@ -4,6 +4,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from src.testing.runtime_db_redirect import resolve_runtime_db_target
+
 DEFAULT_DB_PATH = "data/short_crypto_paper.db"
 MIN_TRADES = 25
 MAX_ADJUSTMENT = 0.10
@@ -28,7 +30,7 @@ def strategy_feedback_report(
     if not path.exists():
         return {**base_report, "status": "missing_db"}
 
-    with sqlite3.connect(path) as conn:
+    with sqlite3.connect(resolve_runtime_db_target(path)) as conn:
         conn.row_factory = sqlite3.Row
         missing_tables = _missing_tables(conn, ("paper_trades", "paper_settlements"))
         if missing_tables:

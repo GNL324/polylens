@@ -256,7 +256,15 @@ class _readonly_connection:
     def __enter__(self) -> sqlite3.Connection | None:
         if not self.path.exists():
             return None
-        uri = f"file:{self.path}?mode=ro"
+        from src.testing.runtime_db_redirect import resolve_runtime_db_target
+
+        target = resolve_runtime_db_target(self.path)
+        if isinstance(target, Path):
+            uri = f"file:{target}?mode=ro"
+        elif isinstance(target, str) and target.startswith("file:"):
+            uri = target
+        else:
+            uri = f"file:{target}?mode=ro"
         try:
             self.conn = sqlite3.connect(uri, uri=True)
             self.conn.row_factory = sqlite3.Row

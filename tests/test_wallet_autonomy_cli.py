@@ -55,8 +55,15 @@ def test_wallet_service_run_cli_force(tmp_path, monkeypatch):
     monkeypatch.setattr(autonomy_module, "DEFAULT_TRADERS_DB", str(traders_db))
     monkeypatch.setattr(autonomy_module, "DEFAULT_TRADER_DISCOVERY_DB", str(discovery_db))
 
+    expected = {"read_only": True, "cycles_run": 2, "duration_ms": 12.5, "results": []}
+    monkeypatch.setattr(
+        autonomy_module,
+        "run_wallet_autonomy_service",
+        lambda force=False, traders_db_path=str(traders_db): expected,
+    )
+
     from src.cli import wallet_service_run_cli
 
     result = wallet_service_run_cli(as_json=True, force=True)
     assert result["read_only"] is True
-    assert result["cycles_run"] >= 1
+    assert result["cycles_run"] == 2

@@ -62,7 +62,9 @@ def main(argv: list[str] | None = None) -> int:
 
     exit_code, report = validate_runtime_db_isolation(workload)
     print(report)
-    return exit_code
+    if exit_code != 0:
+        return exit_code
+    return 0
 
 
 if __name__ == "__main__":
