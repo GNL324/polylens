@@ -131,6 +131,45 @@ def test_wallet_service_health_summary(tmp_path):
     assert len(health["cycles"]) == len(CYCLE_NAMES)
 
 
+def test_wallet_service_health_ignores_never_run_bootstrap_when_ecosystem_populated(tmp_path):
+    traders_db = tmp_path / "traders.db"
+    discovery_db = tmp_path / "discovery.db"
+    save_wallet_report(_report(), db_path=str(traders_db))
+    save_discovery_candidate(
+        TraderDiscoveryCandidate(
+            wallet=WALLET,
+            source="test",
+            discovery_score=80,
+            evidence_count=1,
+            markets_seen=["market"],
+        ),
+        db_path=discovery_db,
+    )
+    service = WalletAutonomyService(traders_db_path=traders_db, discovery_db_path=discovery_db)
+    for cycle_name in CYCLE_NAMES:
+        if cycle_name == "bootstrap":
+            continue
+        finished_at = _utc_now()
+        service._persist_cycle_run(
+            cycle_name=cycle_name,
+            started_at=finished_at,
+            finished_at=finished_at,
+            duration_ms=1.0,
+            status="success",
+            error=None,
+            result={"ok": True},
+            health_status="healthy",
+        )
+
+    health = wallet_service_health_summary(traders_db_path=str(traders_db), service=service)
+
+    assert health["status"] == "healthy"
+    assert "bootstrap" not in health["stale_cycles"]
+    bootstrap = next(row for row in health["cycles"] if row["cycle"] == "bootstrap")
+    assert bootstrap["stale"] is False
+    assert bootstrap["last_status"] == "never"
+
+
 def test_wallet_service_health_ignores_dormant_bootstrap_when_ecosystem_populated(tmp_path):
     traders_db = tmp_path / "traders.db"
     discovery_db = tmp_path / "discovery.db"
