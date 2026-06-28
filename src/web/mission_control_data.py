@@ -805,6 +805,31 @@ def _float_env(name: str, default: float) -> float:
 _legacy_mission_control_snapshot = mission_control_snapshot
 
 
+def _top_opportunity_row(
+    row: dict[str, Any],
+    *,
+    portfolio_db_path: str | Path,
+    now: datetime | None,
+) -> dict[str, Any]:
+    from src.analysis.decision_intelligence import explain_opportunity
+
+    explanation = explain_opportunity(row, scoring_v3=row.get("scoring_v3"), db_path=portfolio_db_path, now=now)
+    return {
+        "rank": row.get("rank"),
+        "score": row.get("final_score") or row.get("ranking_score"),
+        "expected_edge": row.get("expected_edge"),
+        "confidence": row.get("confidence"),
+        "expected_execution_quality": row.get("expected_execution_quality"),
+        "projected_risk": row.get("projected_risk"),
+        "explanation_summary": row.get("explanation_summary"),
+        "decision_summary": explanation.get("summary"),
+        "decision": explanation.get("decision"),
+        "title": row.get("title"),
+        "strategy": row.get("strategy"),
+        "market_id": row.get("market_id"),
+    }
+
+
 def mission_control_snapshot(
     *,
     paper_db_path: str | Path = SHORT_CRYPTO_PAPER_DB_PATH,
@@ -851,18 +876,7 @@ def mission_control_snapshot(
         }
     )
     snapshot["top_opportunities"] = [
-        {
-            "rank": row.get("rank"),
-            "score": row.get("final_score") or row.get("ranking_score"),
-            "expected_edge": row.get("expected_edge"),
-            "confidence": row.get("confidence"),
-            "expected_execution_quality": row.get("expected_execution_quality"),
-            "projected_risk": row.get("projected_risk"),
-            "explanation_summary": row.get("explanation_summary"),
-            "title": row.get("title"),
-            "strategy": row.get("strategy"),
-            "market_id": row.get("market_id"),
-        }
+        _top_opportunity_row(row, portfolio_db_path=portfolio_db_path, now=now)
         for row in get_paper_trading_opportunities(
             limit=10,
             portfolio_db_path=portfolio_db_path,

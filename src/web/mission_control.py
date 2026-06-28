@@ -295,9 +295,26 @@ def _render_strategy_performance(data: dict[str, Any]) -> None:
 def _render_opportunities(data: dict[str, Any]) -> None:
     from nicegui import ui
 
+    top_opportunities = data.get("top_opportunities") or []
     with ui.element("div").classes("mc-grid-2"):
         _render_active_bet(data["active_bet"])
         _render_recent_settlements(data["recent_settlements"])
+    if top_opportunities:
+        with ui.element("div").classes("mc-card"):
+            ui.html('<div class="mc-card-title">Top Paper Opportunities</div>', sanitize=False)
+            rows = []
+            for item in top_opportunities[:10]:
+                decision = item.get("decision") or "WATCH"
+                summary = item.get("decision_summary") or item.get("explanation_summary") or ""
+                rows.append(
+                    (
+                        f"#{item.get('rank') or '?'} {decision}",
+                        f"score={float(item.get('score') or 0):.1f} | {str(item.get('title') or 'unknown')[:48]}",
+                    )
+                )
+                if summary:
+                    rows.append(("", str(summary)[:96]))
+            _metric_rows(rows)
     with ui.element("div").classes("mc-card"):
         ui.html('<div class="mc-card-title">Opportunity Controls</div>', sanitize=False)
         _metric_rows(

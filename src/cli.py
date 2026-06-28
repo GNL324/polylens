@@ -86,6 +86,7 @@ from src.analysis.paper_trading_service import (
     paper_trading_health as build_paper_trading_health,
     run_paper_trading_service,
 )
+from src.analysis.decision_intelligence import build_decision_intelligence_report
 from src.analysis.trader_network import build_trader_network, network_summary
 from src.analysis.trader_profiler import profile_traders
 from src.analysis.trader_insights import build_trader_insight_report
@@ -1600,6 +1601,26 @@ def paper_open_positions_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER
 
 def paper_analytics_report_cli(as_json: bool = False, db_path: str = DEFAULT_PAPER_TRADING_DB) -> dict[str, Any]:
     result = build_paper_analytics_report(db_path=db_path)
+    if as_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
+def paper_decision_report_cli(
+    as_json: bool = False,
+    db_path: str = DEFAULT_PAPER_TRADING_DB,
+    opportunity_id: str | None = None,
+    limit: int = 10,
+    window_days: int = 30,
+) -> dict[str, Any]:
+    result = build_decision_intelligence_report(
+        db_path,
+        opportunity_id=opportunity_id,
+        limit=limit,
+        window_days=window_days,
+    )
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -3826,6 +3847,16 @@ def main() -> None:
     paper_analytics_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
     paper_analytics_parser.add_argument("--json", action="store_true")
 
+    paper_decision_report_parser = sub.add_parser(
+        "paper-decision-report",
+        help="report deterministic paper decision intelligence explanations (read-only)",
+    )
+    paper_decision_report_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
+    paper_decision_report_parser.add_argument("--opportunity-id")
+    paper_decision_report_parser.add_argument("--limit", type=int, default=10)
+    paper_decision_report_parser.add_argument("--window-days", type=int, default=30)
+    paper_decision_report_parser.add_argument("--json", action="store_true")
+
     paper_position_audit_parser = sub.add_parser("paper-position-audit", help="audit autonomous paper position lifecycle")
     paper_position_audit_parser.add_argument("--db-path", default=DEFAULT_PAPER_TRADING_DB)
     paper_position_audit_parser.add_argument("--json", action="store_true")
@@ -4874,6 +4905,14 @@ def main() -> None:
         paper_open_positions_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "paper-analytics-report":
         paper_analytics_report_cli(as_json=args.json, db_path=args.db_path)
+    elif args.command == "paper-decision-report":
+        paper_decision_report_cli(
+            as_json=args.json,
+            db_path=args.db_path,
+            opportunity_id=args.opportunity_id,
+            limit=args.limit,
+            window_days=args.window_days,
+        )
     elif args.command == "paper-position-audit":
         paper_position_audit_cli(as_json=args.json, db_path=args.db_path)
     elif args.command == "paper-settlement-run":

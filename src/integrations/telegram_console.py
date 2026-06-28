@@ -2339,6 +2339,7 @@ V4_CONTEXT_CALLBACKS = {
     "quick_services": "services",
     "quick_opportunity_rankings": "opportunity_rankings",
     "quick_weight_optimization": "weight_optimization",
+    "quick_decision_intelligence": "decision_intelligence",
 }
 V4_PAGE_TITLES = {
     "home": "🏠 Home",
@@ -2362,6 +2363,8 @@ V4_PAGE_TITLES = {
     "services": "⚙️ Services",
     "opportunity_rankings": "🏆 Opportunity Rankings",
     "weight_optimization": "⚖️ Weight Optimization",
+    "decision_intelligence": "🧠 Decision Intelligence",
+    "decision_detail": "🧠 Decision Detail",
     "trades_log": "📜 Trades Log",
 }
 V4_WALLET_PAGES = {"wallets", "wallet_stats", "top_wallet", "new_wallets"}
@@ -2373,6 +2376,7 @@ class ConsoleNavigationState:
     history: list[str] = _v4_field(default_factory=list)
     favorites: list[str] = _v4_field(default_factory=list)
     recent_pages: list[str] = _v4_field(default_factory=list)
+    decision_detail_rank: int = 0
 
 
 _v3_console_init = TelegramConsole.__init__
@@ -2412,6 +2416,7 @@ def _v4_is_page_callback(self: TelegramConsole, callback_id: str) -> bool:
         or callback_id == V4_FAVORITE_TOGGLE_CALLBACK
         or callback_id in V4_FAVORITE_PAGE_CALLBACKS
         or callback_id in V4_CONTEXT_CALLBACKS
+        or callback_id.startswith("di_r")
     )
 
 
@@ -2483,12 +2488,23 @@ def _v4_detail_rows(page: str, context: ConsolePageContext) -> list[str]:
             "Live Trading: 🔴 Disabled",
         ]
     if page == "opportunity_rankings":
+        from src.analysis.decision_intelligence import explain_opportunities, format_decision_intelligence_telegram
         from src.analysis.opportunity_feed import get_paper_trading_opportunities
-        from src.analysis.opportunity_scoring_v3 import format_opportunity_ranking_text
         from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB
 
         rows = get_paper_trading_opportunities(limit=10, portfolio_db_path=DEFAULT_PAPER_TRADING_DB)
-        return format_opportunity_ranking_text(rows, limit=10).splitlines()
+        explanations = explain_opportunities(rows, db_path=DEFAULT_PAPER_TRADING_DB, now=context.now)
+        return format_decision_intelligence_telegram({"explanations": explanations}, limit=10).splitlines()
+    if page == "decision_intelligence":
+        from src.analysis.decision_intelligence import build_decision_intelligence_report, format_decision_intelligence_telegram
+        from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB
+
+        report = build_decision_intelligence_report(
+            context.paper.get("db_path") or DEFAULT_PAPER_TRADING_DB,
+            limit=10,
+            now=context.now,
+        )
+        return format_decision_intelligence_telegram(report, limit=10).splitlines()
     if page == "weight_optimization":
         from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB
         from src.analysis.signal_weight_report import build_signal_weight_report, format_weight_optimization_telegram
@@ -2614,6 +2630,7 @@ def _v4_page_response(self: TelegramConsole, page: str, state: ConsoleNavigation
             history=state.history,
             favorites=state.favorites,
             recent_pages=state.recent_pages,
+            decision_detail_rank=state.decision_detail_rank,
         ),
         reply_markup=page_reply_markup(page, state),
         parse_mode=TELEGRAM_HTML_PARSE_MODE,
@@ -2640,6 +2657,13 @@ def _v4_handle_page_callback(self: TelegramConsole, telegram_user_id: int, callb
                 elif page != HOME_PAGE:
                     state.favorites.append(page)
                 target = page
+            elif callback_id.startswith("di_r"):
+                from src.analysis.decision_intelligence import parse_decision_detail_callback
+
+                state.decision_detail_rank = parse_decision_detail_callback(callback_id) or 0
+                _v4_remember_recent(state, page)
+                state.history.append(page)
+                target = "decision_detail"
             else:
                 target = (
                     PAGE_NAV_CALLBACKS.get(callback_id)
@@ -2718,6 +2742,28 @@ _v4_render_console_page_with_navigation = render_console_page
 _v4_page_reply_markup_with_navigation = page_reply_markup
 
 
+def _decision_detail_for_rank(explanations: list[dict[str, Any]], rank: int) -> dict[str, Any]:
+    for item in explanations:
+        if int(item.get("rank") or 0) == int(rank):
+            return item
+    if explanations and rank > 0:
+        index = min(rank - 1, len(explanations) - 1)
+        return explanations[index]
+    return {
+        "rank": rank,
+        "decision": "WATCH",
+        "title": "unknown",
+        "summary": "No decision explanation available for this rank.",
+        "positives": [],
+        "risks": [],
+        "decision_reasons": [],
+        "blocking_reasons": [],
+        "confidence_reducers": [],
+        "execution_prevented": [],
+        "improvement_suggestions": [],
+    }
+
+
 def _paper_trades_log_details(paper: dict[str, Any]) -> list[str]:
     rows: list[str] = []
     for trade in (paper.get("recent_trades") or [])[:8]:
@@ -2743,6 +2789,7 @@ def render_console_page(
     history: list[str] | None = None,
     favorites: list[str] | None = None,
     recent_pages: list[str] | None = None,
+    decision_detail_rank: int = 0,
 ) -> str:
     if page == "portfolio_analytics":
         body = _v3_render_detail_page(
@@ -2776,6 +2823,29 @@ def render_console_page(
     if page == "trades_log":
         body = _v3_render_detail_page("📜 Trades Log", _paper_trades_log_details(context.paper), context.now)
         return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
+    if page == "decision_intelligence":
+        body = _v3_render_detail_page(
+            "🧠 Decision Intelligence",
+            _v4_detail_rows("decision_intelligence", context),
+            context.now,
+        )
+        return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
+    if page == "decision_detail":
+        from src.analysis.decision_intelligence import build_decision_intelligence_report, format_decision_detail_telegram
+        from src.analysis.paper_trading_engine import DEFAULT_PAPER_TRADING_DB
+
+        report = build_decision_intelligence_report(
+            context.paper.get("db_path") or DEFAULT_PAPER_TRADING_DB,
+            limit=10,
+            now=context.now,
+        )
+        explanation = _decision_detail_for_rank(report.get("explanations") or [], decision_detail_rank)
+        body = _v3_render_detail_page(
+            "🧠 Decision Intelligence",
+            format_decision_detail_telegram(explanation).splitlines(),
+            context.now,
+        )
+        return _v4_wrap_page(body, page=page, history=list(history or []), favorites=list(favorites or []), recent_pages=list(recent_pages or []))
     return _v4_render_console_page_with_navigation(
         page,
         config=config,
@@ -2796,5 +2866,17 @@ def page_reply_markup(page: str, state: ConsoleNavigationState | None = None) ->
     if page == "performance":
         rows = list(markup["inline_keyboard"])
         rows.insert(2, [{"text": "📜 Trades Log", "callback_data": "quick_trades_log"}])
+        rows.insert(3, [{"text": "🧠 Decision Intelligence", "callback_data": "quick_decision_intelligence"}])
+        markup = {"inline_keyboard": rows}
+    if page in {"opportunity_rankings", "decision_intelligence", "portfolio_analytics", "trades_log"}:
+        from src.analysis.decision_intelligence import decision_detail_callback
+
+        rows = list(markup["inline_keyboard"])
+        if page != "decision_intelligence":
+            rows.insert(0, [{"text": "🧠 Decision Intelligence", "callback_data": "quick_decision_intelligence"}])
+        rank_rows: list[list[dict[str, str]]] = []
+        for rank in range(1, 6):
+            rank_rows.append([{"text": f"#{rank} Detail", "callback_data": decision_detail_callback(rank)}])
+        rows = rank_rows + rows
         markup = {"inline_keyboard": rows}
     return markup
