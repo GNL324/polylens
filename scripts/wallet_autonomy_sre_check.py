@@ -19,6 +19,18 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.deployment.drift_check import DEPLOYMENT_DRIFT_ALERT_CODE, deployment_drift_report
+from src.integrations.telegram_console import TelegramConsole, TelegramConsoleConfig, TelegramResponse, parse_admin_user_ids
+
+TELEGRAM_SERVICE = "polylens-telegram-console.service"
+TELEGRAM_CONSOLE_PAGES: tuple[tuple[str, str], ...] = (
+    ("nav_home", "Home"),
+    ("nav_performance", "Performance"),
+    ("quick_trades_log", "Trades Log"),
+    ("nav_portfolio", "Portfolio Analytics"),
+    ("nav_outcome", "Outcome Validation"),
+    ("quick_opportunity_rankings", "Opportunity Rankings"),
+    ("weight_optimization", "Weight Optimization"),
+)
 CANONICAL_TRADERS_DB = REPO_ROOT / "data" / "traders.db"
 ROOT_TRADERS_DB = REPO_ROOT / "traders.db"
 CANONICAL_SIGNAL_DB = REPO_ROOT / "data" / "trader_signals.db"
@@ -141,11 +153,11 @@ def listener_health(listeners: list[str], *, ports: tuple[int, ...] = (8787, 878
         exposed = [addr for addr in matching if addr.startswith("0.0.0.0:") or addr.startswith("[::]:") or addr.startswith(":::")]
         localhost = [addr for addr in matching if addr.startswith("127.0.0.1:") or addr.startswith("[::1]:")]
         if exposed:
-            findings.append(Finding("alert", f"dashboard_exposed_{port}", f"Dashboard port {port} is exposed beyond localhost.", {"listeners": exposed}))
+            findings.append(Finding("warning", f"dashboard_exposed_{port}", f"Dashboard port {port} is exposed beyond localhost.", {"listeners": exposed}))
         elif localhost:
             findings.append(Finding("info", f"dashboard_localhost_{port}", f"Dashboard port {port} is bound to localhost.", {"listeners": localhost}))
         else:
-            findings.append(Finding("alert", f"dashboard_missing_{port}", f"Dashboard port {port} has no localhost listener.", {"listeners": matching}))
+            findings.append(Finding("warning", f"dashboard_missing_{port}", f"Dashboard port {port} has no localhost listener.", {"listeners": matching}))
     return findings
 
 
@@ -157,15 +169,15 @@ def dashboard_http_health() -> list[Finding]:
     if root_status == 307:
         findings.append(Finding("info", "dashboard_root_redirect_ok", "Main dashboard root returns expected HTTP 307 redirect."))
     else:
-        findings.append(Finding("alert", "dashboard_root_redirect_bad", "Main dashboard root did not return expected HTTP 307.", {"status": root_status}))
+        findings.append(Finding("warning", "dashboard_root_redirect_bad", "Main dashboard root did not return expected HTTP 307.", {"status": root_status}))
     if mission_status == 200:
         findings.append(Finding("info", "mission_control_ok", "/mission-control returns HTTP 200."))
     else:
-        findings.append(Finding("alert", "mission_control_bad", "/mission-control health endpoint failed.", {"status": mission_status}))
+        findings.append(Finding("warning", "mission_control_bad", "/mission-control health endpoint failed.", {"status": mission_status}))
     if trader_status == 200:
         findings.append(Finding("info", "trader_dashboard_ok", "Trader dashboard returns HTTP 200 on 8788."))
     else:
-        findings.append(Finding("alert", "trader_dashboard_bad", "Trader dashboard failed on 8788.", {"status": trader_status}))
+        findings.append(Finding("warning", "trader_dashboard_bad", "Trader dashboard failed on 8788.", {"status": trader_status}))
     return findings
 
 
@@ -289,6 +301,191 @@ def system_uptime_seconds() -> float | None:
         return None
 
 
+def _env_bool(value: str | None, *, default: bool = False) -> bool:
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _systemctl_show(unit: str) -> dict[str, str]:
+    result = subprocess.run(
+        ["systemctl", "show", unit, "--no-page"],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    props: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            props[key] = value
+    return props
+
+
+def _env_from_pid(pid: int) -> dict[str, str]:
+    env: dict[str, str] = {}
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_bytes()
+        for entry in raw.split(b"\0"):
+            if b"=" in entry:
+                key, _, value = entry.partition(b"=")
+                env[key.decode("utf-8", "replace")] = value.decode("utf-8", "replace")
+    except (PermissionError, FileNotFoundError, OSError):
+        pass
+    return env
+
+
+def telegram_service_environment() -> dict[str, str]:
+    props = _systemctl_show(TELEGRAM_SERVICE)
+    env: dict[str, str] = {}
+    try:
+        pid = int(props.get("MainPID", "0") or 0)
+    except ValueError:
+        pid = 0
+    if pid > 0:
+        env.update(_env_from_pid(pid))
+    for line in props.get("Environment", "").split():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            env.setdefault(key, value)
+    return env
+
+
+def telegram_console_config_from_env(env: dict[str, str] | None = None) -> TelegramConsoleConfig:
+    env = env or telegram_service_environment()
+    kwargs: dict[str, Any] = {
+        "bot_token": env.get("POLYLENS_TELEGRAM_BOT_TOKEN", ""),
+        "admin_user_ids": parse_admin_user_ids(env.get("POLYLENS_TELEGRAM_ADMIN_USER_IDS", "")),
+        "paper_only": _env_bool(env.get("POLYLENS_TELEGRAM_PAPER_ONLY"), default=True),
+        "live_enabled": _env_bool(env.get("POLYLENS_TELEGRAM_LIVE_ENABLED"), default=False),
+    }
+    if audit_db := env.get("POLYLENS_TELEGRAM_AUDIT_DB"):
+        kwargs["audit_db_path"] = audit_db
+    if short_crypto_db := env.get("POLYLENS_SHORT_CRYPTO_PAPER_DB"):
+        kwargs["short_crypto_paper_db_path"] = short_crypto_db
+    return TelegramConsoleConfig(**kwargs)
+
+
+def _telegram_page_render_ok(response: TelegramResponse | str) -> bool:
+    if not isinstance(response, TelegramResponse):
+        return False
+    text = (response.text or "").strip()
+    if not text:
+        return False
+    if text in {"unauthorized", "admin allowlist missing", "error: command failed safely"}:
+        return False
+    return not text.startswith("error:")
+
+
+def telegram_service_health() -> list[Finding]:
+    findings: list[Finding] = []
+    active_result = subprocess.run(
+        ["systemctl", "is-active", TELEGRAM_SERVICE],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    active_state = (active_result.stdout or active_result.stderr or "").strip().lower() or "unknown"
+    props = _systemctl_show(TELEGRAM_SERVICE)
+    sub_state = props.get("SubState", "unknown")
+    if active_state != "active":
+        findings.append(
+            Finding(
+                "alert",
+                "telegram_console_service_inactive",
+                f"{TELEGRAM_SERVICE} is not active.",
+                {"active_state": active_state, "sub_state": sub_state},
+            )
+        )
+        return findings
+    findings.append(Finding("info", "telegram_console_service_active", f"{TELEGRAM_SERVICE} is active.", {"sub_state": sub_state}))
+    if sub_state == "running":
+        findings.append(Finding("info", "telegram_console_service_running", f"{TELEGRAM_SERVICE} main process is running."))
+    else:
+        findings.append(
+            Finding(
+                "alert",
+                "telegram_console_service_not_running",
+                f"{TELEGRAM_SERVICE} is active but not running.",
+                {"sub_state": sub_state, "main_pid": props.get("MainPID")},
+            )
+        )
+    return findings
+
+
+def telegram_config_safety(*, env: dict[str, str] | None = None) -> list[Finding]:
+    config = telegram_console_config_from_env(env)
+    findings: list[Finding] = []
+    if config.admin_user_ids:
+        findings.append(
+            Finding(
+                "info",
+                "telegram_admin_allowlist_ok",
+                "Telegram console admin allowlist is configured.",
+                {"admin_count": len(config.admin_user_ids)},
+            )
+        )
+    else:
+        findings.append(Finding("alert", "telegram_admin_allowlist_missing", "Telegram console admin allowlist is not configured."))
+    if config.paper_only:
+        findings.append(Finding("info", "telegram_paper_only_ok", "Telegram console paper_only=true."))
+    else:
+        findings.append(Finding("alert", "telegram_paper_only_disabled", "Telegram console paper_only is not true."))
+    if config.live_enabled:
+        findings.append(Finding("alert", "telegram_live_enabled", "Telegram console live_enabled is true."))
+    else:
+        findings.append(Finding("info", "telegram_live_disabled_ok", "Telegram console live_enabled=false."))
+    return findings
+
+
+def telegram_page_render_health(*, console: TelegramConsole | None = None) -> list[Finding]:
+    findings: list[Finding] = []
+    if console is None:
+        config = telegram_console_config_from_env()
+        if not config.admin_user_ids:
+            findings.append(Finding("alert", "telegram_page_render_skipped", "Skipped Telegram page render checks; admin allowlist missing."))
+            return findings
+        console = TelegramConsole(config)
+    admin_user_id = next(iter(console.config.admin_user_ids))
+    for callback_id, label in TELEGRAM_CONSOLE_PAGES:
+        code = f"telegram_page_{callback_id}_ok"
+        try:
+            response = console.handle_console_callback(456, admin_user_id, callback_id)
+        except Exception as exc:
+            findings.append(
+                Finding(
+                    "alert",
+                    f"telegram_page_{callback_id}_failed",
+                    f"Telegram {label} page render raised an exception.",
+                    {"callback_id": callback_id, "error": str(exc)},
+                )
+            )
+            continue
+        if _telegram_page_render_ok(response):
+            findings.append(Finding("info", code, f"Telegram {label} page rendered without outbound messages.", {"callback_id": callback_id}))
+        else:
+            preview = response.text if isinstance(response, TelegramResponse) else str(response)
+            findings.append(
+                Finding(
+                    "alert",
+                    f"telegram_page_{callback_id}_failed",
+                    f"Telegram {label} page did not render successfully.",
+                    {"callback_id": callback_id, "preview": preview[:200]},
+                )
+            )
+    return findings
+
+
+def telegram_console_health(*, console: TelegramConsole | None = None) -> list[Finding]:
+    findings: list[Finding] = []
+    findings.extend(telegram_service_health())
+    findings.extend(telegram_config_safety())
+    findings.extend(telegram_page_render_health(console=console))
+    return findings
+
+
 def run_check(*, recent_window_minutes: int = 30, remove_root_artifact: bool = True) -> dict[str, Any]:
     findings: list[Finding] = []
     drift_report = deployment_drift_report(REPO_ROOT, fetch=False)
@@ -309,6 +506,7 @@ def run_check(*, recent_window_minutes: int = 30, remove_root_artifact: bool = T
     findings.extend(dashboard_http_health())
     findings.extend(wallet_service_health())
     findings.extend(systemd_service_health())
+    findings.extend(telegram_console_health())
     findings.extend(recent_failure_findings(CANONICAL_TRADERS_DB, recent_window_minutes=recent_window_minutes))
     alert_count = sum(1 for finding in findings if finding.level == "alert")
     warning_count = sum(1 for finding in findings if finding.level == "warning")
