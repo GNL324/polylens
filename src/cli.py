@@ -4635,6 +4635,19 @@ def main() -> None:
     telegram_daily_parser.add_argument("--dry-run", action="store_true", help="print report without Telegram delivery")
     telegram_daily_parser.add_argument("--json", action="store_true")
 
+    telegram_sre_check_parser = sub.add_parser("telegram-sre-check", help="run read-only wallet autonomy SRE health check")
+    telegram_sre_check_parser.add_argument("--recent-window-minutes", type=int, default=int(os.getenv("POLYLENS_SRE_RECENT_WINDOW_MINUTES", "30")))
+    telegram_sre_check_parser.add_argument("--no-remove-root-artifact", action="store_true")
+    telegram_sre_check_parser.add_argument("--json", action="store_true")
+
+    telegram_sre_alert_parser = sub.add_parser("telegram-sre-alert", help="send proactive Telegram SRE alert when status is alert/warning or changed")
+    telegram_sre_alert_parser.add_argument("--recent-window-minutes", type=int, default=int(os.getenv("POLYLENS_SRE_RECENT_WINDOW_MINUTES", "30")))
+    telegram_sre_alert_parser.add_argument("--no-remove-root-artifact", action="store_true")
+    telegram_sre_alert_parser.add_argument("--state-path", default=None, help="dedupe state JSON path")
+    telegram_sre_alert_parser.add_argument("--db-path", default=None, help="audit SQLite database path")
+    telegram_sre_alert_parser.add_argument("--dry-run", action="store_true", help="evaluate alert without Telegram delivery")
+    telegram_sre_alert_parser.add_argument("--json", action="store_true")
+
     cicd_detect_parser = sub.add_parser("cicd-detect", help="detect new Gitea main commits and affected runtime services")
     cicd_detect_parser.add_argument("--repo-path", default=".")
     cicd_detect_parser.add_argument("--remote", default="origin")
@@ -5422,6 +5435,36 @@ def main() -> None:
         else:
             print(format_daily_intelligence_report(report))
             print(f"Delivery: {result.get('delivery_status')}")
+    elif args.command == "telegram-sre-check":
+        from src.integrations.telegram_sre import build_sre_report, format_sre_status_telegram
+
+        report = build_sre_report(
+            recent_window_minutes=args.recent_window_minutes,
+            remove_root_artifact=not args.no_remove_root_artifact,
+        )
+        if args.json:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            print(format_sre_status_telegram(report))
+        raise SystemExit(0 if report.get("alert_count", 0) == 0 else 2)
+    elif args.command == "telegram-sre-alert":
+        from src.integrations.telegram_sre import build_sre_report, default_state_path, send_proactive_sre_alert
+
+        report = build_sre_report(
+            recent_window_minutes=args.recent_window_minutes,
+            remove_root_artifact=not args.no_remove_root_artifact,
+        )
+        result = send_proactive_sre_alert(
+            report,
+            config=TelegramNotificationConfig.from_env(audit_db_path=args.db_path),
+            state_path=args.state_path or default_state_path(),
+            dry_run=args.dry_run,
+        )
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        else:
+            print(f"SRE alert delivery: {result.get('delivery_status')} (reason={result.get('reason')})")
+        raise SystemExit(0 if report.get("alert_count", 0) == 0 else 2)
     elif args.command == "cicd-detect":
         from src.cicd.detector import GitDeploymentDetector
 

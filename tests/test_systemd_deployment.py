@@ -32,6 +32,8 @@ def test_service_files_exist():
     assert (SYSTEMD / "polylens-telegram-console.service").exists()
     assert (SYSTEMD / "polylens-telegram-daily-report.service").exists()
     assert (SYSTEMD / "polylens-telegram-daily-report.timer").exists()
+    assert (SYSTEMD / "polylens-telegram-sre-alert.service").exists()
+    assert (SYSTEMD / "polylens-telegram-sre-alert.timer").exists()
 
 
 def test_service_command_is_correct():
@@ -285,6 +287,29 @@ def test_telegram_daily_report_service_and_timer_are_safe():
     assert "Unit=polylens-telegram-daily-report.service" in timer
 
 
+def test_telegram_sre_alert_service_and_timer_are_safe():
+    service = (SYSTEMD / "polylens-telegram-sre-alert.service").read_text()
+    timer = (SYSTEMD / "polylens-telegram-sre-alert.timer").read_text()
+    assert "Type=oneshot" in service
+    assert "WorkingDirectory=/home/noel/polylens" in service
+    assert "Environment=PYTHONPATH=/home/noel/polylens" in service
+    assert "POLYLENS_TELEGRAM_NOTIFICATIONS_ENABLED=true" in service
+    assert "POLYLENS_TELEGRAM_SRE_ALERT_ENABLED=true" in service
+    assert "POLYLENS_TELEGRAM_PAPER_ONLY=true" in service
+    assert "POLYLENS_TELEGRAM_LIVE_ENABLED=false" in service
+    assert "LIVE_TRADING=false" in service
+    assert "DRY_RUN=true" in service
+    assert "POLYLENS_LIVE_TRADING=false" in service
+    assert "POLYLENS_KALSHI_LIVE_SENDS_ENABLED=false" in service
+    assert "POLYLENS_POLYMARKET_LIVE_SENDS_ENABLED=false" in service
+    assert "telegram-sre-alert" in service
+    assert "trade-" not in service
+    assert "--live" not in service
+    assert "OnCalendar=*-*-* *:0/15:00" in timer
+    assert "Persistent=true" in timer
+    assert "Unit=polylens-telegram-sre-alert.service" in timer
+
+
 AUTONOMOUS_SERVICE_FILES = [
     "polylens-dashboard.service",
     "polylens-trader-dashboard.service",
@@ -299,6 +324,7 @@ AUTONOMOUS_SERVICE_FILES = [
     "kalshi-market-recorder.service",
     "polylens-telegram-console.service",
     "polylens-telegram-daily-report.service",
+    "polylens-telegram-sre-alert.service",
 ]
 
 

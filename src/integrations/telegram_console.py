@@ -2337,6 +2337,7 @@ V4_CONTEXT_CALLBACKS = {
     "quick_disk": "disk",
     "quick_memory": "memory",
     "quick_services": "services",
+    "quick_sre_status": "sre_status",
     "quick_opportunity_rankings": "opportunity_rankings",
     "quick_weight_optimization": "weight_optimization",
     "quick_decision_intelligence": "decision_intelligence",
@@ -2361,6 +2362,7 @@ V4_PAGE_TITLES = {
     "disk": "💾 Disk",
     "memory": "🧠 Memory",
     "services": "⚙️ Services",
+    "sre_status": "🛡️ Ops Health",
     "opportunity_rankings": "🏆 Opportunity Rankings",
     "weight_optimization": "⚖️ Weight Optimization",
     "decision_intelligence": "🧠 Decision Intelligence",
@@ -2487,6 +2489,11 @@ def _v4_detail_rows(page: str, context: ConsolePageContext) -> list[str]:
             f"Paper Trading: {status_icon(context.paper_health.get('status'))} {service_status_label(context.paper_health.get('status'))}",
             "Live Trading: 🔴 Disabled",
         ]
+    if page == "sre_status":
+        from src.integrations.telegram_sre import build_sre_report, format_sre_status_telegram
+
+        report = build_sre_report(remove_root_artifact=False)
+        return format_sre_status_telegram(report).splitlines()
     if page == "opportunity_rankings":
         from src.analysis.decision_intelligence import explain_opportunities, format_decision_intelligence_telegram
         from src.analysis.opportunity_feed import get_paper_trading_opportunities
@@ -2537,7 +2544,7 @@ def render_console_page(
             now=context.now,
             top_wallets=context.top_wallets,
         )
-    elif page in {"win_rate", "top_wallet", "new_wallets", "daily_report", "weekly_report", "monthly_report", "disk", "memory", "services"}:
+    elif page in {"win_rate", "top_wallet", "new_wallets", "daily_report", "weekly_report", "monthly_report", "disk", "memory", "services", "sre_status"}:
         body = _v3_render_detail_page(V4_PAGE_TITLES[page], _v4_detail_rows(page, context), context.now)
     else:
         body = _v3_render_console_page(page, config=config, context=context)
@@ -2586,7 +2593,7 @@ def page_reply_markup(page: str, state: ConsoleNavigationState | None = None) ->
         "system": [[
             {"text": "💾 Disk", "callback_data": "quick_disk"},
             {"text": "🧠 Memory", "callback_data": "quick_memory"},
-        ], [{"text": "⚙️ Services", "callback_data": "quick_services"}]],
+        ], [{"text": "⚙️ Services", "callback_data": "quick_services"}], [{"text": "🛡️ Ops Health", "callback_data": "quick_sre_status"}]],
     }
     rows = [*(home_rows if page == HOME_PAGE else context_rows.get(page, []))]
     rows.extend(_v4_favorite_buttons(state.favorites))
@@ -2878,5 +2885,10 @@ def page_reply_markup(page: str, state: ConsoleNavigationState | None = None) ->
         for rank in range(1, 6):
             rank_rows.append([{"text": f"#{rank} Detail", "callback_data": decision_detail_callback(rank)}])
         rows = rank_rows + rows
+        markup = {"inline_keyboard": rows}
+    if page == "system":
+        rows = list(markup["inline_keyboard"])
+        if not any(item.get("callback_data") == "quick_sre_status" for row in rows for item in row):
+            rows.insert(0, [{"text": "🛡️ Ops Health", "callback_data": "quick_sre_status"}])
         markup = {"inline_keyboard": rows}
     return markup

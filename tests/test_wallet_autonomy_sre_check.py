@@ -8,16 +8,11 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from src.deployment.drift_check import DEPLOYMENT_DRIFT_ALERT_CODE
+from src.integrations import sre_health as sre
 from src.integrations.telegram_console import TelegramConsole, TelegramConsoleConfig, TelegramResponse
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "wallet_autonomy_sre_check.py"
-spec = importlib.util.spec_from_file_location("wallet_autonomy_sre_check", SCRIPT)
-sre = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-sys.modules[spec.name] = sre
-spec.loader.exec_module(sre)
 
 
 def test_root_traders_db_absent_is_info(tmp_path):
@@ -243,3 +238,43 @@ def test_telegram_page_render_success(tmp_path, monkeypatch):
     findings = sre.telegram_page_render_health(console=console)
     assert len(findings) == len(sre.TELEGRAM_CONSOLE_PAGES)
     assert all(finding.level == "info" for finding in findings)
+
+
+def test_run_check_includes_telegram_console_health(monkeypatch, tmp_path):
+    _passing_run_check_patches(monkeypatch, tmp_path)
+    called = {"telegram": False}
+
+    def _telegram_health(**_kwargs):
+        called["telegram"] = True
+        return [sre.Finding("info", "telegram_console_service_running", "ok")]
+
+    monkeypatch.setattr(sre, "telegram_console_health", _telegram_health)
+    report = sre.run_check()
+    assert called["telegram"] is True
+    assert any(item["code"] == "telegram_console_service_running" for item in report["findings"])
+
+
+def test_run_check_requires_deployment_drift_report(monkeypatch, tmp_path):
+    _passing_run_check_patches(monkeypatch, tmp_path)
+    captured: dict[str, object] = {}
+
+    def _drift(repo, *, fetch=False):
+        captured["repo"] = repo
+        captured["fetch"] = fetch
+        return {"findings": [{"level": "info", "code": "deployment_revision_ok", "message": "ok", "details": {}}]}
+
+    monkeypatch.setattr(sre, "deployment_drift_report", _drift)
+    sre.run_check()
+    assert captured["fetch"] is False
+    assert captured["repo"] == sre.REPO_ROOT
+
+
+def test_script_wrapper_reexports_main_semantics():
+    spec = importlib.util.spec_from_file_location("wallet_autonomy_sre_check", SCRIPT)
+    wrapper = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(wrapper)
+    assert wrapper.run_check is sre.run_check
+    assert wrapper.deployment_drift_report is sre.deployment_drift_report
+    assert wrapper.telegram_console_health is sre.telegram_console_health
+    assert wrapper.main is sre.main

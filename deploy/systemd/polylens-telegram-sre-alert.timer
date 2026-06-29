@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Polylens Telegram SRE proactive alert check every 15 minutes
+
+[Timer]
+OnCalendar=*-*-* *:0/15:00
+Persistent=true
+Unit=polylens-telegram-sre-alert.service
+
+[Install]
+WantedBy=timers.target

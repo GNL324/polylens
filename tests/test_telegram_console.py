@@ -365,7 +365,7 @@ def test_menu_navigation_to_system_menu(tmp_path):
     assert response.text.splitlines()[0] == "🏠 Home › ⚙️ System"
     assert "Updated:\n8:34:56 AM EDT" in response
     assert response.reply_markup is not None
-    assert {"quick_disk", "quick_memory", "quick_services", "nav_home", "nav_back", "refresh_page"}.issubset(_callback_ids(response.reply_markup))
+    assert {"quick_disk", "quick_memory", "quick_services", "quick_sre_status", "nav_home", "nav_back", "refresh_page"}.issubset(_callback_ids(response.reply_markup))
 
 
 def test_back_navigation_returns_main_menu(tmp_path):
@@ -1295,9 +1295,27 @@ def test_v4_recent_pages_back_stack_and_home_clear_history(tmp_path):
         ("nav_wallets", "quick_wallet_stats", "Wallet Stats"),
         ("nav_reports", "quick_report_daily", "📅 Daily"),
         ("nav_system", "quick_services", "⚙️ Services"),
+        ("nav_system", "quick_sre_status", "🛡️ Ops Health"),
     ],
 )
-def test_v4_context_actions_navigate_to_read_only_pages(tmp_path, parent_callback, quick_callback, heading):
+def test_v4_context_actions_navigate_to_read_only_pages(tmp_path, parent_callback, quick_callback, heading, monkeypatch):
+    if quick_callback == "quick_sre_status":
+        from src.integrations import telegram_sre
+
+        monkeypatch.setattr(
+            telegram_sre,
+            "build_sre_report",
+            lambda **kwargs: {
+                "status": "healthy",
+                "alert_count": 0,
+                "warning_count": 0,
+                "checked_at": "2026-06-28T12:00:00Z",
+                "deployment_drift": {"status": "healthy"},
+                "wallet_service_health": {"status": "healthy"},
+                "recommended_actions": ["No action required."],
+                "findings": [],
+            },
+        )
     console = _dashboard_console(tmp_path)
 
     console.handle_console_callback(456, 123, parent_callback)

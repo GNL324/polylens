@@ -1,0 +1,202 @@
+from __future__ import annotations
+
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from src.integrations.sre_health import run_check, utc_now
+from src.integrations.telegram_notifications import TelegramNotificationConfig, TelegramNotificationService
+
+DEFAULT_SRE_ALERT_STATE_PATH = Path("data/sre_telegram_alert_state.json")
+
+
+def build_sre_report(
+    *,
+    recent_window_minutes: int = 30,
+    remove_root_artifact: bool = False,
+    include_deployment_drift: bool = True,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Run the read-only SRE health check for Telegram surfaces."""
+    return run_check(
+        recent_window_minutes=recent_window_minutes,
+        remove_root_artifact=remove_root_artifact,
+        include_deployment_drift=include_deployment_drift,
+        now=now,
+    )
+
+
+def alert_fingerprint(report: dict[str, Any]) -> str:
+    parts = [str(report.get("status") or "unknown")]
+    for finding in sorted(report.get("findings") or [], key=lambda item: str(item.get("code"))):
+        if finding.get("level") in {"alert", "warning"}:
+            parts.append(f"{finding['level']}:{finding.get('code')}")
+    return "|".join(parts)
+
+
+def load_alert_state(path: str | Path = DEFAULT_SRE_ALERT_STATE_PATH) -> dict[str, Any]:
+    target = Path(path)
+    if not target.exists():
+        return {}
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_alert_state(state: dict[str, Any], path: str | Path = DEFAULT_SRE_ALERT_STATE_PATH) -> Path:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return target
+
+
+def should_send_proactive_alert(
+    report: dict[str, Any],
+    *,
+    state: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    """Send only on alert/warning or status change; suppress duplicate fingerprints."""
+    state = dict(state or {})
+    status = str(report.get("status") or "unknown")
+    warning_count = int(report.get("warning_count") or 0)
+    fingerprint = alert_fingerprint(report)
+    previous_status = str(state.get("last_status") or "")
+    previous_fingerprint = str(state.get("last_sent_fingerprint") or "")
+
+    if status == "healthy" and warning_count == 0:
+        if previous_status and previous_status != "healthy":
+            if fingerprint != previous_fingerprint:
+                return True, "recovered"
+        return False, "healthy_silent"
+
+    if status == "alert" or warning_count > 0:
+        if fingerprint == previous_fingerprint:
+            return False, "duplicate"
+        return True, "alert_or_warning"
+
+    if status != previous_status:
+        if fingerprint == previous_fingerprint:
+            return False, "duplicate"
+        return True, "status_changed"
+
+    return False, "noop"
+
+
+def update_alert_state(report: dict[str, Any], *, state: dict[str, Any] | None = None, sent: bool = False) -> dict[str, Any]:
+    state = dict(state or {})
+    state["last_status"] = report.get("status")
+    state["last_checked_at"] = report.get("checked_at") or utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    state["last_fingerprint"] = alert_fingerprint(report)
+    if sent:
+        state["last_sent_fingerprint"] = state["last_fingerprint"]
+        state["last_sent_at"] = state["last_checked_at"]
+    return state
+
+
+def format_sre_status_telegram(report: dict[str, Any]) -> str:
+    status = str(report.get("status") or "unknown").upper()
+    icon = "✅" if status == "HEALTHY" else "⛔"
+    drift = report.get("deployment_drift") or {}
+    wallet = report.get("wallet_service_health") or {}
+    lines = [
+        "🛡️ Ops Health",
+        "",
+        f"{icon} Status: {status}",
+        f"Alerts: {report.get('alert_count', 0)} | Warnings: {report.get('warning_count', 0)}",
+        f"Checked: {report.get('checked_at', 'unknown')}",
+        "",
+        f"Deployment Drift: {drift.get('status', 'unknown')}",
+        f"Wallet Service: {wallet.get('status', 'unknown')}",
+        "",
+        "Alerts:",
+    ]
+    alert_rows = [item for item in (report.get("findings") or []) if item.get("level") == "alert"]
+    warning_rows = [item for item in (report.get("findings") or []) if item.get("level") == "warning"]
+    if alert_rows:
+        for item in alert_rows[:8]:
+            lines.append(f"• [{item.get('code')}] {item.get('message')}")
+    else:
+        lines.append("• None")
+    if warning_rows:
+        lines.extend(["", "Warnings:"])
+        for item in warning_rows[:5]:
+            lines.append(f"• [{item.get('code')}] {item.get('message')}")
+    lines.extend(["", "Recommended:"])
+    for action in report.get("recommended_actions") or ["No action required."]:
+        lines.append(f"• {action}")
+    lines.extend(["", "Paper-only | Read-only"])
+    return "\n".join(lines)
+
+
+def format_sre_alert_telegram(report: dict[str, Any], *, reason: str = "alert") -> str:
+    status = str(report.get("status") or "unknown").upper()
+    title = "SRE Alert" if reason != "recovered" else "SRE Recovered"
+    lines = [
+        f"🛡️ {title}",
+        "",
+        f"Status: {status}",
+        f"Alerts: {report.get('alert_count', 0)} | Warnings: {report.get('warning_count', 0)}",
+        f"Checked: {report.get('checked_at', 'unknown')}",
+        "",
+    ]
+    for item in [row for row in (report.get("findings") or []) if row.get("level") in {"alert", "warning"}][:6]:
+        lines.append(f"• [{item.get('level')}] {item.get('code')}: {item.get('message')}")
+    lines.extend(["", "Open Telegram Console → System → Ops Health for full detail.", "Paper-only | Read-only"])
+    return "\n".join(lines)
+
+
+def send_proactive_sre_alert(
+    report: dict[str, Any],
+    *,
+    config: TelegramNotificationConfig | None = None,
+    state_path: str | Path = DEFAULT_SRE_ALERT_STATE_PATH,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    config = config or TelegramNotificationConfig.from_env()
+    state = load_alert_state(state_path)
+    should_send, reason = should_send_proactive_alert(report, state=state)
+    result: dict[str, Any] = {
+        "should_send": should_send,
+        "reason": reason,
+        "status": report.get("status"),
+        "alert_count": report.get("alert_count"),
+        "warning_count": report.get("warning_count"),
+        "fingerprint": alert_fingerprint(report),
+        "paper_only": True,
+        "read_only": True,
+    }
+    if not should_send:
+        save_alert_state(update_alert_state(report, state=state, sent=False), state_path)
+        result.update({"sent": False, "delivery_status": reason})
+        return result
+    if not _sre_alerts_enabled():
+        save_alert_state(update_alert_state(report, state=state, sent=False), state_path)
+        result.update({"sent": False, "delivery_status": "disabled"})
+        return result
+    text = format_sre_alert_telegram(report, reason=reason)
+    if dry_run:
+        result.update({"sent": False, "delivery_status": "dry_run", "text": text})
+        save_alert_state(update_alert_state(report, state=state, sent=False), state_path)
+        return result
+    delivery = TelegramNotificationService(config).send_notification(
+        "sre_health_alert",
+        text,
+        buttons=[[{"text": "Ops Health", "callback_data": "quick_sre_status"}]],
+    )
+    save_alert_state(update_alert_state(report, state=state, sent=True), state_path)
+    result.update(delivery)
+    return result
+
+
+def _sre_alerts_enabled() -> bool:
+    raw = os.environ.get("POLYLENS_TELEGRAM_SRE_ALERT_ENABLED", "true").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def default_state_path() -> Path:
+    raw = os.environ.get("POLYLENS_SRE_ALERT_STATE_PATH")
+    return Path(raw) if raw else DEFAULT_SRE_ALERT_STATE_PATH
