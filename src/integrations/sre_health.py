@@ -251,8 +251,18 @@ def wallet_service_health() -> list[Finding]:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         return [Finding("alert", "wallet_service_health_bad_json", "wallet-service-health did not emit JSON.", {"error": str(exc)})]
-    if payload.get("status") == "healthy" and not payload.get("stale_cycles") and payload.get("read_only") is True and payload.get("paper_only") is True:
-        return [Finding("info", "wallet_service_health_ok", "wallet-service-health is authoritative healthy.", {"status": payload.get("status"), "success_rate": payload.get("success_rate")})]
+    status = payload.get("status")
+    error_cycles = [c for c in payload.get("cycles", []) if c.get("last_status") == "error"]
+    safety_ok = payload.get("read_only") is True and payload.get("paper_only") is True
+    if status == "healthy" and not error_cycles and safety_ok:
+        return [Finding("info", "wallet_service_health_ok", "wallet-service-health is authoritative healthy.", {"status": status, "success_rate": payload.get("success_rate")})]
+    if status in {"degraded", "warning"} and not error_cycles and safety_ok:
+        return [Finding(
+            "warning",
+            "wallet_service_health_degraded",
+            "wallet-service-health is degraded but no cycles have errored and safety flags are correct.",
+            {"status": status, "stale_cycles": payload.get("stale_cycles", []), "success_rate": payload.get("success_rate")},
+        )]
     return [Finding("alert", "wallet_service_health_unhealthy", "wallet-service-health reported unhealthy/degraded state.", payload)]
 
 
