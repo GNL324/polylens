@@ -538,7 +538,13 @@ def _normalize_opportunity(row: dict[str, Any]) -> PaperOpportunity:
 
 def _has_position(db_path: str | Path, opportunity_id: str) -> bool:
     with closing_connection(db_path) as conn:
-        return conn.execute("SELECT 1 FROM paper_positions WHERE opportunity_id=?", (opportunity_id,)).fetchone() is not None
+        return (
+            conn.execute(
+                "SELECT 1 FROM paper_positions WHERE opportunity_id=? AND status IN ('pending','open','partially_exited')",
+                (opportunity_id,),
+            ).fetchone()
+            is not None
+        )
 
 
 def _open_position_count(db_path: str | Path) -> int:

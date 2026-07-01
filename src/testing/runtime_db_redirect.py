@@ -37,16 +37,19 @@ def assert_isolated_paths_writable(isolated_paths: dict[Path, Path]) -> None:
     for production, isolated in isolated_paths.items():
         try:
             isolated.parent.mkdir(parents=True, exist_ok=True)
-            # Touch-and-write a tiny sentinel to verify real writability.
-            isolated.touch(exist_ok=True)
-            isolated.write_bytes(isolated.read_bytes() or b"probe")
+            # Verify the directory is actually writable by creating and removing
+            # a probe file. Do not create the isolated DB files here: tests
+            # expect isolated paths to be absent until the workload creates them.
+            probe = isolated.parent / ".runtime_db_isolation_probe"
+            probe.write_bytes(b"probe")
+            probe.unlink()
         except OSError as exc:
             failures.append(f"{production.name} -> {isolated}: {exc}")
     if failures:
         raise RuntimeError(
             "Runtime DB isolation target paths are not writable; tests cannot be "
             "run safely without mutating production DBs. Fix temp disk space or "
-            f"permissions. Failures: {failures}"
+            "permissions. Failures: {failures}"
         )
 
 
