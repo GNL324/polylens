@@ -25,6 +25,7 @@ APPROVED_UNTRACKED_PATTERNS: tuple[str, ...] = (
     "data/wallets/*.json",
     "data/reports/*",
     "data/raw/*",
+    "data/sre_telegram_alert_state.json",
     "logs/*.log",
     "traders.db",
     ".pytest_cache/*",
