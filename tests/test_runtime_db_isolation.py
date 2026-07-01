@@ -244,6 +244,23 @@ def test_sqlite3_connect_redirects_default_paths(isolated_runtime_db_paths):
     assert "connect_probe" in _table_names(isolated_runtime_db_paths["traders"])
 
 
+def test_runtime_db_isolation_aborts_when_isolated_target_not_writable(tmp_path):
+    """Guard: if temp isolation is unwritable, fail fast instead of mutating production."""
+    from src.testing.runtime_db_redirect import assert_isolated_paths_writable
+
+    # Make a read-only fake tmp dir
+    readonly_dir = tmp_path / "readonly"
+    readonly_dir.mkdir(parents=True)
+    readonly_dir.chmod(0o555)
+    isolated_paths = {prod: readonly_dir / f"iso_{name}.db" for name, prod in PRODUCTION_RUNTIME_DBS.items()}
+
+    with pytest.raises(RuntimeError, match="Runtime DB isolation target paths are not writable"):
+        assert_isolated_paths_writable(isolated_paths)
+
+    # Restore permissions for pytest cleanup
+    readonly_dir.chmod(0o755)
+
+
 def _snapshot_with(**overrides: str) -> dict[str, str]:
     base = {name: MISSING for name in RUNTIME_DB_FILES}
     base.update(overrides)

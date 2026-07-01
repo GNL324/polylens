@@ -10,6 +10,7 @@ import sqlite3
 
 from src.testing.runtime_db_redirect import (
     PRODUCTION_RUNTIME_DBS,
+    assert_isolated_paths_writable,
     assert_runtime_db_redirect_applied,
     build_isolated_runtime_db_redirect,
     install_runtime_db_redirect,
@@ -48,7 +49,6 @@ def _session_runtime_db_redirect(tmp_path_factory):
     install_runtime_db_redirect(build_isolated_runtime_db_redirect(isolated_paths))
     yield isolated_paths
 
-
 @pytest.fixture
 def signal_db_path(tmp_path) -> Path:
     return isolated_signal_db(tmp_path)
@@ -65,6 +65,7 @@ def _isolate_runtime_sqlite_dbs(tmp_path, monkeypatch, _session_runtime_db_redir
     original_sqlite3_connect = sqlite3.connect
 
     install_runtime_db_redirect(redirect)
+    assert_isolated_paths_writable(isolated_paths)
 
     @contextmanager
     def isolated_closing_connection(

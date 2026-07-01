@@ -27,6 +27,29 @@ def install_runtime_db_redirect(resolver: RedirectResolver | None) -> None:
     _redirect_resolver = resolver
 
 
+def assert_isolated_paths_writable(isolated_paths: dict[Path, Path]) -> None:
+    """Fail fast if isolated temp DBs cannot be created/written.
+
+    This prevents silent fallback to production runtime DBs when temp space
+    is exhausted or permissions are wrong.
+    """
+    failures: list[str] = []
+    for production, isolated in isolated_paths.items():
+        try:
+            isolated.parent.mkdir(parents=True, exist_ok=True)
+            # Touch-and-write a tiny sentinel to verify real writability.
+            isolated.touch(exist_ok=True)
+            isolated.write_bytes(isolated.read_bytes() or b"probe")
+        except OSError as exc:
+            failures.append(f"{production.name} -> {isolated}: {exc}")
+    if failures:
+        raise RuntimeError(
+            "Runtime DB isolation target paths are not writable; tests cannot be "
+            "run safely without mutating production DBs. Fix temp disk space or "
+            f"permissions. Failures: {failures}"
+        )
+
+
 def runtime_db_redirect_active() -> bool:
     return _redirect_resolver is not None
 
