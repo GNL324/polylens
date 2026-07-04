@@ -679,6 +679,11 @@ def _exit_price(event: WalletActivityEvent) -> float | None:
             return amount / shares
         if amount > 0:
             return 1.0
+        # A redeem with no payout means the market resolved against this
+        # position: it's a real exit at $0, not "no exit data available".
+        # Treating it as None left losing positions open forever, which
+        # silently biased win rate and realized P&L toward wins only.
+        return 0.0
     return None
 
 
