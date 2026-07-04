@@ -741,3 +741,54 @@ def test_paper_copy_trader_cli_coverage_gap_report_flag(capsys, monkeypatch, tmp
     output = json.loads(capsys.readouterr().out)
     assert output == {"total_gaps": 2, "wallets_affected": [WALLET]}
     assert calls == [str(db_path)]
+
+
+def test_unwatch_ingestion_gap_risks_excludes_only_flagged_wallets(tmp_path):
+    from src.analysis.paper_copy_trader import unwatch_ingestion_gap_risks
+
+    db_path = tmp_path / "paper_copy.db"
+    wallet_2 = "0x" + "b" * 40
+    watch_trader(WALLET, db_path=db_path)
+    watch_trader(wallet_2, db_path=db_path)
+    run_paper_copy_trader(
+        db_path=db_path,
+        wallets=[WALLET],
+        exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5, timestamp=100)]),
+    )
+    run_paper_copy_trader(
+        db_path=db_path,
+        wallets=[wallet_2],
+        exporter=FakeExporter([_event("buy", wallet=wallet_2, tx_hash="0xbuy2", price=0.5, timestamp=100)]),
+    )
+
+    class PerWalletExporter:
+        def __call__(self, wallet, limit=None, source=None, store=False):
+            # WALLET's live fetch can no longer reach back to its position at
+            # timestamp=100 -- flagged. wallet_2's fetch still covers it fine.
+            oldest = 200 if wallet == WALLET else 50
+            return SimpleNamespace(wallet=wallet, events=[_event("buy", tx_hash="0xlive", price=0.5, timestamp=oldest)])
+
+    result = unwatch_ingestion_gap_risks(db_path=db_path, exporter=PerWalletExporter())
+
+    assert result["wallets_checked"] == 2
+    assert result["count_excluded"] == 1
+    assert result["wallets_excluded"] == [WALLET]
+    assert load_watched_wallets(db_path) == [wallet_2]
+
+
+def test_paper_copy_trader_cli_unwatch_ingestion_gap_risks_flag(capsys, monkeypatch, tmp_path):
+    from src.cli import main
+
+    db_path = tmp_path / "paper_copy.db"
+    calls = []
+
+    def fake_unwatch_ingestion_gap_risks(db_path):
+        calls.append(db_path)
+        return {"wallets_checked": 2, "wallets_excluded": [WALLET], "count_excluded": 1}
+
+    monkeypatch.setattr("src.cli.unwatch_ingestion_gap_risks", fake_unwatch_ingestion_gap_risks)
+    sys.argv = ["polylens", "paper-copy-trader", "--unwatch-ingestion-gap-risks", "--db-path", str(db_path), "--json"]
+    main()
+    output = json.loads(capsys.readouterr().out)
+    assert output == {"wallets_checked": 2, "wallets_excluded": [WALLET], "count_excluded": 1}
+    assert calls == [str(db_path)]
