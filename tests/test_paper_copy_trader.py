@@ -623,3 +623,121 @@ def test_paper_copy_trader_cli_ingestion_gap_report_flag(capsys, monkeypatch, tm
     output = json.loads(capsys.readouterr().out)
     assert output == {"wallets_checked": 1, "wallets_at_risk": 1}
     assert calls == [str(db_path)]
+
+
+def test_run_records_watermark_and_detects_no_gap_on_first_run(tmp_path):
+    from src.analysis.paper_copy_trader import coverage_gap_report
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+
+    result = run_paper_copy_trader(
+        db_path=db_path,
+        exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5, timestamp=100)]),
+    )
+
+    assert result["coverage_gaps_detected"] == 0
+    with closing_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT newest_event_timestamp, oldest_event_timestamp FROM wallet_ingestion_watermarks WHERE wallet=?",
+            (WALLET,),
+        ).fetchone()
+    assert row["newest_event_timestamp"] == 100
+    assert row["oldest_event_timestamp"] == 100
+    assert coverage_gap_report(db_path)["total_gaps"] == 0
+
+
+def test_run_detects_coverage_gap_when_next_fetch_does_not_reach_back_to_prior_watermark(tmp_path):
+    from src.analysis.paper_copy_trader import coverage_gap_report
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+    run_paper_copy_trader(
+        db_path=db_path,
+        exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5, timestamp=100)]),
+    )
+
+    # The next scheduled run's fetch only reaches back to timestamp=500 --
+    # there's a real, never-observed span between 100 and 500 where a
+    # sell/redeem could have happened and would now be permanently missed.
+    result = run_paper_copy_trader(
+        db_path=db_path,
+        exporter=FakeExporter([_event("buy", tx_hash="0xbuy2", price=0.5, timestamp=500)]),
+    )
+
+    assert result["coverage_gaps_detected"] == 1
+    report = coverage_gap_report(db_path)
+    assert report["total_gaps"] == 1
+    assert report["wallets_affected"] == [WALLET]
+    gap = report["gaps"][0]
+    assert gap["gap_start"] == 100
+    assert gap["gap_end"] == 500
+    assert gap["gap_seconds"] == 400
+
+
+def test_run_does_not_flag_a_gap_when_the_next_fetch_still_overlaps_the_prior_watermark(tmp_path):
+    from src.analysis.paper_copy_trader import coverage_gap_report
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+    run_paper_copy_trader(
+        db_path=db_path,
+        exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5, timestamp=100)]),
+    )
+
+    # A real production fetch returns the full reachable history each time,
+    # so the next run's oldest event should still reach back to (or past)
+    # the previous newest -- continuous coverage, no gap.
+    result = run_paper_copy_trader(
+        db_path=db_path,
+        exporter=FakeExporter(
+            [
+                _event("buy", tx_hash="0xbuy1", price=0.5, timestamp=100),
+                _event("sell", tx_hash="0xsell1", price=0.6, timestamp=150),
+            ]
+        ),
+    )
+
+    assert result["coverage_gaps_detected"] == 0
+    assert coverage_gap_report(db_path)["total_gaps"] == 0
+
+
+def test_run_with_explicit_limit_does_not_track_watermark(tmp_path):
+    """A truncated fetch (--limit) isn't a trustworthy signal of real coverage depth."""
+    from src.analysis.paper_copy_trader import coverage_gap_report
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+    run_paper_copy_trader(
+        db_path=db_path,
+        limit=1,
+        exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5, timestamp=100)]),
+    )
+    run_paper_copy_trader(
+        db_path=db_path,
+        limit=1,
+        exporter=FakeExporter([_event("buy", tx_hash="0xbuy2", price=0.5, timestamp=999)]),
+    )
+
+    with closing_connection(db_path) as conn:
+        row = conn.execute("SELECT 1 FROM wallet_ingestion_watermarks WHERE wallet=?", (WALLET,)).fetchone()
+    assert row is None
+    assert coverage_gap_report(db_path)["total_gaps"] == 0
+
+
+def test_paper_copy_trader_cli_coverage_gap_report_flag(capsys, monkeypatch, tmp_path):
+    from src.cli import main
+
+    db_path = tmp_path / "paper_copy.db"
+    calls = []
+
+    def fake_coverage_gap_report(db_path):
+        calls.append(db_path)
+        return {"total_gaps": 2, "wallets_affected": [WALLET]}
+
+    monkeypatch.setattr("src.cli.coverage_gap_report", fake_coverage_gap_report)
+    sys.argv = ["polylens", "paper-copy-trader", "--coverage-gap-report", "--db-path", str(db_path), "--json"]
+    main()
+    output = json.loads(capsys.readouterr().out)
+    assert output == {"total_gaps": 2, "wallets_affected": [WALLET]}
+    assert calls == [str(db_path)]

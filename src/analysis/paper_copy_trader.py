@@ -124,7 +124,21 @@ def init_paper_copy_db(db_path: str | Path = DEFAULT_PAPER_COPY_DB) -> None:
                 baseline_wallets_json TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS wallet_ingestion_watermarks (
+                wallet TEXT PRIMARY KEY,
+                newest_event_timestamp REAL NOT NULL,
+                oldest_event_timestamp REAL NOT NULL,
+                last_run_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS wallet_ingestion_coverage_gaps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wallet TEXT NOT NULL,
+                detected_at TEXT NOT NULL,
+                gap_start REAL NOT NULL,
+                gap_end REAL NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_watched_traders_status ON watched_traders(status);
+            CREATE INDEX IF NOT EXISTS idx_wallet_ingestion_coverage_gaps_wallet ON wallet_ingestion_coverage_gaps(wallet);
             CREATE INDEX IF NOT EXISTS idx_paper_copy_events_wallet_time ON paper_copy_events(source_wallet, timestamp);
             CREATE INDEX IF NOT EXISTS idx_paper_copy_events_key ON paper_copy_events(event_key);
             CREATE INDEX IF NOT EXISTS idx_paper_copy_positions_wallet_status ON paper_copy_positions(source_wallet, status);
@@ -205,6 +219,7 @@ def run_paper_copy_trader(
     new_events = 0
     copied_trades = 0
     closed_positions = 0
+    coverage_gaps_detected = 0
     by_wallet: dict[str, dict[str, Any]] = {}
 
     for wallet in watched:
@@ -213,6 +228,8 @@ def run_paper_copy_trader(
         events = list(getattr(export, "events", []) or [])
         events_seen += len(events)
         wallet_summary["events_seen"] += len(events)
+        if limit is None and _update_ingestion_watermark(db_path, wallet, events):
+            coverage_gaps_detected += 1
         spent = 0.0
         for event in sorted(events, key=lambda item: (_timestamp(item), item.tx_hash, item.action, item.market_id, item.side)):
             event_key = _event_key(event)
@@ -242,6 +259,7 @@ def run_paper_copy_trader(
         "new_events": new_events,
         "copied_trades": copied_trades,
         "closed_positions": closed_positions,
+        "coverage_gaps_detected": coverage_gaps_detected,
         "open_positions": report["open_positions"],
         "realized_pnl": report["realized_pnl"],
         "by_wallet": by_wallet,
@@ -794,6 +812,98 @@ def _event_exists(db_path: str | Path, event_key: str) -> bool:
     with closing_connection(db_path) as conn:
         row = conn.execute("SELECT 1 FROM paper_copy_events WHERE event_key=?", (event_key,)).fetchone()
     return row is not None
+
+
+def _update_ingestion_watermark(db_path: str | Path, wallet: str, events: list[WalletActivityEvent]) -> bool:
+    """Track how far back each wallet's activity fetch reaches, and detect coverage gaps.
+
+    Polymarket's activity API only ever returns a bounded number of rows
+    (capped at offset 3000), so a full fetch only reaches back a certain
+    depth in time. If that depth doesn't reach back to the newest event we
+    saw on the *previous* run, there was a span of time this wallet's
+    activity was never visible to us at all -- a silent coverage gap where
+    any redeem/sell in that span is lost for good, not just delayed. Record
+    it so it surfaces immediately instead of being discovered later as a
+    stuck-open position.
+    """
+    if not events:
+        return False
+    timestamps = [_timestamp(event) for event in events]
+    newest_ts = max(timestamps)
+    oldest_ts = min(timestamps)
+    now = _utc_now()
+    gap_detected = False
+    with closing_connection(db_path) as conn:
+        previous = conn.execute(
+            "SELECT newest_event_timestamp FROM wallet_ingestion_watermarks WHERE wallet=?",
+            (wallet,),
+        ).fetchone()
+        if previous is not None and oldest_ts > float(previous["newest_event_timestamp"]):
+            gap_detected = True
+            conn.execute(
+                """
+                INSERT INTO wallet_ingestion_coverage_gaps (wallet, detected_at, gap_start, gap_end)
+                VALUES (?, ?, ?, ?)
+                """,
+                (wallet, now, float(previous["newest_event_timestamp"]), oldest_ts),
+            )
+        if previous is None or newest_ts > float(previous["newest_event_timestamp"]):
+            conn.execute(
+                """
+                INSERT INTO wallet_ingestion_watermarks (wallet, newest_event_timestamp, oldest_event_timestamp, last_run_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(wallet) DO UPDATE SET
+                    newest_event_timestamp=excluded.newest_event_timestamp,
+                    oldest_event_timestamp=excluded.oldest_event_timestamp,
+                    last_run_at=excluded.last_run_at
+                """,
+                (wallet, newest_ts, oldest_ts, now),
+            )
+    return gap_detected
+
+
+def coverage_gap_report(db_path: str | Path = DEFAULT_PAPER_COPY_DB, *, wallet: str | None = None) -> dict[str, Any]:
+    """Confirmed silent-ingestion-gap events detected by `_update_ingestion_watermark`.
+
+    Unlike `ingestion_gap_report` (a live-fetch heuristic run on demand),
+    these are gaps caught in the act during a real scheduled run: a span of
+    time between two consecutive fetches that neither one covered.
+    """
+    init_paper_copy_db(db_path)
+    with closing_connection(db_path) as conn:
+        if wallet:
+            rows = conn.execute(
+                """
+                SELECT wallet, detected_at, gap_start, gap_end FROM wallet_ingestion_coverage_gaps
+                WHERE wallet=? ORDER BY detected_at
+                """,
+                (_normalize_wallet(wallet),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT wallet, detected_at, gap_start, gap_end FROM wallet_ingestion_coverage_gaps
+                ORDER BY detected_at
+                """
+            ).fetchall()
+    gaps = [
+        {
+            "wallet": row["wallet"],
+            "detected_at": row["detected_at"],
+            "gap_start": row["gap_start"],
+            "gap_end": row["gap_end"],
+            "gap_seconds": row["gap_end"] - row["gap_start"],
+        }
+        for row in rows
+    ]
+    wallets_affected = sorted({gap["wallet"] for gap in gaps})
+    return {
+        "read_only": True,
+        "generated_at": _utc_now(),
+        "total_gaps": len(gaps),
+        "wallets_affected": wallets_affected,
+        "gaps": gaps,
+    }
 
 
 def _report_segment(rows: list[Any], key: str) -> dict[str, dict[str, Any]]:

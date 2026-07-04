@@ -56,6 +56,7 @@ from src.analysis.trader_backtest import build_trader_backtest_report
 from src.analysis.paper_copy_trader import (
     DEFAULT_PAPER_COPY_DB,
     backfill_stalled_zero_payout_exits,
+    coverage_gap_report,
     ingestion_gap_report,
     paper_copy_report,
     pre_validation_report,
@@ -420,6 +421,7 @@ def paper_copy_trader_cli(
     force: bool = False,
     backfill_stalled_exits: bool = False,
     check_ingestion_gaps: bool = False,
+    check_coverage_gaps: bool = False,
     limit: int | None = None,
     as_json: bool = False,
     db_path: str = DEFAULT_PAPER_COPY_DB,
@@ -436,6 +438,8 @@ def paper_copy_trader_cli(
         result = backfill_stalled_zero_payout_exits(db_path=db_path)
     elif check_ingestion_gaps:
         result = ingestion_gap_report(db_path=db_path)
+    elif check_coverage_gaps:
+        result = coverage_gap_report(db_path=db_path)
     elif pre_validation:
         result = pre_validation_report(db_path=db_path)
     elif report:
@@ -445,7 +449,8 @@ def paper_copy_trader_cli(
             "accepted": False,
             "error": (
                 "choose one of --watch, --unwatch, --run, --report, --pre-validation-report, "
-                "--start-validation-window, --backfill-stalled-exits, or --ingestion-gap-report"
+                "--start-validation-window, --backfill-stalled-exits, --ingestion-gap-report, "
+                "or --coverage-gap-report"
             ),
         }
     if as_json:
@@ -3879,6 +3884,16 @@ def main() -> None:
             "longer be fetched (makes a live network call per open-position wallet)"
         ),
     )
+    paper_copy_parser.add_argument(
+        "--coverage-gap-report",
+        action="store_true",
+        dest="coverage_gap_report",
+        help=(
+            "confirmed silent-ingestion gaps caught during scheduled --run cycles: "
+            "spans of time between two consecutive fetches that neither one covered "
+            "(no network calls; reads what --run has already recorded)"
+        ),
+    )
     paper_copy_parser.add_argument("--limit", type=int)
     paper_copy_parser.add_argument("--db-path", default=DEFAULT_PAPER_COPY_DB)
     paper_copy_parser.add_argument("--json", action="store_true")
@@ -4981,6 +4996,7 @@ def main() -> None:
             force=args.force,
             backfill_stalled_exits=args.backfill_stalled_exits,
             check_ingestion_gaps=args.ingestion_gap_report,
+            check_coverage_gaps=args.coverage_gap_report,
             limit=args.limit,
             as_json=args.json,
             db_path=args.db_path,
