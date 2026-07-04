@@ -228,3 +228,74 @@ def test_paper_copy_module_has_no_live_execution_imports_or_calls():
         "api_secret",
     ]
     assert all(token not in source for token in forbidden)
+
+
+def test_start_validation_window_snapshots_baseline_and_is_idempotent(tmp_path):
+    from src.analysis.paper_copy_trader import load_validation_window, start_validation_window
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+
+    first = start_validation_window(db_path=db_path)
+    assert first["started"] is True
+    assert first["baseline_wallets"] == [WALLET]
+
+    other_wallet = "0x" + "b" * 40
+    watch_trader(other_wallet, db_path=db_path)
+    second = start_validation_window(db_path=db_path)
+    assert second["started"] is False
+    assert second["window_start"] == first["window_start"]
+
+    window = load_validation_window(db_path=db_path)
+    assert window["baseline_wallets"] == [WALLET]
+
+
+def test_pre_validation_report_distinguishes_no_signals_from_zero_pnl(tmp_path):
+    from src.analysis.paper_copy_trader import pre_validation_report
+
+    db_path = tmp_path / "paper_copy.db"
+    signal_db_path = tmp_path / "trader_signals.db"
+    traders_db_path = tmp_path / "traders.db"
+
+    no_signal_wallet = "0x" + "c" * 40
+    watch_trader(no_signal_wallet, db_path=db_path)
+
+    zero_pnl_wallet = WALLET
+    watch_trader(zero_pnl_wallet, db_path=db_path)
+    run_paper_copy_trader(db_path=db_path, exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5)]))
+    run_paper_copy_trader(
+        db_path=db_path,
+        exporter=FakeExporter([_event("sell", timestamp=200, tx_hash="0xsell1", price=0.5)]),
+    )
+
+    report = pre_validation_report(db_path=db_path, signal_db_path=signal_db_path, traders_db_path=traders_db_path)
+    by_wallet = {row["wallet"]: row for row in report["wallets"]}
+
+    assert by_wallet[no_signal_wallet]["data_status"] == "no_signals_yet"
+    assert by_wallet[no_signal_wallet]["signal_count"] == 0
+    assert by_wallet[no_signal_wallet]["closed_positions"] == 0
+
+    assert by_wallet[zero_pnl_wallet]["data_status"] == "zero_pnl_active"
+    assert by_wallet[zero_pnl_wallet]["closed_positions"] == 1
+    assert by_wallet[zero_pnl_wallet]["realized_pnl"] == 0.0
+    assert report["data_status_counts"]["no_signals_yet"] == 1
+    assert report["data_status_counts"]["zero_pnl_active"] == 1
+
+
+def test_pre_validation_report_tags_cohort_from_validation_window(tmp_path):
+    from src.analysis.paper_copy_trader import pre_validation_report, start_validation_window
+
+    db_path = tmp_path / "paper_copy.db"
+    baseline_wallet = WALLET
+    watch_trader(baseline_wallet, db_path=db_path)
+    start_validation_window(db_path=db_path)
+
+    late_wallet = "0x" + "d" * 40
+    watch_trader(late_wallet, db_path=db_path)
+
+    report = pre_validation_report(db_path=db_path, signal_db_path=tmp_path / "signals.db", traders_db_path=tmp_path / "traders.db")
+    by_wallet = {row["wallet"]: row for row in report["wallets"]}
+
+    assert by_wallet[baseline_wallet]["cohort"] == "baseline"
+    assert by_wallet[late_wallet]["cohort"] == "joined_during_window"
+    assert by_wallet[late_wallet]["cohort_start"] == by_wallet[late_wallet]["watched_at"]

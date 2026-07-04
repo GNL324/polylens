@@ -56,7 +56,9 @@ from src.analysis.trader_backtest import build_trader_backtest_report
 from src.analysis.paper_copy_trader import (
     DEFAULT_PAPER_COPY_DB,
     paper_copy_report,
+    pre_validation_report,
     run_paper_copy_trader,
+    start_validation_window,
     watch_trader as watch_paper_copy_trader,
 )
 from src.analysis.paper_trading_engine import (
@@ -409,6 +411,8 @@ def paper_copy_trader_cli(
     watch: str | None = None,
     run: bool = False,
     report: bool = False,
+    pre_validation: bool = False,
+    start_window: bool = False,
     limit: int | None = None,
     as_json: bool = False,
     db_path: str = DEFAULT_PAPER_COPY_DB,
@@ -417,10 +421,14 @@ def paper_copy_trader_cli(
         result = watch_paper_copy_trader(watch, db_path=db_path)
     elif run:
         result = run_paper_copy_trader(db_path=db_path, limit=limit)
+    elif start_window:
+        result = start_validation_window(db_path=db_path)
+    elif pre_validation:
+        result = pre_validation_report(db_path=db_path)
     elif report:
         result = paper_copy_report(db_path=db_path)
     else:
-        result = {"accepted": False, "error": "choose one of --watch, --run, or --report"}
+        result = {"accepted": False, "error": "choose one of --watch, --run, --report, --pre-validation-report, or --start-validation-window"}
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -3811,6 +3819,18 @@ def main() -> None:
     paper_copy_parser.add_argument("--watch")
     paper_copy_parser.add_argument("--run", action="store_true")
     paper_copy_parser.add_argument("--report", action="store_true")
+    paper_copy_parser.add_argument(
+        "--pre-validation-report",
+        action="store_true",
+        dest="pre_validation",
+        help="per-followed-wallet win rate, realized P&L, signal count, and edge decay ahead of the validation window",
+    )
+    paper_copy_parser.add_argument(
+        "--start-validation-window",
+        action="store_true",
+        dest="start_window",
+        help="snapshot currently followed wallets as the validation-window baseline cohort (idempotent)",
+    )
     paper_copy_parser.add_argument("--limit", type=int)
     paper_copy_parser.add_argument("--db-path", default=DEFAULT_PAPER_COPY_DB)
     paper_copy_parser.add_argument("--json", action="store_true")
@@ -4903,7 +4923,16 @@ def main() -> None:
     elif args.command == "trader-backtest":
         trader_backtest_cli(wallet=args.wallet, limit=args.limit, include_trades=args.include_trades, as_json=args.json)
     elif args.command == "paper-copy-trader":
-        paper_copy_trader_cli(watch=args.watch, run=args.run, report=args.report, limit=args.limit, as_json=args.json, db_path=args.db_path)
+        paper_copy_trader_cli(
+            watch=args.watch,
+            run=args.run,
+            report=args.report,
+            pre_validation=args.pre_validation,
+            start_window=args.start_window,
+            limit=args.limit,
+            as_json=args.json,
+            db_path=args.db_path,
+        )
     elif args.command == "paper-trading-engine":
         paper_trading_engine_cli(run=args.run, limit=args.limit, as_json=args.json, db_path=args.db_path)
     elif args.command == "paper-trading-service":
