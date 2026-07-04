@@ -585,6 +585,37 @@ def ingestion_gap_report(
     }
 
 
+def unwatch_ingestion_gap_risks(
+    *,
+    db_path: str | Path = DEFAULT_PAPER_COPY_DB,
+    wallets: list[str] | None = None,
+    exporter: ActivityExporter = export_wallet_activity,
+    source: WalletActivitySource | None = None,
+) -> dict[str, Any]:
+    """Exclude every wallet ingestion_gap_report currently flags, in one shot.
+
+    A per-wallet gap-size threshold doesn't meaningfully narrow this down --
+    the position mass sits overwhelmingly in wallets with large gaps, so this
+    applies the blanket policy: unwatch anything flagged, leaving only wallets
+    verified to currently have full reachable coverage of their open
+    positions. Flagged wallets keep their recorded history and can be
+    re-watched later once reconciled and the ingestion watermark shows clean
+    coverage for a burn-in period.
+    """
+    report = ingestion_gap_report(db_path=db_path, wallets=wallets, exporter=exporter, source=source)
+    excluded = []
+    for row in report["wallets"]:
+        if not row["ingestion_gap_risk"]:
+            continue
+        unwatch_trader(row["wallet"], db_path=db_path, reason="ingestion_gap_risk")
+        excluded.append(row["wallet"])
+    return {
+        "wallets_checked": report["wallets_checked"],
+        "wallets_excluded": excluded,
+        "count_excluded": len(excluded),
+    }
+
+
 @dataclass
 class _StoredExitEvent:
     """Adapts a stored paper_copy_events row to the WalletActivityEvent shape

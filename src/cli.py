@@ -62,6 +62,7 @@ from src.analysis.paper_copy_trader import (
     pre_validation_report,
     run_paper_copy_trader,
     start_validation_window,
+    unwatch_ingestion_gap_risks,
     unwatch_trader as unwatch_paper_copy_trader,
     watch_trader as watch_paper_copy_trader,
 )
@@ -422,6 +423,7 @@ def paper_copy_trader_cli(
     backfill_stalled_exits: bool = False,
     check_ingestion_gaps: bool = False,
     check_coverage_gaps: bool = False,
+    unwatch_gap_risks: bool = False,
     limit: int | None = None,
     as_json: bool = False,
     db_path: str = DEFAULT_PAPER_COPY_DB,
@@ -440,6 +442,8 @@ def paper_copy_trader_cli(
         result = ingestion_gap_report(db_path=db_path)
     elif check_coverage_gaps:
         result = coverage_gap_report(db_path=db_path)
+    elif unwatch_gap_risks:
+        result = unwatch_ingestion_gap_risks(db_path=db_path)
     elif pre_validation:
         result = pre_validation_report(db_path=db_path)
     elif report:
@@ -450,7 +454,7 @@ def paper_copy_trader_cli(
             "error": (
                 "choose one of --watch, --unwatch, --run, --report, --pre-validation-report, "
                 "--start-validation-window, --backfill-stalled-exits, --ingestion-gap-report, "
-                "or --coverage-gap-report"
+                "--coverage-gap-report, or --unwatch-ingestion-gap-risks"
             ),
         }
     if as_json:
@@ -3894,6 +3898,15 @@ def main() -> None:
             "(no network calls; reads what --run has already recorded)"
         ),
     )
+    paper_copy_parser.add_argument(
+        "--unwatch-ingestion-gap-risks",
+        action="store_true",
+        dest="unwatch_ingestion_gap_risks",
+        help=(
+            "unwatch every wallet --ingestion-gap-report currently flags in one shot "
+            "(makes a live network call per open-position wallet, same as that report)"
+        ),
+    )
     paper_copy_parser.add_argument("--limit", type=int)
     paper_copy_parser.add_argument("--db-path", default=DEFAULT_PAPER_COPY_DB)
     paper_copy_parser.add_argument("--json", action="store_true")
@@ -4997,6 +5010,7 @@ def main() -> None:
             backfill_stalled_exits=args.backfill_stalled_exits,
             check_ingestion_gaps=args.ingestion_gap_report,
             check_coverage_gaps=args.coverage_gap_report,
+            unwatch_gap_risks=args.unwatch_ingestion_gap_risks,
             limit=args.limit,
             as_json=args.json,
             db_path=args.db_path,
