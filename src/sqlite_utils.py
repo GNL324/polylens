@@ -22,7 +22,8 @@ def closing_connection(
     path = Path(resolve_runtime_db_target(db_path))
     assert_runtime_db_redirect_applied(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = _sqlite3.connect(path)
+    conn = _sqlite3.connect(path, timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL")
     if row_factory is not None:
         conn.row_factory = row_factory
     try:

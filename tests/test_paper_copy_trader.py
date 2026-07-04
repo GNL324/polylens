@@ -117,6 +117,33 @@ def test_closing_paper_positions(tmp_path):
     assert report["roi"] == 0.5
 
 
+def test_redeem_with_zero_payout_closes_position_as_a_loss(tmp_path):
+    """A redeem with no payout means the market resolved against this position.
+
+    It must close at $0, not stay open forever (which would silently bias
+    win rate and realized P&L toward wins only).
+    """
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+    run_paper_copy_trader(db_path=db_path, exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5)]))
+
+    result = run_paper_copy_trader(
+        db_path=db_path,
+        exporter=FakeExporter([
+            _event("buy", tx_hash="0xbuy1", price=0.5),
+            _event("redeem", timestamp=200, tx_hash="0xredeem1", price=0, amount=0, shares=0),
+        ]),
+    )
+
+    report = paper_copy_report(db_path)
+    assert result["closed_positions"] == 1
+    assert report["open_positions"] == 0
+    assert report["closed_positions"] == 1
+    assert report["realized_pnl"] == -1.0
+    assert report["roi"] == -1.0
+    assert report["win_rate"] == 0.0
+
+
 def test_report_metrics_by_wallet_and_asset(tmp_path):
     db_path = tmp_path / "paper_copy.db"
     watch_trader(WALLET, db_path=db_path)
