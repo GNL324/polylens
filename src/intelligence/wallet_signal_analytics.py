@@ -11,6 +11,8 @@ from src.intelligence.strategy_classifier import init_strategy_profiles_db
 from src.sqlite_utils import closing_connection
 
 DEFAULT_TRADERS_DB = "data/traders.db"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_PRODUCTION_TRADER_SIGNAL_DB = (_REPO_ROOT / DEFAULT_TRADER_SIGNAL_DB).resolve()
 
 
 def _with_flags(payload: dict[str, Any]) -> dict[str, Any]:
@@ -46,9 +48,16 @@ def _load_strategy_profiles(traders_db_path: str | Path) -> dict[str, dict[str, 
     }
 
 
+def _is_default_trader_signal_db(path: Path) -> bool:
+    try:
+        return path.resolve() == _PRODUCTION_TRADER_SIGNAL_DB
+    except OSError:
+        return False
+
+
 def _wallet_validation_stats(signal_db_path: str | Path) -> dict[str, dict[str, Any]]:
     path = Path(signal_db_path)
-    if not path.exists():
+    if not path.exists() and not _is_default_trader_signal_db(path):
         return {}
     init_trader_signal_db(path)
     init_trader_signal_validation_db(path)
