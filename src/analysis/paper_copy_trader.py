@@ -503,6 +503,70 @@ def pre_validation_report(
     }
 
 
+def ingestion_gap_report(
+    *,
+    db_path: str | Path = DEFAULT_PAPER_COPY_DB,
+    wallets: list[str] | None = None,
+    exporter: ActivityExporter = export_wallet_activity,
+    source: WalletActivitySource | None = None,
+) -> dict[str, Any]:
+    """Flag watched wallets whose open positions may have unreachable exit events.
+
+    Polymarket's activity API refuses to page past offset 3000, so a fetch
+    only ever reaches back a few thousand rows. For a high-frequency wallet
+    that window can shrink, calendar-wise, past the age of an already-open
+    position -- silently making that position's redeem/sell unfetchable
+    forever, even though it may have already settled on-chain. This surfaces
+    any wallet where the oldest activity we can currently reach is newer than
+    its oldest open position, so `open_only` can be reviewed instead of taken
+    at face value.
+    """
+    init_paper_copy_db(db_path)
+    watched = [_normalize_wallet(wallet) for wallet in (wallets or load_watched_wallets(db_path))]
+    with closing_connection(db_path) as conn:
+        oldest_open_rows = conn.execute(
+            """
+            SELECT source_wallet, MIN(entry_timestamp) AS oldest_entry, COUNT(*) AS open_count
+            FROM paper_copy_positions
+            WHERE status='open'
+            GROUP BY source_wallet
+            """
+        ).fetchall()
+    oldest_open_by_wallet = {
+        str(row["source_wallet"]): (float(row["oldest_entry"]), int(row["open_count"])) for row in oldest_open_rows
+    }
+
+    wallet_rows: list[dict[str, Any]] = []
+    for wallet in watched:
+        entry = oldest_open_by_wallet.get(wallet)
+        if entry is None:
+            continue
+        oldest_open_entry, open_count = entry
+        export = exporter(wallet=wallet, limit=None, source=source, store=False)
+        events = list(getattr(export, "events", []) or [])
+        oldest_reachable = min((_timestamp(event) for event in events), default=None)
+        gap_risk = oldest_reachable is not None and oldest_reachable > oldest_open_entry
+        wallet_rows.append(
+            {
+                "wallet": wallet,
+                "open_positions": open_count,
+                "oldest_open_position_entry": oldest_open_entry,
+                "activity_events_fetched": len(events),
+                "oldest_reachable_activity": oldest_reachable,
+                "ingestion_gap_risk": gap_risk,
+            }
+        )
+
+    at_risk = [row for row in wallet_rows if row["ingestion_gap_risk"]]
+    return {
+        "read_only": True,
+        "generated_at": _utc_now(),
+        "wallets_checked": len(wallet_rows),
+        "wallets_at_risk": len(at_risk),
+        "wallets": wallet_rows,
+    }
+
+
 @dataclass
 class _StoredExitEvent:
     """Adapts a stored paper_copy_events row to the WalletActivityEvent shape

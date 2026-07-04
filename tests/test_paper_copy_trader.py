@@ -550,3 +550,76 @@ def test_backfill_does_not_touch_already_open_positions_without_a_stalled_redeem
     assert result["candidates_scanned"] == 0
     assert result["positions_closed"] == 0
     assert paper_copy_report(db_path)["open_positions"] == 1
+
+
+def test_ingestion_gap_report_flags_wallet_whose_reachable_history_is_newer_than_its_open_position(tmp_path):
+    from src.analysis.paper_copy_trader import ingestion_gap_report
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+    run_paper_copy_trader(db_path=db_path, exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5, timestamp=100)]))
+
+    # The live wallet fetch can now only reach back to timestamp=200, well
+    # after the position at timestamp=100 was opened -- any exit event for it
+    # is out of reach, exactly like the wallet found trading too fast for the
+    # Polymarket activity-history offset cap to keep up with.
+    gap_exporter = FakeExporter([_event("buy", tx_hash="0xbuy2", price=0.5, timestamp=200)])
+
+    result = ingestion_gap_report(db_path=db_path, exporter=gap_exporter)
+
+    assert result["wallets_checked"] == 1
+    assert result["wallets_at_risk"] == 1
+    row = result["wallets"][0]
+    assert row["wallet"] == WALLET
+    assert row["open_positions"] == 1
+    assert row["oldest_open_position_entry"] == 100
+    assert row["oldest_reachable_activity"] == 200
+    assert row["ingestion_gap_risk"] is True
+
+
+def test_ingestion_gap_report_clears_wallet_whose_reachable_history_covers_its_open_position(tmp_path):
+    from src.analysis.paper_copy_trader import ingestion_gap_report
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+    run_paper_copy_trader(db_path=db_path, exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5, timestamp=100)]))
+
+    # This time the fetch reaches all the way back past the position's entry.
+    covering_exporter = FakeExporter([_event("buy", tx_hash="0xbuy2", price=0.5, timestamp=50)])
+
+    result = ingestion_gap_report(db_path=db_path, exporter=covering_exporter)
+
+    assert result["wallets_checked"] == 1
+    assert result["wallets_at_risk"] == 0
+    assert result["wallets"][0]["ingestion_gap_risk"] is False
+
+
+def test_ingestion_gap_report_skips_wallets_with_no_open_positions(tmp_path):
+    from src.analysis.paper_copy_trader import ingestion_gap_report
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+
+    result = ingestion_gap_report(db_path=db_path, exporter=FakeExporter([]))
+
+    assert result["wallets_checked"] == 0
+    assert result["wallets_at_risk"] == 0
+    assert result["wallets"] == []
+
+
+def test_paper_copy_trader_cli_ingestion_gap_report_flag(capsys, monkeypatch, tmp_path):
+    from src.cli import main
+
+    db_path = tmp_path / "paper_copy.db"
+    calls = []
+
+    def fake_ingestion_gap_report(db_path):
+        calls.append(db_path)
+        return {"wallets_checked": 1, "wallets_at_risk": 1}
+
+    monkeypatch.setattr("src.cli.ingestion_gap_report", fake_ingestion_gap_report)
+    sys.argv = ["polylens", "paper-copy-trader", "--ingestion-gap-report", "--db-path", str(db_path), "--json"]
+    main()
+    output = json.loads(capsys.readouterr().out)
+    assert output == {"wallets_checked": 1, "wallets_at_risk": 1}
+    assert calls == [str(db_path)]

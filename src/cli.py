@@ -56,6 +56,7 @@ from src.analysis.trader_backtest import build_trader_backtest_report
 from src.analysis.paper_copy_trader import (
     DEFAULT_PAPER_COPY_DB,
     backfill_stalled_zero_payout_exits,
+    ingestion_gap_report,
     paper_copy_report,
     pre_validation_report,
     run_paper_copy_trader,
@@ -418,6 +419,7 @@ def paper_copy_trader_cli(
     start_window: bool = False,
     force: bool = False,
     backfill_stalled_exits: bool = False,
+    check_ingestion_gaps: bool = False,
     limit: int | None = None,
     as_json: bool = False,
     db_path: str = DEFAULT_PAPER_COPY_DB,
@@ -432,6 +434,8 @@ def paper_copy_trader_cli(
         result = start_validation_window(db_path=db_path, force=force)
     elif backfill_stalled_exits:
         result = backfill_stalled_zero_payout_exits(db_path=db_path)
+    elif check_ingestion_gaps:
+        result = ingestion_gap_report(db_path=db_path)
     elif pre_validation:
         result = pre_validation_report(db_path=db_path)
     elif report:
@@ -441,7 +445,7 @@ def paper_copy_trader_cli(
             "accepted": False,
             "error": (
                 "choose one of --watch, --unwatch, --run, --report, --pre-validation-report, "
-                "--start-validation-window, or --backfill-stalled-exits"
+                "--start-validation-window, --backfill-stalled-exits, or --ingestion-gap-report"
             ),
         }
     if as_json:
@@ -3865,6 +3869,16 @@ def main() -> None:
             "(no network calls; safe to re-run)"
         ),
     )
+    paper_copy_parser.add_argument(
+        "--ingestion-gap-report",
+        action="store_true",
+        dest="ingestion_gap_report",
+        help=(
+            "flag watched wallets whose open positions may have redeem/sell events "
+            "that scrolled past Polymarket's activity-history offset cap and can no "
+            "longer be fetched (makes a live network call per open-position wallet)"
+        ),
+    )
     paper_copy_parser.add_argument("--limit", type=int)
     paper_copy_parser.add_argument("--db-path", default=DEFAULT_PAPER_COPY_DB)
     paper_copy_parser.add_argument("--json", action="store_true")
@@ -4966,6 +4980,7 @@ def main() -> None:
             start_window=args.start_window,
             force=args.force,
             backfill_stalled_exits=args.backfill_stalled_exits,
+            check_ingestion_gaps=args.ingestion_gap_report,
             limit=args.limit,
             as_json=args.json,
             db_path=args.db_path,
