@@ -60,6 +60,7 @@ from src.analysis.paper_copy_trader import (
     pre_validation_report,
     run_paper_copy_trader,
     start_validation_window,
+    unwatch_trader as unwatch_paper_copy_trader,
     watch_trader as watch_paper_copy_trader,
 )
 from src.analysis.paper_trading_engine import (
@@ -410,10 +411,12 @@ def trader_backtest_cli(
 
 def paper_copy_trader_cli(
     watch: str | None = None,
+    unwatch: str | None = None,
     run: bool = False,
     report: bool = False,
     pre_validation: bool = False,
     start_window: bool = False,
+    force: bool = False,
     backfill_stalled_exits: bool = False,
     limit: int | None = None,
     as_json: bool = False,
@@ -421,10 +424,12 @@ def paper_copy_trader_cli(
 ) -> dict[str, Any]:
     if watch:
         result = watch_paper_copy_trader(watch, db_path=db_path)
+    elif unwatch:
+        result = unwatch_paper_copy_trader(unwatch, db_path=db_path)
     elif run:
         result = run_paper_copy_trader(db_path=db_path, limit=limit)
     elif start_window:
-        result = start_validation_window(db_path=db_path)
+        result = start_validation_window(db_path=db_path, force=force)
     elif backfill_stalled_exits:
         result = backfill_stalled_zero_payout_exits(db_path=db_path)
     elif pre_validation:
@@ -435,7 +440,7 @@ def paper_copy_trader_cli(
         result = {
             "accepted": False,
             "error": (
-                "choose one of --watch, --run, --report, --pre-validation-report, "
+                "choose one of --watch, --unwatch, --run, --report, --pre-validation-report, "
                 "--start-validation-window, or --backfill-stalled-exits"
             ),
         }
@@ -3827,6 +3832,10 @@ def main() -> None:
 
     paper_copy_parser = sub.add_parser("paper-copy-trader", help="paper simulate copying watched trader activity")
     paper_copy_parser.add_argument("--watch")
+    paper_copy_parser.add_argument(
+        "--unwatch",
+        help="mark a watched wallet inactive (excludes it from future scans and validation-window baselines)",
+    )
     paper_copy_parser.add_argument("--run", action="store_true")
     paper_copy_parser.add_argument("--report", action="store_true")
     paper_copy_parser.add_argument(
@@ -3839,7 +3848,12 @@ def main() -> None:
         "--start-validation-window",
         action="store_true",
         dest="start_window",
-        help="snapshot currently followed wallets as the validation-window baseline cohort (idempotent)",
+        help="snapshot currently followed wallets as the validation-window baseline cohort (idempotent unless --force)",
+    )
+    paper_copy_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="with --start-validation-window, overwrite an already-started window with a fresh snapshot",
     )
     paper_copy_parser.add_argument(
         "--backfill-stalled-exits",
@@ -4945,10 +4959,12 @@ def main() -> None:
     elif args.command == "paper-copy-trader":
         paper_copy_trader_cli(
             watch=args.watch,
+            unwatch=args.unwatch,
             run=args.run,
             report=args.report,
             pre_validation=args.pre_validation,
             start_window=args.start_window,
+            force=args.force,
             backfill_stalled_exits=args.backfill_stalled_exits,
             limit=args.limit,
             as_json=args.json,

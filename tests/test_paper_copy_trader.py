@@ -10,6 +10,8 @@ from src.analysis.paper_copy_trader import (
     load_watched_wallets,
     paper_copy_report,
     run_paper_copy_trader,
+    start_validation_window,
+    unwatch_trader,
     watch_trader,
 )
 from src.analysis.wallet_activity import WalletActivityEvent
@@ -61,6 +63,49 @@ def test_adding_watched_trader(tmp_path):
         row = conn.execute("SELECT alpha_score, status FROM watched_traders WHERE wallet=?", (WALLET,)).fetchone()
     assert row["alpha_score"] == 88
     assert row["status"] == "active"
+
+
+def test_unwatch_trader_removes_wallet_from_watchlist_but_keeps_history(tmp_path):
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+    exporter = FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5)])
+    run_paper_copy_trader(db_path=db_path, exporter=exporter)
+
+    result = unwatch_trader(WALLET, db_path=db_path)
+
+    assert result["unwatched"] is True
+    assert load_watched_wallets(db_path) == []
+    with closing_connection(db_path) as conn:
+        row = conn.execute("SELECT status FROM watched_traders WHERE wallet=?", (WALLET,)).fetchone()
+        positions = conn.execute("SELECT COUNT(*) AS n FROM paper_copy_positions WHERE source_wallet=?", (WALLET,)).fetchone()
+    assert row["status"] == "excluded"
+    assert positions["n"] == 1
+
+
+def test_unwatch_trader_unknown_wallet_reports_not_found(tmp_path):
+    db_path = tmp_path / "paper_copy.db"
+
+    result = unwatch_trader(WALLET, db_path=db_path)
+
+    assert result["unwatched"] is False
+
+
+def test_start_validation_window_force_overwrites_after_unwatch(tmp_path):
+    db_path = tmp_path / "paper_copy.db"
+    other_wallet = "0x" + "b" * 40
+    watch_trader(WALLET, db_path=db_path)
+    watch_trader(other_wallet, db_path=db_path)
+    first = start_validation_window(db_path=db_path)
+    assert first["baseline_wallets"] == sorted([WALLET, other_wallet])
+
+    unwatch_trader(WALLET, db_path=db_path)
+    unchanged = start_validation_window(db_path=db_path)
+    assert unchanged["started"] is False
+
+    refreshed = start_validation_window(db_path=db_path, force=True)
+
+    assert refreshed["started"] is True
+    assert refreshed["baseline_wallets"] == [other_wallet]
 
 
 def test_detecting_new_events_and_creating_paper_positions(tmp_path):
@@ -241,6 +286,50 @@ def test_paper_copy_trader_cli_json_output(capsys, monkeypatch, tmp_path):
     main()
     output = json.loads(capsys.readouterr().out)
     assert output == expected
+
+
+def test_paper_copy_trader_cli_unwatch_flag(capsys, monkeypatch, tmp_path):
+    from src.cli import main
+
+    db_path = tmp_path / "paper_copy.db"
+    calls = []
+
+    def fake_unwatch(wallet, db_path):
+        calls.append((wallet, db_path))
+        return {"wallet": wallet, "unwatched": True, "status": "excluded"}
+
+    monkeypatch.setattr("src.cli.unwatch_paper_copy_trader", fake_unwatch)
+    sys.argv = ["polylens", "paper-copy-trader", "--unwatch", WALLET, "--db-path", str(db_path), "--json"]
+    main()
+    output = json.loads(capsys.readouterr().out)
+    assert output == {"wallet": WALLET, "unwatched": True, "status": "excluded"}
+    assert calls == [(WALLET, str(db_path))]
+
+
+def test_paper_copy_trader_cli_start_validation_window_force_flag(capsys, monkeypatch, tmp_path):
+    from src.cli import main
+
+    db_path = tmp_path / "paper_copy.db"
+    calls = []
+
+    def fake_start_window(db_path, force):
+        calls.append((db_path, force))
+        return {"started": True, "force": force}
+
+    monkeypatch.setattr("src.cli.start_validation_window", fake_start_window)
+    sys.argv = [
+        "polylens",
+        "paper-copy-trader",
+        "--start-validation-window",
+        "--force",
+        "--db-path",
+        str(db_path),
+        "--json",
+    ]
+    main()
+    output = json.loads(capsys.readouterr().out)
+    assert output == {"started": True, "force": True}
+    assert calls == [(str(db_path), True)]
 
 
 def test_paper_copy_module_has_no_live_execution_imports_or_calls():
