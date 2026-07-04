@@ -299,3 +299,68 @@ def test_pre_validation_report_tags_cohort_from_validation_window(tmp_path):
     assert by_wallet[baseline_wallet]["cohort"] == "baseline"
     assert by_wallet[late_wallet]["cohort"] == "joined_during_window"
     assert by_wallet[late_wallet]["cohort_start"] == by_wallet[late_wallet]["watched_at"]
+
+
+def _seed_signal(signal_db_path, wallet, *, signal_key):
+    from src.analysis.trader_signal_engine import init_trader_signal_db
+
+    init_trader_signal_db(signal_db_path)
+    with closing_connection(signal_db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO trader_signals (
+                signal_key, wallet, market_id, market_title, asset, side,
+                signal_type, timestamp, action, price, shares, amount,
+                score, tx_hash, raw_json, created_at
+            ) VALUES (?, ?, 'm1', 'Test Market', 'BTC', 'up', 'early_entry', 100, 'buy', 0.5, 10, 5.0, 50.0, ?, '{}', '2026-01-01T00:00:00Z')
+            """,
+            (signal_key, wallet, f"0x{signal_key}"),
+        )
+
+
+def test_pre_validation_report_covers_signals_no_trades_open_only_and_active(tmp_path):
+    from src.analysis.paper_copy_trader import pre_validation_report
+
+    db_path = tmp_path / "paper_copy.db"
+    signal_db_path = tmp_path / "trader_signals.db"
+    traders_db_path = tmp_path / "traders.db"
+
+    signals_no_trades_wallet = "0x" + "1" * 40
+    watch_trader(signals_no_trades_wallet, db_path=db_path)
+    _seed_signal(signal_db_path, signals_no_trades_wallet, signal_key="s1")
+
+    open_only_wallet = "0x" + "2" * 40
+    watch_trader(open_only_wallet, db_path=db_path)
+    run_paper_copy_trader(
+        db_path=db_path,
+        wallets=[open_only_wallet],
+        exporter=FakeExporter([_event("buy", wallet=open_only_wallet, tx_hash="0xbuy_open", price=0.5)]),
+    )
+
+    active_wallet = "0x" + "3" * 40
+    watch_trader(active_wallet, db_path=db_path)
+    run_paper_copy_trader(
+        db_path=db_path,
+        wallets=[active_wallet],
+        exporter=FakeExporter([_event("buy", wallet=active_wallet, tx_hash="0xbuy_active", price=0.5)]),
+    )
+    run_paper_copy_trader(
+        db_path=db_path,
+        wallets=[active_wallet],
+        exporter=FakeExporter([_event("sell", wallet=active_wallet, timestamp=200, tx_hash="0xsell_active", price=0.75)]),
+    )
+
+    report = pre_validation_report(db_path=db_path, signal_db_path=signal_db_path, traders_db_path=traders_db_path)
+    by_wallet = {row["wallet"]: row for row in report["wallets"]}
+
+    assert by_wallet[signals_no_trades_wallet]["data_status"] == "signals_no_trades"
+    assert by_wallet[signals_no_trades_wallet]["signal_count"] == 1
+    assert by_wallet[signals_no_trades_wallet]["copied_trades"] == 0
+
+    assert by_wallet[open_only_wallet]["data_status"] == "open_only"
+    assert by_wallet[open_only_wallet]["open_positions"] == 1
+    assert by_wallet[open_only_wallet]["closed_positions"] == 0
+
+    assert by_wallet[active_wallet]["data_status"] == "active"
+    assert by_wallet[active_wallet]["closed_positions"] == 1
+    assert by_wallet[active_wallet]["realized_pnl"] == 0.5
