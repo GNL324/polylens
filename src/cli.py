@@ -55,6 +55,7 @@ from src.analysis.trader_alpha import rank_trader_alpha, trader_alpha_report
 from src.analysis.trader_backtest import build_trader_backtest_report
 from src.analysis.paper_copy_trader import (
     DEFAULT_PAPER_COPY_DB,
+    backfill_stalled_zero_payout_exits,
     paper_copy_report,
     pre_validation_report,
     run_paper_copy_trader,
@@ -413,6 +414,7 @@ def paper_copy_trader_cli(
     report: bool = False,
     pre_validation: bool = False,
     start_window: bool = False,
+    backfill_stalled_exits: bool = False,
     limit: int | None = None,
     as_json: bool = False,
     db_path: str = DEFAULT_PAPER_COPY_DB,
@@ -423,12 +425,20 @@ def paper_copy_trader_cli(
         result = run_paper_copy_trader(db_path=db_path, limit=limit)
     elif start_window:
         result = start_validation_window(db_path=db_path)
+    elif backfill_stalled_exits:
+        result = backfill_stalled_zero_payout_exits(db_path=db_path)
     elif pre_validation:
         result = pre_validation_report(db_path=db_path)
     elif report:
         result = paper_copy_report(db_path=db_path)
     else:
-        result = {"accepted": False, "error": "choose one of --watch, --run, --report, --pre-validation-report, or --start-validation-window"}
+        result = {
+            "accepted": False,
+            "error": (
+                "choose one of --watch, --run, --report, --pre-validation-report, "
+                "--start-validation-window, or --backfill-stalled-exits"
+            ),
+        }
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -3831,6 +3841,16 @@ def main() -> None:
         dest="start_window",
         help="snapshot currently followed wallets as the validation-window baseline cohort (idempotent)",
     )
+    paper_copy_parser.add_argument(
+        "--backfill-stalled-exits",
+        action="store_true",
+        dest="backfill_stalled_exits",
+        help=(
+            "one-time reconciliation: close positions left open by the pre-fix "
+            "_exit_price bug using already-recorded zero-payout redeem events "
+            "(no network calls; safe to re-run)"
+        ),
+    )
     paper_copy_parser.add_argument("--limit", type=int)
     paper_copy_parser.add_argument("--db-path", default=DEFAULT_PAPER_COPY_DB)
     paper_copy_parser.add_argument("--json", action="store_true")
@@ -4929,6 +4949,7 @@ def main() -> None:
             report=args.report,
             pre_validation=args.pre_validation,
             start_window=args.start_window,
+            backfill_stalled_exits=args.backfill_stalled_exits,
             limit=args.limit,
             as_json=args.json,
             db_path=args.db_path,

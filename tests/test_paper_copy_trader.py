@@ -391,3 +391,73 @@ def test_pre_validation_report_covers_signals_no_trades_open_only_and_active(tmp
     assert by_wallet[active_wallet]["data_status"] == "active"
     assert by_wallet[active_wallet]["closed_positions"] == 1
     assert by_wallet[active_wallet]["realized_pnl"] == 0.5
+
+
+def _insert_stalled_redeem_event(db_path, *, event_key: str, wallet: str = WALLET) -> None:
+    """Simulate a zero-payout redeem recorded under the pre-fix _exit_price bug.
+
+    Before the fix this event was fetched and saved (copied=0) but never closed
+    the position it belonged to, because _exit_price returned None for it.
+    """
+    with closing_connection(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO paper_copy_events (
+                run_id, event_key, source_wallet, timestamp, action, market_id,
+                market_title, asset, side, price, shares, amount, tx_hash, copied, raw_json
+            ) VALUES (1, ?, ?, 200, 'redeem', 'market-1', 'Bitcoin Up or Down', 'BTC', 'up', 0, 0, 0, '0xredeem1', 0, '{}')
+            """,
+            (event_key, wallet),
+        )
+
+
+def test_backfill_closes_positions_stalled_by_the_exit_price_bug(tmp_path):
+    from src.analysis.paper_copy_trader import backfill_stalled_zero_payout_exits
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+    run_paper_copy_trader(db_path=db_path, exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5)]))
+    _insert_stalled_redeem_event(db_path, event_key="stale-event-key")
+
+    result = backfill_stalled_zero_payout_exits(db_path=db_path)
+
+    report = paper_copy_report(db_path)
+    assert result["candidates_scanned"] == 1
+    assert result["events_replayed"] == 1
+    assert result["positions_closed"] == 1
+    assert report["open_positions"] == 0
+    assert report["closed_positions"] == 1
+    assert report["realized_pnl"] == -1.0
+    assert report["win_rate"] == 0.0
+
+
+def test_backfill_is_idempotent_and_skips_already_settled_events(tmp_path):
+    from src.analysis.paper_copy_trader import backfill_stalled_zero_payout_exits
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+    run_paper_copy_trader(db_path=db_path, exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5)]))
+    _insert_stalled_redeem_event(db_path, event_key="stale-event-key")
+
+    first = backfill_stalled_zero_payout_exits(db_path=db_path)
+    second = backfill_stalled_zero_payout_exits(db_path=db_path)
+
+    assert first["positions_closed"] == 1
+    assert second["candidates_scanned"] == 1
+    assert second["events_replayed"] == 0
+    assert second["positions_closed"] == 0
+    assert paper_copy_report(db_path)["closed_positions"] == 1
+
+
+def test_backfill_does_not_touch_already_open_positions_without_a_stalled_redeem(tmp_path):
+    from src.analysis.paper_copy_trader import backfill_stalled_zero_payout_exits
+
+    db_path = tmp_path / "paper_copy.db"
+    watch_trader(WALLET, db_path=db_path)
+    run_paper_copy_trader(db_path=db_path, exporter=FakeExporter([_event("buy", tx_hash="0xbuy1", price=0.5)]))
+
+    result = backfill_stalled_zero_payout_exits(db_path=db_path)
+
+    assert result["candidates_scanned"] == 0
+    assert result["positions_closed"] == 0
+    assert paper_copy_report(db_path)["open_positions"] == 1
