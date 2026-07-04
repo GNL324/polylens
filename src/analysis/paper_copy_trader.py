@@ -480,6 +480,86 @@ def pre_validation_report(
     }
 
 
+@dataclass
+class _StoredExitEvent:
+    """Adapts a stored paper_copy_events row to the WalletActivityEvent shape
+    that _exit_price/_market_key/_close_positions expect, so a historical
+    redeem event can be replayed through the exact same closing logic used
+    for live events."""
+
+    wallet: str
+    action: str
+    market_id: str
+    side: str
+    timestamp: float
+    price: float
+    shares: float
+    amount: float
+    raw: dict[str, Any]
+    condition_id: str = ""
+    market_slug: str = ""
+    market_title: str = ""
+    tx_hash: str = ""
+
+
+def backfill_stalled_zero_payout_exits(db_path: str | Path = DEFAULT_PAPER_COPY_DB) -> dict[str, Any]:
+    """One-time reconciliation for positions left open by the _exit_price bug.
+
+    Before the fix, a redeem event with a $0 payout returned exit_price=None,
+    so _close_positions treated it as "no exit data" and left the position
+    open forever. Those events are already recorded in paper_copy_events
+    (with copied=0); run_paper_copy_trader's dedup-by-event_key means they
+    are never reprocessed on their own. This replays exactly those events -
+    using only data already in the DB, no network calls - through the same
+    (now-fixed) _close_positions logic used for live events. Safe to re-run:
+    events that already produced a settlement are skipped.
+    """
+    init_paper_copy_db(db_path)
+    with closing_connection(db_path) as conn:
+        candidate_rows = conn.execute(
+            """
+            SELECT * FROM paper_copy_events
+            WHERE action = 'redeem' AND price <= 0 AND amount <= 0
+            ORDER BY source_wallet, market_id, timestamp, id
+            """
+        ).fetchall()
+        already_settled = {
+            str(row["exit_event_key"])
+            for row in conn.execute("SELECT DISTINCT exit_event_key FROM paper_copy_settlements").fetchall()
+        }
+
+    run_id = _create_run(db_path, wallets_scanned=0)
+    events_replayed = 0
+    positions_closed = 0
+    for row in candidate_rows:
+        event_key = str(row["event_key"])
+        if event_key in already_settled:
+            continue
+        adapter = _StoredExitEvent(
+            wallet=str(row["source_wallet"]),
+            action=str(row["action"]),
+            market_id=str(row["market_id"]),
+            side=str(row["side"] or ""),
+            timestamp=float(row["timestamp"]),
+            price=float(row["price"]),
+            shares=float(row["shares"]),
+            amount=float(row["amount"]),
+            raw=json.loads(row["raw_json"] or "{}"),
+            tx_hash=str(row["tx_hash"] or ""),
+        )
+        closed = _close_positions(db_path, run_id, adapter, event_key)
+        if closed:
+            events_replayed += 1
+            positions_closed += closed
+
+    _update_run(db_path, run_id, events_seen=len(candidate_rows), new_events=events_replayed, copied_trades=0, closed_positions=positions_closed)
+    return {
+        "candidates_scanned": len(candidate_rows),
+        "events_replayed": events_replayed,
+        "positions_closed": positions_closed,
+    }
+
+
 def _create_run(db_path: str | Path, wallets_scanned: int) -> int:
     with closing_connection(db_path) as conn:
         cur = conn.execute(
