@@ -165,6 +165,29 @@ def load_watched_wallets(db_path: str | Path = DEFAULT_PAPER_COPY_DB) -> list[st
     return [str(row["wallet"]) for row in rows]
 
 
+def unwatch_trader(
+    wallet: str,
+    *,
+    db_path: str | Path = DEFAULT_PAPER_COPY_DB,
+    reason: str = "excluded",
+) -> dict[str, Any]:
+    """Mark a watched wallet inactive so it drops out of load_watched_wallets/baseline cohorts.
+
+    Existing paper_copy_events/positions/settlements are left untouched; this
+    only changes whether the wallet is scanned going forward and whether it is
+    included in future --start-validation-window snapshots.
+    """
+    wallet = _normalize_wallet(wallet)
+    init_paper_copy_db(db_path)
+    with closing_connection(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE watched_traders SET status=? WHERE wallet=?",
+            (reason, wallet),
+        )
+        found = cursor.rowcount > 0
+    return {"wallet": wallet, "unwatched": found, "status": reason}
+
+
 def run_paper_copy_trader(
     *,
     db_path: str | Path = DEFAULT_PAPER_COPY_DB,
