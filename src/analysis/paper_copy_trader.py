@@ -118,6 +118,12 @@ def init_paper_copy_db(db_path: str | Path = DEFAULT_PAPER_COPY_DB) -> None:
                 FOREIGN KEY(run_id) REFERENCES paper_copy_runs(id),
                 FOREIGN KEY(paper_position_id) REFERENCES paper_copy_positions(paper_position_id)
             );
+            CREATE TABLE IF NOT EXISTS validation_window (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                window_start TEXT NOT NULL,
+                baseline_wallets_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_watched_traders_status ON watched_traders(status);
             CREATE INDEX IF NOT EXISTS idx_paper_copy_events_wallet_time ON paper_copy_events(source_wallet, timestamp);
             CREATE INDEX IF NOT EXISTS idx_paper_copy_events_key ON paper_copy_events(event_key);
@@ -280,6 +286,197 @@ def paper_copy_report_by_wallet(
         "realized_pnl": realized_pnl,
         "roi": round(_ratio(realized_pnl, closed_notional), 6),
         "win_rate": round(_ratio(wins, closed_pos), 6),
+    }
+
+
+def start_validation_window(
+    db_path: str | Path = DEFAULT_PAPER_COPY_DB,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Snapshot the currently followed wallets as the validation-window baseline cohort.
+
+    Idempotent unless force=True, so re-running setup does not reset an
+    already-started window (and its baseline wallet set) by accident.
+    """
+    init_paper_copy_db(db_path)
+    with closing_connection(db_path) as conn:
+        existing = conn.execute(
+            "SELECT window_start, baseline_wallets_json FROM validation_window WHERE id=1"
+        ).fetchone()
+        if existing and not force:
+            return {
+                "started": False,
+                "reason": "validation window already started",
+                "window_start": existing["window_start"],
+                "baseline_wallet_count": len(json.loads(existing["baseline_wallets_json"])),
+            }
+        baseline = sorted(load_watched_wallets(db_path))
+        now = _utc_now()
+        conn.execute(
+            """
+            INSERT INTO validation_window (id, window_start, baseline_wallets_json, created_at)
+            VALUES (1, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                window_start=excluded.window_start,
+                baseline_wallets_json=excluded.baseline_wallets_json,
+                created_at=excluded.created_at
+            """,
+            (now, json.dumps(baseline), now),
+        )
+    return {
+        "started": True,
+        "window_start": now,
+        "baseline_wallet_count": len(baseline),
+        "baseline_wallets": baseline,
+    }
+
+
+def load_validation_window(db_path: str | Path = DEFAULT_PAPER_COPY_DB) -> dict[str, Any] | None:
+    init_paper_copy_db(db_path)
+    with closing_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT window_start, baseline_wallets_json, created_at FROM validation_window WHERE id=1"
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "window_start": row["window_start"],
+        "baseline_wallets": json.loads(row["baseline_wallets_json"]),
+        "created_at": row["created_at"],
+    }
+
+
+def pre_validation_report(
+    *,
+    db_path: str | Path = DEFAULT_PAPER_COPY_DB,
+    signal_db_path: str | Path | None = None,
+    traders_db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Combined per-wallet sanity report for the pre-validation-window checklist.
+
+    Surfaces win rate, realized P&L, signal count, and edge decay per followed
+    wallet, and tags each wallet's `data_status` so an all-zero P&L wallet with
+    real closed trades ("zero_pnl_active") can't be mistaken for a wallet that
+    simply has no signals yet ("no_signals_yet").
+    """
+    from src.analysis.trader_registry import DEFAULT_TRADERS_DB
+    from src.analysis.trader_signal_engine import DEFAULT_TRADER_SIGNAL_DB, init_trader_signal_db
+
+    signal_db_path = Path(signal_db_path or DEFAULT_TRADER_SIGNAL_DB)
+    traders_db_path = Path(traders_db_path or DEFAULT_TRADERS_DB)
+
+    init_paper_copy_db(db_path)
+    base_report = paper_copy_report(db_path)
+    window = load_validation_window(db_path)
+    baseline_wallets = set(window["baseline_wallets"]) if window else set()
+
+    with closing_connection(db_path) as conn:
+        watched_rows = conn.execute(
+            "SELECT wallet, watched_at, status FROM watched_traders ORDER BY wallet"
+        ).fetchall()
+        wins_rows = conn.execute(
+            """
+            SELECT source_wallet, COUNT(*) AS wins
+            FROM paper_copy_positions
+            WHERE status='closed' AND COALESCE(pnl, 0) > 0
+            GROUP BY source_wallet
+            """
+        ).fetchall()
+    watched_meta = {str(row["wallet"]): dict(row) for row in watched_rows}
+    wins_by_wallet = {str(row["source_wallet"]): int(row["wins"]) for row in wins_rows}
+
+    signal_counts: dict[str, int] = {}
+    if signal_db_path.exists():
+        init_trader_signal_db(signal_db_path)
+        with closing_connection(signal_db_path) as conn:
+            rows = conn.execute("SELECT wallet, COUNT(*) AS signal_count FROM trader_signals GROUP BY wallet").fetchall()
+        signal_counts = {str(row["wallet"]): int(row["signal_count"]) for row in rows}
+
+    decay_by_wallet: dict[str, float | None] = {}
+    if traders_db_path.exists():
+        from src.intelligence.wallet_signal_decay import wallet_decay_report
+
+        decay = wallet_decay_report(
+            traders_db_path=str(traders_db_path),
+            paper_copy_db_path=str(db_path),
+            signal_db_path=str(signal_db_path),
+        )
+        decay_by_wallet = {row["wallet"]: row["decay_rate"] for row in decay.get("wallets", [])}
+
+    by_wallet_positions = base_report.get("by_wallet", {})
+    all_wallets = sorted(set(watched_meta) | set(by_wallet_positions) | set(signal_counts))
+
+    wallet_rows: list[dict[str, Any]] = []
+    for wallet in all_wallets:
+        meta = watched_meta.get(wallet, {})
+        positions = by_wallet_positions.get(wallet, {})
+        closed = int(positions.get("closed_positions") or 0)
+        copied = int(positions.get("copied_trades") or 0)
+        realized_pnl = round(float(positions.get("realized_pnl") or 0.0), 6)
+        signal_count = signal_counts.get(wallet, 0)
+        win_rate = round(wins_by_wallet.get(wallet, 0) / closed, 6) if closed else None
+
+        if signal_count == 0 and copied == 0:
+            data_status = "no_signals_yet"
+        elif copied == 0:
+            data_status = "signals_no_trades"
+        elif closed == 0:
+            data_status = "open_only"
+        elif realized_pnl == 0.0:
+            data_status = "zero_pnl_active"
+        else:
+            data_status = "active"
+
+        watched_at = meta.get("watched_at")
+        cohort = "unassigned"
+        cohort_start = watched_at
+        if window:
+            if wallet in baseline_wallets:
+                cohort = "baseline"
+                cohort_start = window["window_start"]
+            else:
+                cohort = "joined_during_window"
+                cohort_start = watched_at
+
+        wallet_rows.append(
+            {
+                "wallet": wallet,
+                "status": meta.get("status", "unknown"),
+                "cohort": cohort,
+                "cohort_start": cohort_start,
+                "watched_at": watched_at,
+                "signal_count": signal_count,
+                "copied_trades": copied,
+                "open_positions": int(positions.get("open_positions") or 0),
+                "closed_positions": closed,
+                "win_rate": win_rate,
+                "realized_pnl": realized_pnl,
+                "roi": positions.get("roi"),
+                "edge_decay_rate": decay_by_wallet.get(wallet),
+                "data_status": data_status,
+            }
+        )
+
+    status_counts: dict[str, int] = {}
+    for row in wallet_rows:
+        status_counts[row["data_status"]] = status_counts.get(row["data_status"], 0) + 1
+
+    return {
+        "read_only": True,
+        "paper_only": True,
+        "generated_at": _utc_now(),
+        "validation_window": window,
+        "portfolio": {
+            "copied_trades": base_report.get("copied_trades"),
+            "open_positions": base_report.get("open_positions"),
+            "closed_positions": base_report.get("closed_positions"),
+            "realized_pnl": base_report.get("realized_pnl"),
+            "roi": base_report.get("roi"),
+            "win_rate": base_report.get("win_rate"),
+        },
+        "wallets": wallet_rows,
+        "data_status_counts": status_counts,
     }
 
 
